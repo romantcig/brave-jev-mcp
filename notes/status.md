@@ -6,6 +6,10 @@
 
 阶段零完成。**直连 key 已到**（`jev_API_KEY`），12 源与 Sanity 样本已跑，PLAN 升到 v2（第 13 节）。阶段一**仍未开工**：老大要求改代码前把第 13.4 节的待讨论项过完并明确授权。分支 `jev`，首个提交只含文档、脚本、夹具；`src/filter/` 里 5 个误开工骨架文件未提交。
 
+## 下一会话从这里开始
+
+老大要求：代码工作放到新会话。开工前先读 PLAN.md 第 7 节决策表、第 13 节，以及 notes/dedup-and-rewrite-policy.md、notes/non-article-pages.md，然后等老大一句授权再动 src。
+
 ## 本轮已定
 
 见 PLAN 第 7 节末尾新增行与第 13 节。要点：裁决改"保留题不达标才丢"；stale / self_deprecated / paywalled 三道新题；空来源、付费墙走代码；strict 不默认开；Jev 数字只进 private 笔记。
