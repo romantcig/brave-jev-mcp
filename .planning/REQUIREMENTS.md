@@ -115,12 +115,56 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| EMBED-01 | Phase 1 | Pending |
+| EMBED-02 | Phase 1 | Pending |
+| EMBED-03 | Phase 1 | Pending |
+| EMBED-04 | Phase 1 | Pending |
+| EMBED-05 | Phase 2 | Pending |
+| EMBED-06 | Phase 1 | Pending |
+| RULES-01 | Phase 1 | Pending |
+| RULES-02 | Phase 1 | Pending |
+| RULES-03 | Phase 1 | Pending |
+| RULES-04 | Phase 1 | Pending |
+| RULES-05 | Phase 1 | Pending |
+| RULES-06 | Phase 1 | Pending |
+| RULES-07 | Phase 1 | Pending |
+| RULES-08 | Phase 1 | Pending |
+| RULES-09 | Phase 1 | Pending |
+| JEV-01 | Phase 2 | Pending |
+| JEV-02 | Phase 2 | Pending |
+| JEV-03 | Phase 2 | Pending |
+| JEV-04 | Phase 2 | Pending |
+| JEV-05 | Phase 2 | Pending |
+| JEV-06 | Phase 2 | Pending |
+| JEV-07 | Phase 2 | Pending |
+| VERDICT-01 | Phase 2 | Pending |
+| VERDICT-02 | Phase 2 | Pending |
+| VERDICT-03 | Phase 2 | Pending |
+| VERDICT-04 | Phase 2 | Pending |
+| VERDICT-05 | Phase 2 | Pending |
+| VERDICT-06 | Phase 2 | Pending |
+| SAFE-01 | Phase 2 | Pending |
+| SAFE-02 | Phase 2 | Pending |
+| SAFE-03 | Phase 2 | Pending |
+| LOG-01 | Phase 3 | Pending |
+| LOG-02 | Phase 3 | Pending |
+| LOG-03 | Phase 3 | Pending |
+| LOG-04 | Phase 3 | Pending |
+| TOOLS-01 | Phase 2 | Pending |
+| TOOLS-02 | Phase 3 | Pending |
+| TOOLS-03 | Phase 3 | Pending |
+| TOOLS-04 | Phase 3 | Pending |
+| SHADOW-01 | Phase 4 | Pending |
+| SHADOW-02 | Phase 4 | Pending |
+| SHADOW-03 | Phase 4 | Pending |
+| SHADOW-04 | Phase 4 | Pending |
+| SHADOW-05 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 44 total
-- Mapped to phases: 0
-- Unmapped: 44 ⚠️
+- Mapped to phases: 44
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-19*
-*Last updated: 2026-09-19 after initial definition*
+*Last updated: 2026-09-20 after roadmap creation*
