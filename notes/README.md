@@ -11,6 +11,7 @@ PLAN.md 是决策记录；这里放可复用的事实与经验，按主题拆分
 | shadow-mode-logging.md | 三档模式、日志格式、影子审核流程、阈值初值 | 可以 |
 | dedup-and-rewrite-policy.md | 重复与转述稿：片段级增量新颖度、非二极管原则、例子 | 可以 |
 | non-article-pages.md | 列表页 / feed / 付费墙 / 元数据页的识别与处理、标记列表 | 可以 |
+| lessons-fast-jev-compaction.md | 从 fast-jev-compaction（Jev 压缩对话插件）借鉴的点：token 估算公式（已用夹具验证）、传输/逻辑分离、纯库+适配器、阶梯降级；函数钩子挂载路线的比较 | 可以 |
 | status.md | 当前进度、卡点、待办、文件地图 | 可以 |
 | private-jev-evidence.md | 社区实测数字与负面结果 | **不能**：TypeSafe MCA 2.3(f) 禁止发布 Jev 性能信息，已在 .gitignore 排除 |
 
