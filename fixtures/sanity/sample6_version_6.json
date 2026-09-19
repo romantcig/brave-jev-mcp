@@ -1,0 +1,135 @@
+{
+  "grounding": {
+    "generic": [
+      {
+        "url": "https://x.com/sanity_io/status/2064784450526032010",
+        "title": "Sanity on X: \"Sanity Studio v6 ships this week, June 11. The pre-release is out now. What's in it: → 2–9× faster builds across the studios we've measured (@vite_js 8, smaller bundles) → Faster default search: groq2024 (wildcards, phrases, negation, full Portable Text) → React strict mode\" / X",
+        "snippets": [
+          "## Post\nuser avatar\n\nSanity\n\n@sanity_io\n\nSanity Studio v6 ships this week, June 11. The pre-release is out now. What's in it: → 2–9× faster builds across the studios we've measured (@vite_js 8, smaller bundles) → Faster default search: groq2024 (wildcards, phrases, negation, full Portable Text) → React strict mode on by default in dev, which prevents you from shipping bugs Schemas, config, and content APIs are unchanged. Official plugin support is rolling out",
+          "Two breaking changes to check: → Node 20 is now end-of-life and hence dropped, minimum is now 22.12 → Custom auth providers now replace the built-ins instead of appending (making the experience less confusing) Test today: npm install sanity@next-major From June 11: npm install sanity@latest Upgrade guide, including plugin notes, and the path from earlier versions: sanity.io/blog/sanity-st…",
+          "Sanity Studio v6: A focused upgrade | Sanity\n\nFrom sanity.io\n\n6:59 PM · Jun 10, 2026 1.3K Views\n\nDon't miss what's happening\n\nPeople on X are the first to know."
+        ]
+      },
+      {
+        "url": "https://www.sanity.io/blog/sanity-studio-v6",
+        "title": "Sanity Studio v6: A focused upgrade",
+        "snippets": [
+          "# Sanity Studio v6: A focused upgrade\n## Table of Contents\n- What's changing\n- React strict mode is on by default in development.\n- Custom auth providers no longer support the mode option\n- Faaaaaster builds on Vite 8\n- Improved default search strategy\n- Node.js 20 is dead, so we don’t support it",
+          "We're releasing v6 of the sanity package this week, bringing Vite 8 to the Studio's development tooling.\n\nThe Vite upgrade brings great improvements for builds. Across the studios we've measured, median build times droped around 4.8×. You also get smaller bundles from improved tree shaking and a faster, more capable default search.\n\nAnd with Node.js 20 past end of life since April, no longer receiving security patches, we're dropping support for it",
+          "**The surface you work with is unchanged: schemas, configuration, and content APIs all stay the same. If you use the Studio, but don't maintain one, there's nothing for you to do.**\n\nThe pre-release is out now via, so you can test the upgrade ahead of time:\n\n```\nnpm install sanity@next\n```\n\nWe’re publishing v6 peer dependency support for official plugins now, and v6 of the sanity package gets the latest tag on Thursday, June 11:",
+          "```\nnpm install sanity@latest\n```\n\nRead on for full upgrade notes",
+          "## What's changing\n### Faaaaaster builds on Vite 8\nStudio v6 upgrades the build to Vite 8, a significant performance win. Across the studios we've measured, build times dropped 2–9×, with a median around 4.8×. Builds that took 10 to 15 seconds on v5 typically land in 1 to 4 seconds on v6. Expansive studios should see comparable gains",
+          "### Improved default search strategy\nWe changed the default **search strategy** from groqLegacy to groq2024 (which year is this?) as the default. You get faster search on large datasets, full Portable Text search with deeply nested content coverage, and Google-style queries (wildcards, phrases, negation). This strategy has been production-proven since early 2025",
+          "## What this means for you\n### If you're maintaining a studio\nAfter v6 ships on Thursday, June 11, if your studio runs or builds on Node.js 22.12 or newer, runs cleanly under strict mode, and has no custom auth.providers, the upgrade is a version bump:\n\n```\nnpm install sanity@latest\n```",
+          "## Pre-release and upgrade path\n#### Auto-updating studios need a manual bump to v6\nAuto-updates can cross a major when it has no runtime effects (a Node.js version bump, for example), but v6 changes runtime behavior, so it won't roll out automatically. To upgrade, set your sanity dependency to ^6.0.0 and redeploy."
+        ]
+      },
+      {
+        "url": "https://github.com/sanity-io/sanity/releases/tag/v6.7.0",
+        "title": "Release v6.7.0 · sanity-io/sanity",
+        "snippets": [
+          "Sanity Studio – Rapidly configure content workspaces powered by structured content - Release v6.7.0 · sanity-io/sanity",
+          "Sanity Studio v6.7.0 This release includes various improvements and bug fixes. For the complete changelog with all details, please visit: www.sanity.io/changelog/studio-Ni42LjA Install or upgrade S...\n\nSkip to content",
+          "# Choose a tag to compare\n## No results found\nView all tags\n\n@squiggler-app squiggler-app released this 28 Jul 14:43\n\n· 349 commits to main since this release\n\nv6.7.0\n\nc34e700",
+          "Additional navigation options\nReleases v6.7.0"
+        ]
+      },
+      {
+        "url": "https://newreleases.io/project/npm/sanity/release/6.6.0",
+        "title": "sanity 6.6.0 on Node.js NPM",
+        "snippets": [
+          "New release sanity version 6.6.0 v6.6.0 on Node.js NPM.\n\n# npm sanity 6.6.0\n\nv6.6.0\n\non Node.js NPM\n\nlatest releases: 6.13.3-next.5, 6.13.3-next.3, 6.13.2...",
+          "# Sanity Studio v6.6.0\nThis release includes various improvements and bug fixes.\n\nFor the complete changelog with all details, please visit: www.sanity.io/changelog/studio-Ni41LjA"
+        ]
+      },
+      {
+        "url": "https://www.sanity.io/docs/studio/upgrade",
+        "title": "Upgrading Sanity Studio",
+        "snippets": [
+          "# Upgrading Sanity Studio\nHow to upgrade Sanity Studio\n\nSanity Studio is distributed as an npm package, which means that upgrades are done as with any other dependency in package.json.\n\nUpgrading with sanity@latest installs the current major version, which is v6. If your project is on an older major version, read the migration guide for each major you pass through first: Studio v3 to v4, Studio v4 to v5, and Studio v5 to v6.\n\nTo upgrade the core package for Sanity Studio, run:\n\n```\nnpm install sanity@latest\n```",
+          "```\npnpm add sanity@latest\n```\n\n```\nyarn add sanity@latest\n```\n\n```\nbun add sanity@latest\n```\n\nMake sure that your lock file (for example, package-lock.json) has been updated as well.\n\nTo confirm the upgrade, print the installed versions:\n\n```\nnpx sanity versions\n```\n\n```\npnpm dlx sanity versions\n```\n\n```\nyarn dlx sanity versions\n```\n\n```\nbunx sanity versions\n```",
+          "Then restart your development server with npx sanity dev and check that the studio loads with the new version",
+          "## Upgrading plugins and other dependencies for Sanity Studio\nAs with the core sanity dependency, plugins and other dependencies are also upgraded by installing newer versions. You can also look into tooling like npm-upgrade and npm-check-updates that give you interactive CLI workflows for upgrading your dependencies. Code editors like VS Code also have extensions that list your dependencies and update them from the editor",
+          "## Deploying upgrades\nAfter you have upgraded your Studio project's dependencies, you can deploy the new version depending on your deployment strategy:\n\n- Run the sanity deploy command in your command line.\n- Or, check the changes into Git and push/merge to the branch that deploys the Studio to production.\n\nWe advise you to always check and track your Studio code into Git and push it to a remote Git repository. That way, you won't accidentally lose your work",
+          "## Automatic Studio upgrades\n### Using Renovatebot\n### Using the built-in autoUpdates configuration property\n\n#### Read more about auto-updating studios\n\nIf you deploy Sanity Studio from GitHub (or other compatible platforms), then you can automate upgrades by setting up Renovatebot. We maintain the preset configuration for Sanity projects that you can reuse.\n\nGo to the Sanity config presets on GitHub and follow the instructions to set it up",
+          "## Stay on top of what's new in the changelog\nWe publish updates to Sanity Studio up to every week. For each release of the Studio, we'll also post release notes on GitHub and in our changelog (that also covers other packages and APIs).\n\nChangelog entries on sanity.io also mark any documentation article that was affected by the upgrade. Each affected article links its related entries in a \"Related changelog entries\" section.\n\nWhen a release has breaking changes, the changelog entry includes migration instructions.\nPrevious",
+          "### Environment variables\nWas this page helpful?\n\n```\nnpm install sanity@latest\n```\n\n```\npnpm add sanity@latest\n```\n\n```\nyarn add sanity@latest\n```\n\n```\nbun add sanity@latest\n```\n\n```\nnpx sanity versions\n```",
+          "On this page\nUpgrading plugins and other dependencies for Sanity Studio Deploying upgrades Automatic Studio upgrades Using the built-in autoUpdates configuration property Using Renovatebot Stay on top of what's new in the changelog"
+        ]
+      },
+      {
+        "url": "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0",
+        "title": "sanity-io/sanity v6.0.0 on GitHub",
+        "snippets": [
+          "New release sanity-io/sanity version v6.0.0 on GitHub.\n\n# github sanity-io/sanity v6.0.0\n\non GitHub\n\nlatest releases: v6.13.2, v6.13.1, v6.13.0...",
+          "# Sanity Studio v6.0.0\nThis release includes various improvements and bug fixes.\n\nFor the complete changelog with all details, please visit: www.sanity.io/changelog/studio-NS4zMS4w",
+          "## Install or upgrade Sanity Studio\nTo upgrade to this version, run:\n\n```\nnpm install sanity@latest\n```\n\nTo initiate a new Sanity Studio project or learn more about upgrading, please refer to our comprehensive guide on Installing and Upgrading Sanity Studio"
+        ]
+      }
+    ],
+    "map": []
+  },
+  "sources": {
+    "https://x.com/sanity_io/status/2064784450526032010": {
+      "title": "Sanity on X: \"Sanity Studio v6 ships this week, June 11. The pre-release is out now. What's in it: → 2–9× faster builds across the studios we've measured (@vite_js 8, smaller bundles) → Faster default search: groq2024 (wildcards, phrases, negation, full Portable Text) → React strict mode\" / X",
+      "hostname": "x.com",
+      "age": [
+        "Wednesday, June 10, 2026",
+        "2026-06-10",
+        "100 days ago",
+        "2026-06-10T18:59:09Z"
+      ],
+      "snippet": "Two breaking changes to check: → Node 20 is now end-of-life and hence dropped, minimum is now 22.12 → Custom auth providers now replace the built-ins instead of appending (making the experience less confusing) Test today: npm install ..."
+    },
+    "https://www.sanity.io/blog/sanity-studio-v6": {
+      "title": "Sanity Studio v6: A focused upgrade",
+      "hostname": "www.sanity.io",
+      "age": [
+        "Tuesday, June 09, 2026",
+        "2026-06-09",
+        "102 days ago",
+        "2026-06-09T00:00:00Z"
+      ],
+      "snippet": "If you're maintaining a studio. After v6 ships on Thursday, June 11, if your studio runs or builds on Node.js 22.12 or newer, runs cleanly under strict mode, and has no custom auth.providers, the upgrade is a version bump: npm install sanity@latest."
+    },
+    "https://github.com/sanity-io/sanity/releases/tag/v6.7.0": {
+      "title": "Release v6.7.0 · sanity-io/sanity",
+      "hostname": "github.com",
+      "age": [],
+      "snippet": "To upgrade to this version, run: npm install sanity@latest. To initiate a new Sanity Studio project or learn more about upgrading, please refer to our comprehensive guide on Installing and Upgrading Sanity Studio."
+    },
+    "https://newreleases.io/project/npm/sanity/release/6.6.0": {
+      "title": "sanity 6.6.0 on Node.js NPM",
+      "hostname": "newreleases.io",
+      "age": [
+        "Wednesday, July 22, 2026",
+        "2026-07-22",
+        "58 days ago",
+        "2026-07-22T16:26:36Z"
+      ],
+      "snippet": "To upgrade to this version, run: npm install sanity@latest. To initiate a new Sanity Studio project or learn more about upgrading, please refer to our comprehensive guide on Installing and Upgrading Sanity Studio."
+    },
+    "https://www.sanity.io/docs/studio/upgrade": {
+      "title": "Upgrading Sanity Studio",
+      "hostname": "www.sanity.io",
+      "age": [
+        "Friday, September 04, 2026",
+        "2026-09-04",
+        "14 days ago",
+        "2026-09-04T18:27:44Z"
+      ],
+      "snippet": "Sanity Studio is distributed as an npm package, which means that upgrades are done as with any other dependency in package.json. Upgrading with sanity@latest installs the current major version, which is v6."
+    },
+    "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0": {
+      "title": "sanity-io/sanity v6.0.0 on GitHub",
+      "hostname": "newreleases.io",
+      "age": [
+        "Thursday, June 11, 2026",
+        "2026-06-11",
+        "99 days ago",
+        "2026-06-11T10:24:33Z"
+      ],
+      "snippet": "New release sanity-io/sanity version v6.0.0 on GitHub."
+    }
+  }
+}

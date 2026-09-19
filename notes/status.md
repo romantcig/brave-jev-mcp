@@ -1,10 +1,14 @@
 # 项目状态与待办（每次会话结束前更新）
 
-更新：2026-09-19 深夜
+更新：2026-09-19（拿到直连 key 后）
 
 ## 当前处于哪一步
 
-阶段零（调查与方案）已完成，阶段一（不依赖 Jev 的源码嵌入）**尚未开工**。仓库已检出上游 main（2.1.4），未做任何源码改动；工作树里只有 PLAN.md、notes/、dev/、fixtures/ 和 .gitignore 一行。
+阶段零完成。**直连 key 已到**（`jev_API_KEY`），12 源与 Sanity 样本已跑，PLAN 升到 v2（第 13 节）。阶段一**仍未开工**：老大要求改代码前把第 13.4 节的待讨论项过完并明确授权。分支 `jev`，首个提交只含文档、脚本、夹具；`src/filter/` 里 5 个误开工骨架文件未提交。
+
+## 本轮已定
+
+见 PLAN 第 7 节末尾新增行与第 13 节。要点：裁决改"保留题不达标才丢"；stale / self_deprecated / paywalled 三道新题；空来源、付费墙走代码；strict 不默认开；Jev 数字只进 private 笔记。
 
 ## 已验证可用
 
@@ -12,14 +16,14 @@
 - 单篇样本上题库表现符合直觉：The Register 的 has_original_reasoning 0.94、is_primary 0.04；kucoin 转载快讯 is_attributed_rewrite 0.62；winzheng 中文改写 is_attributed_rewrite 0.90；导航/元数据片段被 score 判到 0–1 档（0.6），正文片段 ~2.0。**这些只是三篇的印象，不是结论。**
 - Brave `context_threshold_mode=strict` 实测：同一查询 12 源，片段 76→41、字符 30.9k→18.0k（减 42%），来源集不变。JSON-LD 块 5→4。说明 strict 主要砍每来源的次要片段，不改来源选择。两版夹具都在 `fixtures/`。
 
-## 卡住的点
+## 已解决的卡点
 
-- **Vercel 免费档对 Jev 并发限流**：6 并发立刻 429 "Free tier requests on this model are rate-limited. Upgrade to paid credits"。串行重试时又撞上本机代理 TLS 握手超时。真实使用一次搜索要打 5–12 次请求，免费档不够。
-- 老大决定：**完整测试推迟到 TypeSafe waitlist 通过（直连无免费档限流）之后**。此前不再烧网关额度做测试。
+- Vercel 免费档并发 429 的问题因直连 key 到位而绕过。`dev/jev_probe.py` 已支持直连（有 `jev_API_KEY` 即走直连，6 并发）。Vercel 后端保留为备选。
 
 ## 待办（按顺序）
 
-1. [ ] 等 TypeSafe key；或若 OpenRouter 有账号，也可用（协议与直连相同，见 notes/jev-api.md B 路径）。拿到后先跑 `dev/jev_probe.py` 完整 12 源，记录裁决表。
+1. [x] 直连 key 到位，12 源与 Sanity 样本已跑（数字在 private 笔记）。
+1b. [ ] 过完 PLAN 第 13.4 节待讨论项，取得老大改代码授权。
 2. [ ] 阶段一：按 PLAN.md 第 5 节开工。顺序：`npm install && npm run build` 验证构建 → 在 `execute()` 后插过滤管道骨架（off 模式直通）→ 本地规则层（JSON-LD 分流、URL 归并、片段预筛、事实指纹增量新颖度）→ 移植补丁脚本的声明改动 → 夹具测试 → stdio 冒烟 → 切 `~/.claude.json` → 补丁脚本退役。
 3. [ ] Jev 客户端三后端（直连 / OpenRouter / Vercel），先写好，走 off 模式。
 4. [ ] 影子模式日志格式定稿。
