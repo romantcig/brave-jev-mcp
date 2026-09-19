@@ -4,3 +4,7 @@
 .env
 secrets/*
 !secrets/brave_api_key.txt.example
+
+# private notes (Jev performance info restricted by TypeSafe MCA)
+notes/private-*.md
+fixtures/*.jev.json
