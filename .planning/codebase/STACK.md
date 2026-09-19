@@ -154,8 +154,8 @@ The fork adds no runtime code yet; `src/` is identical in shape to upstream 2.1.
 - `PLAN.md` - Current-state design for embedding a result-filtering layer into `brave_llm_context` (see `INTEGRATIONS.md` for the external service involved).
 - `notes/` - Topic notes (public) plus `notes/private-*.md` (gitignored; not read for this analysis).
 - `dev/fetch_fixture.py`, `dev/jev_probe.py` - Python probes.
-- `fixtures/` - Real Brave LLM Context responses (`fixtures/*.json`, `fixtures/sanity/*.json`) and text noise samples (`fixtures/noise/*.txt`). `fixtures/*.jev.json` are gitignored classification outputs (not read).
-- `.gitignore` additions: `notes/private-*.md`, `fixtures/*.jev.json`, `CLAUDE.local.md`, `secrets/*` (except the `.example` file).
+- `fixtures/` - Real Brave LLM Context responses (`fixtures/*.json`, `fixtures/sanity/*.json`) and text noise samples (`fixtures/noise/*.txt`). `fixtures/**/*.jev.json` are gitignored classification outputs (not read).
+- `.gitignore` additions: `notes/private-*.md`, `fixtures/**/*.jev.json`, `CLAUDE.local.md`, `secrets/*` (except the `.example` file).
 - Git remotes: only `upstream` (`brave/brave-search-mcp-server`). There is no `origin`; the fork has not been pushed anywhere, so the GitHub Actions workflows do not run for this branch.
 
 Planned stack additions per `PLAN.md` §3 and §4 (not present in the tree): a pure TypeScript filter library directory with no MCP types, a Jev client module with three selectable HTTP backends, JSONL per-request logging with daily rotation, a CLI fixture-comparison tool, and a new required `intent` parameter on `brave_llm_context`. The plan also calls for removing `outputSchema` / `structuredContent` from that one tool. Per `CLAUDE.local.md` and `notes/status.md`, changes to `src/` require explicit authorization first.

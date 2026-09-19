@@ -117,12 +117,12 @@ Scope note: this is a fork of `brave/brave-search-mcp-server` (branch `jev`, bas
 
 **`--logging-level` is accepted but has no effect:** see Tech Debt. Files: `src/config.ts`.
 
-**`.gitignore` misses `.jev.json` files in fixture subdirectories (fork-introduced):**
+**`.gitignore` missed `.jev.json` files in fixture subdirectories (fork-introduced, FIXED 2026-09-19):**
 
 - Symptoms: `dev/jev_probe.py` writes its raw Jev output next to the input fixture (`fixture.with_suffix('.jev.json')`). The ignore rule is `fixtures/*.jev.json`, which does not match `fixtures/sanity/*.jev.json` or `fixtures/noise/*.jev.json` (verified with `git check-ignore`). Those outputs contain per-source probabilities and per-request latency, exactly the data the contract forbids publishing.
 - Files: `.gitignore`, `dev/jev_probe.py`
 - Trigger: run the probe on any fixture under `fixtures/sanity/`, then `git add -A`.
-- Workaround: change the rule to `**/*.jev.json` (or `*.jev.json`) before the next probe run.
+- Status: fixed in commit a673e70; the rule is now `fixtures/**/*.jev.json` (verified with `git check-ignore`). Kept here so the planner does not re-derive the task.
 
 ## Security Considerations
 
