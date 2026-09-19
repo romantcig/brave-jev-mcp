@@ -48,6 +48,4 @@
 
 ## 本机现状
 
-- `~/.claude.json` brave 条目：`cmd /c npx -y @brave/brave-search-mcp-server@2.1.3 --transport stdio --enabled-tools brave_llm_context`，环境变量含 BRAVE_API_KEY、代理三件套、NODE_USE_ENV_PROXY、NO_PROXY。
-- 补丁脚本 `~/Desktop/CCplugin/brave_mcp_patch.py` v4 改 npx 缓存里的 dist（参数白名单、中文描述、sources 精简、去 structuredContent/outputSchema）。切到源码路线后退役。
-- hooks `~/.claude/hooks/pre_brave_llm.py`、`post_brave_llm.py` 只加 additionalContext，按工具名 `mcp__brave__brave_llm_context` 匹配。
+见 notes/private-local-env.md（不入库）。

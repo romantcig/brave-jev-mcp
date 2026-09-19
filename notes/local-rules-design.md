@@ -4,7 +4,7 @@
 
 ## 管道顺序
 
-Brave 响应 → 1 JSON-LD 分流 → 2 URL 归并 → 3 片段预筛 → 4 事实指纹增量新颖度 → 5 黑名单 → （Jev 层，off 模式跳过）→ 6 裁回预算 → 7 附状态行 → 输出。
+Brave 响应 → 1 JSON-LD 分流 → 2 URL 归并 → 3 片段预筛 → 5 黑名单与 feed 规则 → （Jev 层，off 模式跳过）→ 来源级裁决 → 片段级 score → 4 事实指纹增量新颖度 → 空来源规则 → 6 裁回预算 → 7 附状态行 → 输出。（编号沿用各节标题；新颖度在 Jev 之后跑，因为播种顺序与论证段保护依赖 Jev 答案。）
 
 幸存来源与片段**保持 Brave 原序**。任何一步都不重排。
 
@@ -27,15 +27,9 @@ Brave 响应 → 1 JSON-LD 分流 → 2 URL 归并 → 3 片段预筛 → 4 事�
 - 样板文字删除：以 "Continue after ad"、"Share"、"Release Time:"、"READ MORE"、"Cite this article"、"## Frequently Asked Questions" 这类行开头且不含 query 实词的短片段；cookie/newsletter 提示。列表放常量文件，可增补。
 - 页内重复：同一来源内两片段 5-gram Jaccard > 0.8 只留第一条（标题+导语常被抽两次）。
 
-## 4. 事实指纹增量新颖度（替代"指纹重合率"）
+## 4. 事实指纹增量新颖度
 
-**2026-09-19 修订：粒度改为片段级，来源只在片段全删时才丢；权威说明见 dedup-and-rewrite-policy.md，下文来源级描述已过时。**
-
-- 指纹元素：数字（含单位/货币前后缀，如 `$40 million`、`0.042`、`70-500ms`、`193.6x`）、日期串、专有名词（连续大写词组、中文书名号/引号内容）、引号内原文（≥ 6 词）。
-- 按 Brave 顺序遍历来源：`novel = fp(source) − ∪fp(已幸存来源)`。
-- 判为改写稿并丢弃：`|novel| < NOVELTY_MIN`（初值 2）且 `|fp(source)| ≥ 4`（有足够事实可比）。事实太少的短来源不在此丢，交给 Jev 的 filler 判定。
-- 日志记录每个来源的 novel 集合，便于事后审阅"它独有的是什么"。
-- 已知边界：措辞完全不同但事实相同的两篇，第二篇会被丢；这是期望行为。独有引语（mezha 的 Mudholkar/Ronacher 引语）算 novel，会被保留。
+片段级；播种顺序按 is_primary、输出按 Brave 序；论证段保护。权威说明见 notes/dedup-and-rewrite-policy.md，本文不复述。`off` 模式无 Jev 答案，播种退回 Brave 序，无论证段保护。
 
 ## 5. 手工黑名单
 

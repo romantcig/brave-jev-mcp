@@ -8,3 +8,4 @@ secrets/*
 # private notes (Jev performance info restricted by TypeSafe MCA)
 notes/private-*.md
 fixtures/*.jev.json
+CLAUDE.local.md

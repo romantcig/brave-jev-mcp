@@ -26,6 +26,10 @@
 - 输入只有文本。英文最好；CJK "handled but not equally well"。挪威语实测约 2.06 字符/token，中文按 1 字符/token 保守估算。
 - 版本：`jev-latest` 随发布移动；官方建议"调好阈值后钉版本 ID，自己择时迁移"。当前 `jev-1.13.0`。
 
+## 发送前的 token 估算（无分词器）
+
+规则：英文单词算 1 token，每多 6 个字母再加 1；数字每位算 0.5；其余任何符号（含每个 CJK 字符）算 0.9。来自 fast-jev-compaction，用我们两份英文夹具的真实 `usage.input_tokens` 验证过：比"字符 ÷ 4"准得多，但**不保证偏高**，作 32k 保护时加 15% 余量。CJK 未验证，公式把每个汉字算 0.9，与"中文按 1 字符/token"的保守假设一致，影子期用中文样本再校。验证过程见 notes/history/2026-09-19-lessons-fast-jev-compaction.md。
+
 ## 三条接入路径
 
 ### A. TypeSafe 直连（需 waitlist key）
