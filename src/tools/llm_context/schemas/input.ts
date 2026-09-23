@@ -274,9 +274,62 @@ export const RequestHeadersSchema = z.object({
     .optional(),
 });
 
+// Whitelist of upstream query parameters exposed to the model. `.pick()` keys must
+// exist on RequestParamsSchema, so a renamed upstream parameter fails at compile time
+// and a newly added one stays hidden until deliberately listed here.
+const Picked = RequestParamsSchema.pick({
+  query: true,
+  country: true,
+  search_lang: true,
+  count: true,
+  maximum_number_of_urls: true,
+  maximum_number_of_tokens: true,
+  maximum_number_of_tokens_per_url: true,
+  freshness: true,
+  goggles: true,
+});
+
+// Tool declaration: whitelist plus the required `intent`. Header parameters are not
+// exposed. `country` / `search_lang` are declared as plain strings so the model is not
+// shown the full enum lists; RequestParamsSchema.parse() in execute() still enforces them.
 export const LlmContextInputSchema = z.object({
-  ...RequestParamsSchema.shape,
-  ...RequestHeadersSchema.shape,
+  query: Picked.shape.query.describe(
+    'Search keywords; supports site:. At most 400 characters and 50 words.'
+  ),
+  intent: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .describe(
+      'One English sentence stating what you want to find; name the current version and its defining mechanism when the product is versioned.'
+    ),
+  country: z
+    .string()
+    .describe('Two-letter result region code, e.g. "US"; usually omitted.')
+    .optional(),
+  search_lang: z
+    .string()
+    .describe('Result language code, e.g. "en" or "zh-hans"; usually omitted.')
+    .optional(),
+  count: Picked.shape.count.describe(
+    'Number of candidate search results; 10 recommended for routine calls.'
+  ),
+  maximum_number_of_urls: Picked.shape.maximum_number_of_urls.describe(
+    'Upper bound on returned sources; 5 recommended.'
+  ),
+  maximum_number_of_tokens: Picked.shape.maximum_number_of_tokens.describe(
+    'Approximate total token budget for returned content; 4000 recommended.'
+  ),
+  maximum_number_of_tokens_per_url: Picked.shape.maximum_number_of_tokens_per_url.describe(
+    'Token cap per source; 800 recommended.'
+  ),
+  freshness: Picked.shape.freshness.describe(
+    'Recency filter: pd = 1 day, pw = 7 days, pm = 31 days, py = 365 days, or YYYY-MM-DDtoYYYY-MM-DD.'
+  ),
+  goggles: Picked.shape.goggles
+    .describe('Re-ranking rules: a Goggle URL, rule text, or an array of them.')
+    .optional(),
 });
 
 export type LlmContextInput = z.input<typeof LlmContextInputSchema>;

@@ -1,0 +1,30 @@
+/**
+ * 过滤层对宿主的唯一公共面（barrel）。
+ *
+ * 触点 1（`src/tools/llm_context/index.ts`）只从这一条路径导入。库内部模块之间
+ * 直接引具体文件，不经过本文件，避免循环依赖。仓库其余地方没有 barrel，
+ * 这里是有意的例外：它就是"库"的边界。
+ */
+
+export { applyOverfetch, BRAVE_MAX_TOKENS, BRAVE_MAX_URLS } from './budget.js';
+export { parseFilterConfig } from './config.js';
+export { resolveToolDescription } from './description.js';
+export { filterLlmContext, trimSourceMeta } from './pipeline.js';
+export { createFilterStats, zeroLocal } from './stats.js';
+export type {
+  BraveLlmContextGenericItem,
+  BraveLlmContextResponse,
+  FilterConfig,
+  FilterDeps,
+  FilteredResponse,
+  FilterMode,
+  FilterRequest,
+  FilterResult,
+  FilterStats,
+  LocalStats,
+  SnippetRemovalReason,
+  SnippetStats,
+  SourceDropReason,
+  SourceMetadata,
+  SourceStats,
+} from './types.js';
