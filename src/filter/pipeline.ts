@@ -12,6 +12,7 @@
  */
 
 import { parseFilterConfig } from './config.js';
+import { splitJsonFragment } from './jsonld.js';
 import { createFilterStats } from './stats.js';
 import type {
   BraveLlmContextGenericItem,
@@ -95,6 +96,39 @@ const buildWorkTable = (data: BraveLlmContextResponse): WorkSource[] => {
       verdict: 'keep' as const,
     };
   });
+};
+
+/**
+ * 步 1 JSON-LD 分流：逐源逐片段按 Brave 序调 `splitJsonFragment`。
+ * 转出的多段原地占据原片段位置（同一 `index`、`part` 从 0 递增），不重排；
+ * 整片删的只翻 `kept`，片段行仍留在表里供统计投影。普通文本不计数。
+ */
+const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
+  for (const source of table) {
+    source.snippets = source.snippets.flatMap((snippet): WorkSnippet[] => {
+      if (!snippet.kept) return [snippet];
+
+      const verdict = splitJsonFragment(snippet.text, source.title);
+      switch (verdict.action) {
+        case 'converted':
+          stats.local.jsonld_converted += 1;
+          return verdict.parts.map((text, part) => ({
+            index: snippet.index,
+            part,
+            text,
+            kept: true,
+          }));
+        case 'dropped_meta':
+          stats.local.jsonld_dropped += 1;
+          return [{ ...snippet, kept: false, reason: 'jsonld_meta' }];
+        case 'kept_raw':
+          stats.local.jsonld_kept_raw += 1;
+          return [snippet];
+        case 'not_json':
+          return [snippet];
+      }
+    });
+  }
 };
 
 /**
@@ -259,7 +293,7 @@ export function filterLlmContext(
   const table = buildWorkTable(data);
   const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
 
-  // 步 1 JSON-LD 分流：空位，01-02 计划填（jsonld.ts）
+  splitJsonLd(table, stats); // 步 1：JSON-LD 分流
   // 步 2 URL 规范化归并：空位，01-02 计划填（url.ts）
   // 步 3 片段预筛：空位，01-03 计划填（prefilter.ts、tokenize.ts）
   // 步 4 feed URL 与结构性黑名单：空位，01-03 计划填（nonArticle.ts、blocklist.ts）
