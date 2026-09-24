@@ -267,21 +267,31 @@ describe('isNearDuplicate', () => {
     assert.equal(isNearDuplicate(new Set(set), set), true);
   });
 
-  it('drops when containment is exactly 0.8', () => {
-    // 候选 15 个、幸存 10 个、交 8 → containment = 8/10 = NEAR_DUP_CONTAINMENT，条件取 >= → 删
-    const candidate = new Set([...sh('c', 8), ...sh('c2', 7)]);
-    const survivor = new Set([...sh('c', 8), ...sh('x', 2)]);
+  it('drops when the candidate is 80% covered by the survivor', () => {
+    // 候选 10 个、幸存 15 个、交 8 → 候选被覆盖率 = 8/10 = NEAR_DUP_COVERAGE，条件取 >= → 删
+    const candidate = new Set([...sh('c', 8), ...sh('c2', 2)]);
+    const survivor = new Set([...sh('c', 8), ...sh('x', 7)]);
 
     assert.equal(candidate.size >= MIN_SHINGLES && survivor.size >= MIN_SHINGLES, true);
     assert.equal(isNearDuplicate(candidate, survivor), true);
-    assert.equal(NEAR_DUP_CONTAINMENT, 0.8);
+  });
+
+  it('keeps a candidate that is a superset of the survivor', () => {
+    // 审查问题 4：原 containment（交/min）口径下，后出现的超集（导语 + 扩展段）包含度
+    // 恒为 1，信息更全的后一条被删。口径改为"候选自身被幸存者覆盖的比例"后，超集候选
+    // 保留（14 个 shingle 的导语 + 20 个新 shingle → 覆盖率 14/34 ≈ 0.41）
+    const lead = sh('lead', MIN_SHINGLES + 6);
+    const longer = new Set([...sh('lead', MIN_SHINGLES + 6), ...sh('extra', 20)]);
+
+    assert.equal(longer.size, 34);
+    assert.equal(isNearDuplicate(longer, lead), false);
   });
 
   it('does not drop when both similarities sit below the thresholds', () => {
-    // 候选与幸存各 10 个、交 7 → jaccard = 0.7 < 0.8 且 containment = 0.7 < 0.8 → 保留。
-    // 注：jaccard = 0.8 且 containment < 0.8 的集合对数学上不存在（containment = 交/min
-    // ≥ 交/max ≥ 交/并 = jaccard 恒成立），jaccard 分支是冗余保险；"恰 0.8 不删"的严格
-    // > 语义由 tokenize.test.ts 对 jaccard 本身的用例锁住，这里锁双阈值之下的保留。
+    // 候选与幸存各 10 个、交 7 → jaccard = 0.7 < 0.8 且覆盖率 = 0.7 < 0.8 → 保留。
+    // 注：jaccard = 0.8 且覆盖率 < 0.8 的集合对数学上不存在（覆盖率 = 交/|候选| ≥ 交/并
+    // = jaccard 恒成立），jaccard 分支是冗余保险；jaccard 语义本身由 tokenize.test.ts 锁住，
+    // 这里锁双阈值之下的保留。
     const candidate = new Set([...sh('c', 7), ...sh('c-only', 3)]);
     const survivor = new Set([...sh('c', 7), ...sh('s-only', 3)]);
 
