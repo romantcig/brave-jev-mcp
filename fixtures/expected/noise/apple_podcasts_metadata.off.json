@@ -1,0 +1,38 @@
+{
+  "fixture": "noise/apple_podcasts_metadata.txt",
+  "query": "claude fable 5 safety data privacy",
+  "intent": "What are the safety and data privacy concerns around Claude Fable 5",
+  "request": {},
+  "mode": "off",
+  "note": "noise 夹具：主题是另一个产品（Claude Fable 5），query/intent 由标注人重建（A20）。单来源媒体页的 JSON 片段是纯元数据（播客时长/发行方/分类），整片删。",
+  "rules": {
+    "jsonld": [
+      {
+        "url": "https://podcasts.apple.com/us/podcast/claude-fable-5-safety-versus-data-privacy/id1480583664?i=1000772410384",
+        "snippet": 2,
+        "action": "dropped_meta"
+      }
+    ],
+    "url_merge": [],
+    "prefilter": [],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://podcasts.apple.com/us/podcast/claude-fable-5-safety-versus-data-privacy/id1480583664?i=1000772410384"
+    ],
+    "kept_snippets": {
+      "https://podcasts.apple.com/us/podcast/claude-fable-5-safety-versus-data-privacy/id1480583664?i=1000772410384": [0, 1]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://podcasts.apple.com/us/podcast/claude-fable-5-safety-versus-data-privacy/id1480583664?i=1000772410384": ["2026-06-12"]
+    },
+    "n_snippets": 2,
+    "local": { "jsonld_dropped": 1 }
+  }
+}

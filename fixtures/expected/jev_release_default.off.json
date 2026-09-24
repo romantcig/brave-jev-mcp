@@ -1,0 +1,132 @@
+{
+  "fixture": "jev_release_default.json",
+  "query": "Jev TypeSafe AI model release",
+  "intent": "What TypeSafe released with the Jev model and how it works",
+  "request": {
+    "maximum_number_of_urls": 12,
+    "maximum_number_of_tokens": 9000,
+    "maximum_number_of_tokens_per_url": 750
+  },
+  "mode": "off",
+  "rules": {
+    "jsonld": [
+      {
+        "url": "https://www.explainx.ai/blog/typesafe-ai-jev-system-one-models-launch-2026",
+        "snippet": 1,
+        "action": "converted",
+        "parts": 6,
+        "first_part_prefix": "Q: What is Jev by TypeSafe AI?"
+      },
+      {
+        "url": "https://www.explainx.ai/blog/typesafe-ai-jev-system-one-models-launch-2026",
+        "snippet": 2,
+        "action": "dropped_meta"
+      },
+      {
+        "url": "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/",
+        "snippet": 3,
+        "action": "converted",
+        "parts": 5,
+        "first_part_prefix": "Q: What is Jev by TypeSafe AI?"
+      },
+      {
+        "url": "https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude",
+        "snippet": 4,
+        "action": "dropped_meta"
+      },
+      {
+        "url": "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software",
+        "snippet": 5,
+        "action": "dropped_meta"
+      }
+    ],
+    "url_merge": [],
+    "prefilter": [
+      {
+        "url": "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude",
+        "snippet": 0,
+        "action": "boilerplate"
+      },
+      {
+        "url": "https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711",
+        "snippet": 1,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "READ MORE",
+        "stripped_length": 456
+      },
+      {
+        "url": "https://www.heise.de/en/news/AI-model-Jev-to-make-machines-decide-faster-11457071.html",
+        "snippet": 1,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "Continue after ad",
+        "stripped_length": 314
+      },
+      {
+        "url": "https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude",
+        "snippet": 2,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "Frequently Asked Questions (FAQ)",
+        "stripped_length": 279
+      },
+      {
+        "url": "https://aiwiki.ai/wiki/typesafe_ai",
+        "snippet": 0,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "Cite this article",
+        "stripped_length": 459
+      }
+    ],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711",
+      "https://www.heise.de/en/news/AI-model-Jev-to-make-machines-decide-faster-11457071.html",
+      "https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude",
+      "https://aiwiki.ai/wiki/typesafe_ai",
+      "https://www.explainx.ai/blog/typesafe-ai-jev-system-one-models-launch-2026",
+      "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/",
+      "https://www.datacamp.com/blog/system-one-models-jev",
+      "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude",
+      "https://typesafe.ai/blog/introducing-system-one-models-and-jev",
+      "https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch",
+      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/",
+      "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software"
+    ],
+    "kept_snippets": {
+      "https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711": [0, 1, 2, 3, 4, 5, 6, 7],
+      "https://www.heise.de/en/news/AI-model-Jev-to-make-machines-decide-faster-11457071.html": [0, 1, 2, 3, 4, 5, 6],
+      "https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude": [0, 1, 2, 3],
+      "https://aiwiki.ai/wiki/typesafe_ai": [0, 1, 2, 3, 4, 5],
+      "https://www.explainx.ai/blog/typesafe-ai-jev-system-one-models-launch-2026": [0, "1.0", "1.1", "1.2", "1.3", "1.4", "1.5"],
+      "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/": [0, 1, 2, "3.0", "3.1", "3.2", "3.3", "3.4"],
+      "https://www.datacamp.com/blog/system-one-models-jev": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude": [1, 2, 3, 4],
+      "https://typesafe.ai/blog/introducing-system-one-models-and-jev": [0, 1, 2, 3, 4, 5, 6, 7],
+      "https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch": [0, 1, 2, 3, 4, 5, 6],
+      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/": [0, 1, 2, 3, 4, 5, 6, 7],
+      "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software": [0, 1, 2, 3, 4]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711": ["2026-09-16"],
+      "https://www.heise.de/en/news/AI-model-Jev-to-make-machines-decide-faster-11457071.html": ["2026-09-17"],
+      "https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude": ["2026-09-16"],
+      "https://aiwiki.ai/wiki/typesafe_ai": ["2026-09-16"],
+      "https://www.explainx.ai/blog/typesafe-ai-jev-system-one-models-launch-2026": ["2026-09-17"],
+      "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/": ["2026-09-16"],
+      "https://www.datacamp.com/blog/system-one-models-jev": ["2026-09-16"],
+      "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude": ["2026-09-16"],
+      "https://typesafe.ai/blog/introducing-system-one-models-and-jev": ["2026-09-15"],
+      "https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch": ["2026-09-18"],
+      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/": ["2026-09-18"],
+      "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software": ["2026-09-16"]
+    },
+    "n_snippets": 81,
+    "local": { "jsonld_converted": 2, "jsonld_dropped": 3, "snippets_prefiltered": 1 }
+  }
+}

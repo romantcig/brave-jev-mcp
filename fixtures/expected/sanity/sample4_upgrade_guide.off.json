@@ -1,0 +1,70 @@
+{
+  "fixture": "sanity/sample4_upgrade_guide.json",
+  "query": "sanity studio v6 upgrade guide",
+  "intent": "How to upgrade Sanity Studio to the current v6 major version (sanity.config.ts based)",
+  "request": {},
+  "mode": "off",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。含已核实的短无实词命中与包含式重复（0.875）。",
+  "rules": {
+    "jsonld": [],
+    "url_merge": [],
+    "prefilter": [
+      {
+        "url": "https://www.sanity.io/docs/studio/upgrade",
+        "snippet": 9,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "On this page",
+        "stripped_length": 218
+      },
+      {
+        "url": "https://www.sanity.io/docs/changelog/28d9d6b8-46be-467d-bb6a-72d0e4b420e8",
+        "snippet": 1,
+        "action": "nav"
+      },
+      {
+        "url": "https://www.sanity.io/blog/sanity-studio-v6",
+        "snippet": 0,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "Table of Contents",
+        "stripped_length": 490
+      }
+    ],
+    "dedup": [
+      {
+        "url": "https://agent-skills.md/skills/sanity-io/agent-toolkit/sanity-studio-upgrade",
+        "snippet": 2
+      }
+    ],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://www.sanity.io/docs/studio/upgrade",
+      "https://www.sanity.io/docs/upgrade",
+      "https://www.sanity.io/docs/changelog/28d9d6b8-46be-467d-bb6a-72d0e4b420e8",
+      "https://agent-skills.md/skills/sanity-io/agent-toolkit/sanity-studio-upgrade",
+      "https://www.sanity.io/blog/sanity-studio-v6",
+      "https://www.reddit.com/r/sanity_io/comments/1u34sat/sanity_studio_v6_is_out_builds_29_faster_on_vite/"
+    ],
+    "kept_snippets": {
+      "https://www.sanity.io/docs/studio/upgrade": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      "https://www.sanity.io/docs/upgrade": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.sanity.io/docs/changelog/28d9d6b8-46be-467d-bb6a-72d0e4b420e8": [0],
+      "https://agent-skills.md/skills/sanity-io/agent-toolkit/sanity-studio-upgrade": [0, 1, 3, 4, 5, 6, 7],
+      "https://www.sanity.io/blog/sanity-studio-v6": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.reddit.com/r/sanity_io/comments/1u34sat/sanity_studio_v6_is_out_builds_29_faster_on_vite/": [0, 1, 2, 3, 4]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://www.sanity.io/docs/studio/upgrade": ["2026-09-04"],
+      "https://www.sanity.io/docs/upgrade": ["2025-05-15"],
+      "https://www.sanity.io/blog/sanity-studio-v6": ["2026-06-09"],
+      "https://www.reddit.com/r/sanity_io/comments/1u34sat/sanity_studio_v6_is_out_builds_29_faster_on_vite/": ["2026-06-11"]
+    },
+    "n_snippets": 37,
+    "local": { "snippets_prefiltered": 1, "dup_removed": 1 }
+  }
+}

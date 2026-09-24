@@ -1,0 +1,44 @@
+{
+  "fixture": "sanity/sample2_structure_custom.json",
+  "query": "sanity structure builder custom ordering grouping",
+  "intent": "How to customize Sanity Structure Builder with custom document ordering and grouping",
+  "request": {},
+  "mode": "off",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。本夹具验证代码片段为主的来源在 off 模式下全部保留，各规则节零命中。",
+  "rules": {
+    "jsonld": [],
+    "url_merge": [],
+    "prefilter": [],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://dev.to/nayankyada/how-i-customise-sanity-structure-builder-with-custom-ordering-and-grouping-3boh",
+      "https://www.buildwithmatija.com/blog/sanity-custom-sorting-options",
+      "https://www.sanity.io/plugins/orderable-document-list",
+      "https://www.sanity.io/docs/studio/structure-builder-reference",
+      "https://www.npmjs.com/package/@sanity/hierarchical-document-list"
+    ],
+    "kept_snippets": {
+      "https://dev.to/nayankyada/how-i-customise-sanity-structure-builder-with-custom-ordering-and-grouping-3boh": [0, 1, 2],
+      "https://www.buildwithmatija.com/blog/sanity-custom-sorting-options": [0, 1, 2],
+      "https://www.sanity.io/plugins/orderable-document-list": [0, 1],
+      "https://www.sanity.io/docs/studio/structure-builder-reference": [0, 1, 2, 3, 4],
+      "https://www.npmjs.com/package/@sanity/hierarchical-document-list": [0, 1, 2]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://dev.to/nayankyada/how-i-customise-sanity-structure-builder-with-custom-ordering-and-grouping-3boh": ["2026-06-27"],
+      "https://www.buildwithmatija.com/blog/sanity-custom-sorting-options": ["2025-09-17"],
+      "https://www.sanity.io/plugins/orderable-document-list": ["2026-07-07"],
+      "https://www.sanity.io/docs/studio/structure-builder-reference": ["2026-07-09"],
+      "https://www.npmjs.com/package/@sanity/hierarchical-document-list": ["2025-12-18"]
+    },
+    "n_snippets": 16,
+    "local": {}
+  }
+}

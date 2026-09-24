@@ -1,0 +1,50 @@
+{
+  "fixture": "sanity/sample1_disable_releases.json",
+  "query": "sanity studio disable content releases",
+  "intent": "How to disable content releases in the current Sanity Studio (v6, sanity.config.ts based)",
+  "request": {},
+  "mode": "off",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。request 留空即按 Brave 缺省 20/8192，本夹具不触发裁剪。",
+  "rules": {
+    "jsonld": [],
+    "url_merge": [],
+    "prefilter": [
+      {
+        "url": "https://www.sanity.io/docs/studio/content-releases-configuration/changelog",
+        "snippet": 4,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "On this page",
+        "stripped_length": 185
+      }
+    ],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://www.sanity.io/docs/studio/content-releases-configuration",
+      "https://www.sanity.io/docs/changelog/e215973b-784d-46a8-9f5d-6ffac4dc9ace",
+      "https://www.sanity.io/docs/studio/content-releases-configuration/changelog",
+      "https://github.com/sanity-io/sanity/pull/14782",
+      "https://www.sanity.io/docs/studio/content-releases.md"
+    ],
+    "kept_snippets": {
+      "https://www.sanity.io/docs/studio/content-releases-configuration": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.sanity.io/docs/changelog/e215973b-784d-46a8-9f5d-6ffac4dc9ace": [0, 1, 2, 3, 4],
+      "https://www.sanity.io/docs/studio/content-releases-configuration/changelog": [0, 1, 2, 3, 4],
+      "https://github.com/sanity-io/sanity/pull/14782": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.sanity.io/docs/studio/content-releases.md": [0, 1, 2, 3, 4, 5, 6]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://www.sanity.io/docs/studio/content-releases-configuration": ["2026-04-15"],
+      "https://www.sanity.io/docs/changelog/e215973b-784d-46a8-9f5d-6ffac4dc9ace": ["2025-02-19"],
+      "https://www.sanity.io/docs/studio/content-releases-configuration/changelog": ["2025-09-09"]
+    },
+    "n_snippets": 31,
+    "local": {}
+  }
+}

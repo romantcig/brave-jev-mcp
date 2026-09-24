@@ -1,6 +1,7 @@
 /**
- * 夹具驱动的逐条断言：十份 `fixtures/expected/**/*.off.json` 手工标注期望，
+ * 夹具驱动的逐条断言：十份 fixtures/expected/ 下的 .off.json 手工标注期望，
  * 对 `off` 模式管道做规则级与整卷两级对账（RULES-09）。
+ * （注释里不写 `**` 开头的 glob——块注释会被 `*` 与 `/` 相邻构成的终止符截断。）
  *
  * 期望文件是按 notes/labeling-rubric.md 的问法**手工标注**的产物，不是运行输出
  * 的抄录；实现与标注不一致时，按尺子判规则错还是标注漏，两侧改到一致。
@@ -201,9 +202,13 @@ for (const rel of listExpectedFiles()) {
           assert.equal(rows.length, item.parts);
           rows.forEach((row, part) => {
             assert.equal(row.part, part, 'converted parts must run 0..k in order');
-            assert.equal(row.kept, true);
           });
-          const first = survivingText(item.url, item.snippet);
+          // 步 1 只负责转换；个别段被步 3 再删由该节的 nav 标注单独断言（sample3 4.3/4.4），
+          // 这里只要求第一段幸存且以标注的前缀开头
+          const firstRow = rows.find((row) => row.part === 0);
+          assert.equal(firstRow.kept, true, 'the first converted part must survive');
+          // 转换后原片段行被多段取代，第一段是 <snippet>.0
+          const first = survivingText(item.url, `${item.snippet}.0`);
           assert.ok(
             first.startsWith(`${item.first_part_prefix}`),
             `first part should start with "${item.first_part_prefix}", got "${first.slice(0, 60)}"`

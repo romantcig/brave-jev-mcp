@@ -1,0 +1,46 @@
+{
+  "fixture": "sanity/sample5_code_input_fields.json",
+  "query": "sanity studio code input conditional fields",
+  "intent": "How to build custom input components with conditional fields for the current Sanity Studio (v6, sanity.config.ts based)",
+  "request": {},
+  "mode": "off",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。npm 与 sanity.io 两站的重复代码块是跨来源的（步 3 只判同源内），同源内 Angular/Rust 两例的包含度不足 0.8——都是不删的反例。",
+  "rules": {
+    "jsonld": [],
+    "url_merge": [],
+    "prefilter": [],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://gist.github.com/kmelve/57f19f4c7c1093d394122536f234bb18",
+      "https://www.npmjs.com/package/@sanity/code-input",
+      "https://www.sanity.io/plugins/code-input",
+      "https://www.bekk.christmas/post/2023/11/make-your-own-input-components-in-sanity",
+      "https://www.npmjs.com/package/@pdftron/sanity-code-input",
+      "https://www.sanity.io/guides/custom-input-3rd-party-data"
+    ],
+    "kept_snippets": {
+      "https://gist.github.com/kmelve/57f19f4c7c1093d394122536f234bb18": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.npmjs.com/package/@sanity/code-input": [0, 1, 2, 3, 4],
+      "https://www.sanity.io/plugins/code-input": [0, 1, 2, 3, 4, 5],
+      "https://www.bekk.christmas/post/2023/11/make-your-own-input-components-in-sanity": [0, 1, 2, 3, 4],
+      "https://www.npmjs.com/package/@pdftron/sanity-code-input": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.sanity.io/guides/custom-input-3rd-party-data": [0, 1, 2, 3, 4]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://www.npmjs.com/package/@sanity/code-input": ["2026-04-08"],
+      "https://www.sanity.io/plugins/code-input": ["2026-01-12"],
+      "https://www.bekk.christmas/post/2023/11/make-your-own-input-components-in-sanity": ["2025-12-20"],
+      "https://www.npmjs.com/package/@pdftron/sanity-code-input": ["2024-01-11"],
+      "https://www.sanity.io/guides/custom-input-3rd-party-data": ["2025-02-05"]
+    },
+    "n_snippets": 35,
+    "local": {}
+  }
+}

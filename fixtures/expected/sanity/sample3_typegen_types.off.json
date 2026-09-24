@@ -1,0 +1,80 @@
+{
+  "fixture": "sanity/sample3_typegen_types.json",
+  "query": "sanity typegen typescript types",
+  "intent": "How to generate TypeScript types with Sanity TypeGen in the current Sanity Studio (v6, sanity.config.ts based)",
+  "request": {},
+  "mode": "off",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。QAPage 的 suggestedAnswer 转出的 6 段中，2 段因短且不含 query∪intent 实词在步 3 被删。",
+  "rules": {
+    "jsonld": [
+      {
+        "url": "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder",
+        "snippet": 4,
+        "action": "converted",
+        "parts": 6,
+        "first_part_prefix": "Ok I think this isnt a thing yet."
+      }
+    ],
+    "url_merge": [],
+    "prefilter": [
+      {
+        "url": "https://www.sanity.io/blog/sanity-typegen-ga",
+        "snippet": 1,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "Table of Contents",
+        "stripped_length": 291
+      },
+      {
+        "url": "https://github.com/ricokahler/sanity-codegen",
+        "snippet": 0,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "Skip to content",
+        "stripped_length": 125
+      },
+      {
+        "url": "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder",
+        "snippet": "4.3",
+        "action": "nav"
+      },
+      {
+        "url": "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder",
+        "snippet": "4.4",
+        "action": "nav"
+      }
+    ],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://www.sanity.io/blog/sanity-typegen-ga",
+      "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder",
+      "https://www.xjavascript.com/blog/sanity-typescript/",
+      "https://www.buildwithmatija.com/blog/how-to-generate-typescript-types-for-your-sanity-v3-schema",
+      "https://github.com/ricokahler/sanity-codegen",
+      "https://www.sanity.io/answers/how-to-get-schema-types-into-a-typescript-project-with-a-react-js-app-and-sanity-io"
+    ],
+    "kept_snippets": {
+      "https://www.sanity.io/blog/sanity-typegen-ga": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder": [0, 1, 2, 3, "4.0", "4.1", "4.2", "4.5"],
+      "https://www.xjavascript.com/blog/sanity-typescript/": [0, 1, 2, 3],
+      "https://www.buildwithmatija.com/blog/how-to-generate-typescript-types-for-your-sanity-v3-schema": [0, 1, 2, 3, 4, 5, 6],
+      "https://github.com/ricokahler/sanity-codegen": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.sanity.io/answers/how-to-get-schema-types-into-a-typescript-project-with-a-react-js-app-and-sanity-io": [0, 1, 2, 3, 4, 5]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://www.sanity.io/blog/sanity-typegen-ga": ["2026-02-17"],
+      "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder": ["2026-01-15"],
+      "https://www.xjavascript.com/blog/sanity-typescript/": ["2026-01-16"],
+      "https://www.buildwithmatija.com/blog/how-to-generate-typescript-types-for-your-sanity-v3-schema": ["2026-07-21"],
+      "https://github.com/ricokahler/sanity-codegen": ["2024-03-26"],
+      "https://www.sanity.io/answers/how-to-get-schema-types-into-a-typescript-project-with-a-react-js-app-and-sanity-io": ["2025-11-29"]
+    },
+    "n_snippets": 41,
+    "local": { "jsonld_converted": 1, "snippets_prefiltered": 2 }
+  }
+}

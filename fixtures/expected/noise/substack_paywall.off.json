@@ -1,0 +1,32 @@
+{
+  "fixture": "noise/substack_paywall.txt",
+  "query": "claude fable 5 refusal error handling",
+  "intent": "How the Claude Fable 5 refusal response shape works and how to handle it",
+  "request": {},
+  "mode": "off",
+  "note": "noise 夹具：主题是另一个产品（Claude Fable 5），query/intent 由标注人重建（A20）。付费墙页面没有任何行首付费墙标记——付费墙规则不据此判整页也不截断（反例），九条片段全部保留。",
+  "rules": {
+    "jsonld": [],
+    "url_merge": [],
+    "prefilter": [],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://kenhuangus.substack.com/p/claude-fable-5-part-8-the-refusal"
+    ],
+    "kept_snippets": {
+      "https://kenhuangus.substack.com/p/claude-fable-5-part-8-the-refusal": [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://kenhuangus.substack.com/p/claude-fable-5-part-8-the-refusal": ["2026-07-10"]
+    },
+    "n_snippets": 9,
+    "local": {}
+  }
+}

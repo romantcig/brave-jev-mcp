@@ -1,0 +1,61 @@
+{
+  "fixture": "sanity/sample6_version_6.json",
+  "query": "sanity studio v6 release",
+  "intent": "What shipped in Sanity Studio v6, the current major version (sanity.config.ts based)",
+  "request": {},
+  "mode": "off",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。博客与文档页的目录/页内导航行剥掉后保留；GitHub release 杂项片段含 v6 实词得以保留。",
+  "rules": {
+    "jsonld": [],
+    "url_merge": [],
+    "prefilter": [
+      {
+        "url": "https://www.sanity.io/blog/sanity-studio-v6",
+        "snippet": 0,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "Table of Contents",
+        "stripped_length": 276
+      },
+      {
+        "url": "https://www.sanity.io/docs/studio/upgrade",
+        "snippet": 8,
+        "action": "boilerplate_stripped",
+        "stripped_prefix": "On this page",
+        "stripped_length": 218
+      }
+    ],
+    "dedup": [],
+    "feed_blocklist": [],
+    "paywall": [],
+    "empty_source": [],
+    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+  },
+  "final": {
+    "urls": [
+      "https://x.com/sanity_io/status/2064784450526032010",
+      "https://www.sanity.io/blog/sanity-studio-v6",
+      "https://github.com/sanity-io/sanity/releases/tag/v6.7.0",
+      "https://newreleases.io/project/npm/sanity/release/6.6.0",
+      "https://www.sanity.io/docs/studio/upgrade",
+      "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0"
+    ],
+    "kept_snippets": {
+      "https://x.com/sanity_io/status/2064784450526032010": [0, 1, 2],
+      "https://www.sanity.io/blog/sanity-studio-v6": [0, 1, 2, 3, 4, 5, 6, 7],
+      "https://github.com/sanity-io/sanity/releases/tag/v6.7.0": [0, 1, 2, 3],
+      "https://newreleases.io/project/npm/sanity/release/6.6.0": [0, 1],
+      "https://www.sanity.io/docs/studio/upgrade": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+      "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0": [0, 1, 2]
+    },
+    "sources_keys": ["age", "hostname", "title"],
+    "sources_age": {
+      "https://x.com/sanity_io/status/2064784450526032010": ["2026-06-10"],
+      "https://www.sanity.io/blog/sanity-studio-v6": ["2026-06-09"],
+      "https://newreleases.io/project/npm/sanity/release/6.6.0": ["2026-07-22"],
+      "https://www.sanity.io/docs/studio/upgrade": ["2026-09-04"],
+      "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0": ["2026-06-11"]
+    },
+    "n_snippets": 29,
+    "local": {}
+  }
+}
