@@ -332,7 +332,10 @@ describe(`${name} (below-minimum clamping)`, () => {
     assert.equal(properties.maximum_number_of_urls?.maximum, 50);
     assert.equal(properties.maximum_number_of_tokens?.maximum, 32768);
     assert.equal(properties.maximum_number_of_tokens_per_url?.maximum, 8192);
-    assert.match(properties.maximum_number_of_tokens_per_url?.description ?? '', /below 512 are raised to 512/);
+    assert.match(
+      properties.maximum_number_of_tokens_per_url?.description ?? '',
+      /below 512 are raised to 512/
+    );
 
     // SDK 校验层对 500 放行——下限钳位发生在 execute() 里
     assert.equal(

@@ -315,6 +315,9 @@ export const LlmContextInputSchema = z.object({
     .number()
     .int()
     .max(50)
+    // zod 4.3.6 把 .int() 的安全整数域渲染成 minimum: -(2^53-1) 噪音；meta 的键
+    // 优先于 zod 自动生成的关键字，显式 undefined 把该键压掉（业务下限只写在描述里）
+    .meta({ minimum: undefined })
     .describe(
       'Number of candidate search results; 10 recommended for routine calls. Values below 1 are raised to 1.'
     )
@@ -323,12 +326,14 @@ export const LlmContextInputSchema = z.object({
     .number()
     .int()
     .max(50)
+    .meta({ minimum: undefined })
     .describe('Upper bound on returned sources; 5 recommended. Values below 1 are raised to 1.')
     .optional(),
   maximum_number_of_tokens: z
     .number()
     .int()
     .max(32768)
+    .meta({ minimum: undefined })
     .describe(
       'Approximate total token budget for returned content; 4000 recommended. Values below 1024 are raised to 1024.'
     )
@@ -337,6 +342,7 @@ export const LlmContextInputSchema = z.object({
     .number()
     .int()
     .max(8192)
+    .meta({ minimum: undefined })
     .describe('Token cap per source; 800 recommended. Values below 512 are raised to 512.')
     .optional(),
   freshness: Picked.shape.freshness.describe(
@@ -350,39 +356,3 @@ export const LlmContextInputSchema = z.object({
 export type LlmContextInput = z.input<typeof LlmContextInputSchema>;
 export type LlmQueryParams = z.infer<typeof RequestParamsSchema>;
 export type LlmRequestHeaders = z.infer<typeof RequestHeadersSchema>;
-
-/**
- * 工具面下限：低于最小值的参数抬到最小值而不是拒绝（上限越界仍由声明的
- * `.max()` 在 SDK 校验层拒绝）。数值必须与 RequestParamsSchema 的 `.min()` 一致，
- * 由 index.test.ts 锁定。
- */
-export const MINIMUM_VALUES = Object.freeze({
-  count: 1,
-  maximum_number_of_urls: 1,
-  maximum_number_of_tokens: 1024,
-  maximum_number_of_tokens_per_url: 512,
-} as const);
-
-/** 一次被抬到下限的参数，回传给模型让它知道阈值被调整了。 */
-export type RaisedParameter = { parameter: string; requested: number; applied: number };
-
-/**
- * 把低于下限的数值参数抬到下限，返回生效参数与调整清单。
- * 放在 execute() 里而不是做成 zod preprocess：preprocess 发生在 SDK 的共享
- * 校验层内部，钳位只会静默发生，调用侧拿不到"本次调整了什么"的信号。
- */
-export const applyMinimumValues = (
-  params: LlmContextInput
-): { adjusted: LlmContextInput; raised: RaisedParameter[] } => {
-  const adjusted = { ...params };
-  const raised: RaisedParameter[] = [];
-  for (const parameter of Object.keys(MINIMUM_VALUES) as (keyof typeof MINIMUM_VALUES)[]) {
-    const requested = adjusted[parameter];
-    const applied = MINIMUM_VALUES[parameter];
-    if (typeof requested === 'number' && requested < applied) {
-      adjusted[parameter] = applied;
-      raised.push({ parameter, requested, applied });
-    }
-  }
-  return { adjusted, raised };
-};

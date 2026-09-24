@@ -7,6 +7,14 @@
  */
 
 export { applyOverfetch, BRAVE_MAX_TOKENS, BRAVE_MAX_URLS } from './budget.js';
+export {
+  applyMinimumValues,
+  logRaisedToStderr,
+  MINIMUM_VALUES,
+  withAdjustments,
+  type RaisedParameter,
+  type WithAdjustments,
+} from './clamp.js';
 export { parseFilterConfig } from './config.js';
 export { resolveToolDescription } from './description.js';
 export { filterLlmContext, trimSourceMeta } from './pipeline.js';
