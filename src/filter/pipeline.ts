@@ -427,9 +427,14 @@ export function filterLlmContext(
   // 步 6 来源级裁决：Phase 2；off 模式无事可做
   // 步 7 片段级 score 与事实指纹新颖度：Phase 2；off 模式按 Brave 序播种，本阶段一律保留
   dropEmptySources(table, stats, contentTerms(request.params.query)); // 步 8：空来源与一句话来源
-  // 步 9 裁回预算：一律按模型原始请求值（与 applyOverfetch 放大后的参数无关），
-  // 从末源末片段往回砍、不重排；计数按裁决累加（reason 'budget' 只有本步会写）
-  trimToBudget(table, request.params, estimateTokens);
+  // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
+  // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
+  // 往回砍、不重排。倍数为 1 时 Brave 已按请求上限返回、过滤层只删不加，而估算公式
+  // 是为 Jev 32k 保护标定的、对普通网页文本偏高（审查问题 6），再按估算裁只会误砍。
+  // 计数按裁决累加（reason 'budget' 只有本步会写）。
+  if (config.overfetchFactor !== 1) {
+    trimToBudget(table, request.params, estimateTokens);
+  }
   stats.local.budget_dropped_sources += table.filter(
     (source) => source.verdict === 'drop' && source.reason === 'budget'
   ).length;

@@ -344,10 +344,12 @@ describe('budget trimming on a real fixture', () => {
   const braveUrls = data.grounding.generic.map((item) => item.url);
 
   it('keeps the first five sources in Brave order and trims from the tail', () => {
+    // 步 9 只在超量倍数 > 1 时执行（倍数 1 时 Brave 已按请求上限返回，估算裁剪只会
+    // 误砍——审查问题 6）；这里用 2x 超量抓取后按模型原始请求（5 源 / 3000 token）裁回
     const { result, stats } = filterLlmContext(
       data,
       { params: { query, maximum_number_of_urls: 5, maximum_number_of_tokens: 3000 }, intent },
-      offConfig
+      { mode: 'off', overfetchFactor: 2, blocklist: new Set() }
     );
 
     assert.deepEqual(
