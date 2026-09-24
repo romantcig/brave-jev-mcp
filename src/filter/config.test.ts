@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { DEFAULT_BLOCKLIST } from './blocklist.js';
 import { parseFilterConfig } from './config.js';
 
 describe('parseFilterConfig', () => {
   it('defaults to off with factor 1 when nothing is set', () => {
-    assert.deepEqual(parseFilterConfig({}), { mode: 'off', overfetchFactor: 1 });
+    assert.deepEqual(parseFilterConfig({}), {
+      mode: 'off',
+      overfetchFactor: 1,
+      blocklist: new Set(),
+    });
+  });
+
+  it('exposes the default blocklist, initially empty', () => {
+    assert.deepEqual(parseFilterConfig({}).blocklist, DEFAULT_BLOCKLIST);
+    assert.equal(DEFAULT_BLOCKLIST.size, 0);
   });
 
   it('reads each valid mode', () => {

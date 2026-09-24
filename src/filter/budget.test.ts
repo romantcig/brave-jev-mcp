@@ -3,8 +3,8 @@ import { describe, it } from 'node:test';
 import { BRAVE_MAX_TOKENS, BRAVE_MAX_URLS, applyOverfetch } from './budget.js';
 import type { FilterConfig } from './types.js';
 
-const unit: FilterConfig = { mode: 'off', overfetchFactor: 1 };
-const doubled: FilterConfig = { mode: 'off', overfetchFactor: 2 };
+const unit: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
+const doubled: FilterConfig = { mode: 'off', overfetchFactor: 2, blocklist: new Set() };
 
 describe('applyOverfetch', () => {
   it('returns the very same object when the factor is 1', () => {
@@ -16,7 +16,11 @@ describe('applyOverfetch', () => {
   it('scales urls and tokens by the factor, rounding down', () => {
     const params = { query: 'q', maximum_number_of_urls: 5, maximum_number_of_tokens: 4001 };
 
-    const result = applyOverfetch(params, { mode: 'off', overfetchFactor: 1.5 });
+    const result = applyOverfetch(params, {
+      mode: 'off',
+      overfetchFactor: 1.5,
+      blocklist: new Set(),
+    });
 
     assert.equal(result.maximum_number_of_urls, 7);
     assert.equal(result.maximum_number_of_tokens, 6001);

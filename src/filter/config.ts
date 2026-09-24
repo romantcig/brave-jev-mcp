@@ -9,6 +9,7 @@
  * 依据：01-RESEARCH.md「模式处理」一节、notes/shadow-mode-logging.md。
  */
 
+import { DEFAULT_BLOCKLIST } from './blocklist.js';
 import type { FilterConfig, FilterMode } from './types.js';
 
 /** 合法模式集合；集合外的值（含未设）一律回落 'off'。 */
@@ -17,13 +18,16 @@ const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'shadow', 'on']);
 const isFilterMode = (value: string): value is FilterMode => MODES.has(value);
 
 /**
- * 解析 `JEV_FILTER_MODE` 与 `JEV_FILTER_OVERFETCH_FACTOR`。
+ * 解析 `JEV_FILTER_MODE` 与 `JEV_FILTER_OVERFETCH_FACTOR`，黑名单固定为
+ * `DEFAULT_BLOCKLIST`（仓库外黑名单文件合并留给 Phase 2 的 EMBED-05）。
  * @param env 环境变量映射（传 `process.env` 或测试用的显式对象）
- * @returns 模式（去空白、忽略大小写；坏值回落 off）与超量倍数（有限且 >= 1 才用，否则 1）
+ * @returns 模式（去空白、忽略大小写；坏值回落 off）、超量倍数（有限且 >= 1 才用，
+ *   否则 1）与黑名单（默认文本解析结果，初始为空集）
  * @example parseFilterConfig({}).mode === 'off'
  * @example parseFilterConfig({ JEV_FILTER_MODE: ' ON ' }).mode === 'on'
  * @example parseFilterConfig({ JEV_FILTER_MODE: 'banana' }).mode === 'off'
  * @example parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '0.5' }).overfetchFactor === 1
+ * @example parseFilterConfig({}).blocklist.size === 0
  */
 export function parseFilterConfig(env: Record<string, string | undefined>): FilterConfig {
   const rawMode = (env.JEV_FILTER_MODE ?? '').trim().toLowerCase();
@@ -32,5 +36,5 @@ export function parseFilterConfig(env: Record<string, string | undefined>): Filt
   const factor = Number.parseFloat(env.JEV_FILTER_OVERFETCH_FACTOR ?? '');
   const overfetchFactor = Number.isFinite(factor) && factor >= 1 ? factor : 1;
 
-  return { mode, overfetchFactor };
+  return { mode, overfetchFactor, blocklist: DEFAULT_BLOCKLIST };
 }

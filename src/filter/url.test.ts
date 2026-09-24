@@ -294,7 +294,7 @@ describe('mergeByCanonicalUrl', () => {
 });
 
 describe('filterLlmContext step 2', () => {
-  const offConfig: FilterConfig = { mode: 'off', overfetchFactor: 1 };
+  const offConfig: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
   const request = { params: { query: 'jev release' }, intent: 'What TypeSafe released' };
 
   const FIRST = 'https://example.com/jev';

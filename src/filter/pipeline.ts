@@ -5,9 +5,9 @@
  * 翻 `kept` / `verdict` / `reason` 或替换文本，**不 sort、不 filter 出新数组**，最后
  * 一次性重建输出——幸存来源与片段因此天然保持 Brave 原序（RULES-08）。
  *
- * 01-01 定型位置与类型，01-02 填了步 1、2，01-03 填了步 3（含付费墙截断）；步 4、7、9
- * 仍是空位，步 8 只做"片段删光即丢来源"，末尾做输出重建与 `sources` 精简。
- * 后续计划往空位填实现，不改这里的顺序与签名。
+ * 01-01 定型位置与类型，01-02 填了步 1、2，01-03 填了步 3（含付费墙截断）、步 4 与
+ * 步 8；步 7、9 仍是空位，末尾做输出重建与 `sources` 精简。后续计划往空位填实现，
+ * 不改这里的顺序与签名。
  *
  * 依据：PLAN.md §3.2、notes/local-rules-design.md、01-RESEARCH.md「纯库布局」一节。
  */
@@ -15,7 +15,13 @@
 import { parseFilterConfig } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
 import { BOILERPLATE_PREFIXES, PAYWALL_MARKERS_EN, PAYWALL_MARKERS_ZH } from './markers.js';
-import { truncateAtPaywall } from './nonArticle.js';
+import {
+  isBlocklisted,
+  isEmptySource,
+  isFeedUrl,
+  isOneLiner,
+  truncateAtPaywall,
+} from './nonArticle.js';
 import {
   isNearDuplicate,
   isShortWithoutTerms,
@@ -214,13 +220,58 @@ const prefilterSnippets = (
 };
 
 /**
- * 步 8（本计划部分）：片段删光的来源整体丢弃，输出时同步从 `sources` 表消失。
- * "只剩一条短片段且不含 query 实词"的一句话来源规则依赖分词，由 01-03 在本步补上。
+ * 步 4 的规范 host：小写、去 `www.` 前缀；解析失败返回 `null`（不判 feed 也不判
+ * 黑名单，方向保守）。黑名单与 feed 判定只看 host，端口不参与。
  */
-const dropEmptySources = (table: WorkSource[], stats: FilterStats): void => {
+const canonicalHostOf = (raw: string): string | null => {
+  try {
+    return new URL(raw).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 步 4：feed URL 与结构性黑名单，接在步 3 之后。feed 先判（更便宜也更具体），
+ * 黑名单兜底；命中者整体丢弃，输出的 `sources` 表随输出重建自动清掉。
+ */
+const dropNonArticles = (table: WorkSource[], config: FilterConfig, stats: FilterStats): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
-    if (source.snippets.some((snippet) => snippet.kept)) continue;
+
+    const host = canonicalHostOf(source.url);
+    if (host === null) continue;
+
+    if (isFeedUrl(source.url)) {
+      source.verdict = 'drop';
+      source.reason = 'feed';
+      stats.local.feed_hits += 1;
+      continue;
+    }
+    if (isBlocklisted(host, config.blocklist)) {
+      source.verdict = 'drop';
+      source.reason = 'blocklist';
+      stats.local.blocklist_hits += 1;
+    }
+  }
+};
+
+/**
+ * 步 8：空来源与一句话来源，接在片段级之后。片段删光（或本就没有片段、
+ * `sources` 元数据缺条目）的来源整体丢弃；只剩一条短片段的来源按**只看 query
+ * 实词**（不含 intent——步 3 已用并集过滤过）判定，不含则丢、含则留。
+ * 被丢来源只翻 `verdict`，不从工作表数组里移除（RULES-05/ordering）。
+ */
+const dropEmptySources = (
+  table: WorkSource[],
+  stats: FilterStats,
+  queryTerms: ReadonlySet<string>
+): void => {
+  for (const source of table) {
+    if (source.verdict !== 'keep') continue;
+
+    const surviving = source.snippets.filter((snippet) => snippet.kept);
+    if (!isEmptySource(surviving) && !isOneLiner(surviving, queryTerms)) continue;
 
     source.verdict = 'drop';
     source.reason = 'empty';
@@ -380,11 +431,11 @@ export function filterLlmContext(
   stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
   // 步 3 片段预筛：付费墙截断 → 样板剥离 → 短无实词 → 页内逐字重复（顺序固定）
   prefilterSnippets(table, stats, contentTerms(request.params.query, request.intent));
-  // 步 4 feed URL 与结构性黑名单：空位，01-03 计划填（nonArticle.ts、blocklist.ts）
+  dropNonArticles(table, config, stats); // 步 4：feed URL 与结构性黑名单
   // 步 5 Jev 每源一次请求：Phase 2；off 模式跳过
   // 步 6 来源级裁决：Phase 2；off 模式无事可做
   // 步 7 片段级 score 与事实指纹新颖度：Phase 2；off 模式按 Brave 序播种，本阶段一律保留
-  dropEmptySources(table, stats); // 步 8：空来源规则（一句话来源规则由 01-03 补）
+  dropEmptySources(table, stats, contentTerms(request.params.query)); // 步 8：空来源与一句话来源
   // 步 9 裁回预算：空位，01-04 计划填（budget.ts 的 trimToBudget）
   // 步 10 状态行：Phase 3
 

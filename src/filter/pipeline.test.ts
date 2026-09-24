@@ -3,7 +3,7 @@ import { after, before, describe, it } from 'node:test';
 import { filterLlmContext, trimSourceMeta } from './pipeline.js';
 import type { BraveLlmContextResponse, FilterConfig, FilterRequest } from './types.js';
 
-const offConfig: FilterConfig = { mode: 'off', overfetchFactor: 1 };
+const offConfig: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
 
 const request: { params: FilterRequest; intent: string } = {
   params: { query: 'brave browser', maximum_number_of_urls: 5, maximum_number_of_tokens: 4000 },
@@ -167,6 +167,77 @@ describe('filterLlmContext', () => {
     assert.equal(stats.local.paywall_truncated, 1);
   });
 
+  it('drops a feed-shaped source during step 4 and cleans its sources entry', () => {
+    const data = payload();
+    data.grounding.generic.push({
+      url: 'https://example.com/blog/feed/',
+      title: 'Feed',
+      snippets: ['Brave updates feed.'],
+    });
+    data.sources['https://example.com/blog/feed/'] = { title: 'Feed', hostname: 'example.com' };
+
+    const { result, stats } = filterLlmContext(data, request, offConfig);
+
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://search.brave.com/', 'https://example.com/post']
+    );
+    assert.equal(Object.hasOwn(result.sources, 'https://example.com/blog/feed/'), false);
+    assert.equal(stats.local.feed_hits, 1);
+    assert.deepEqual(stats.sources[2].reason, 'feed');
+  });
+
+  it('drops a blocklisted host during step 4', () => {
+    const data = payload();
+    const config: FilterConfig = { ...offConfig, blocklist: new Set(['example.com']) };
+
+    const { result, stats } = filterLlmContext(data, request, config);
+
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://search.brave.com/']
+    );
+    assert.equal(stats.local.blocklist_hits, 1);
+    assert.equal(stats.sources[1].reason, 'blocklist');
+  });
+
+  it('drops a source whose only snippet is JSON-LD metadata during step 8', () => {
+    const data = payload();
+    data.grounding.generic.push({
+      url: 'https://example.org/meta',
+      title: 'Meta',
+      snippets: ['{"author":"A","datePublished":"2026-01-01","publisher":"P"}'],
+    });
+    data.sources['https://example.org/meta'] = { title: 'Meta', hostname: 'example.org' };
+
+    const { result, stats } = filterLlmContext(data, request, offConfig);
+
+    assert.equal(Object.hasOwn(result.sources, 'https://example.org/meta'), false);
+    assert.equal(stats.local.empty_dropped, 1);
+    assert.equal(stats.sources[2].reason, 'empty');
+  });
+
+  it('drops a one-liner source that only shares intent terms during step 8', () => {
+    const data = payload();
+    data.grounding.generic.push({
+      url: 'https://example.org/oneliner',
+      title: 'Oneliner',
+      snippets: ['The current version.'],
+    });
+    data.sources['https://example.org/oneliner'] = { title: 'Oneliner', hostname: 'example.org' };
+    const req = {
+      params: { query: 'brave browser' },
+      intent: 'about the current version',
+    };
+
+    const { result, stats } = filterLlmContext(data, req, offConfig);
+
+    // 片段含 intent 实词（current/version）所以步 3 保留，但不含 query 实词 → 步 8 丢
+    assert.equal(Object.hasOwn(result.sources, 'https://example.org/oneliner'), false);
+    assert.equal(stats.local.empty_dropped, 1);
+    assert.equal(stats.sources[2].reason, 'empty');
+  });
+
   it('drops a source whose snippets are all gone and cleans its sources entry', () => {
     const data = payload();
     data.grounding.generic.push({ url: 'https://empty.example/', title: 'Empty', snippets: [] });
@@ -253,17 +324,17 @@ describe('filterLlmContext', () => {
     const first = filterLlmContext(
       data,
       { params: { query: 'first' }, intent: 'first intent' },
-      { mode: 'shadow', overfetchFactor: 2 }
+      { mode: 'shadow', overfetchFactor: 2, blocklist: new Set() }
     );
     const second = filterLlmContext(
       data,
       { params: { query: 'second' }, intent: 'second intent' },
-      { mode: 'on', overfetchFactor: 1 }
+      { mode: 'on', overfetchFactor: 1, blocklist: new Set() }
     );
     const third = filterLlmContext(
       data,
       { params: { query: 'first' }, intent: 'first intent' },
-      { mode: 'shadow', overfetchFactor: 2 }
+      { mode: 'shadow', overfetchFactor: 2, blocklist: new Set() }
     );
 
     assert.equal(first.stats.mode, 'shadow');

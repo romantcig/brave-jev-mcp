@@ -57,7 +57,7 @@ const braveResponse = {
       {
         url: 'https://example.com/post',
         title: 'Example Post',
-        snippets: ['Example snippet one.', 'Example snippet two.'],
+        snippets: ['Example snippet one about Brave.', 'Example snippet two about Brave.'],
       },
     ],
     map: [],

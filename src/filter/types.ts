@@ -26,11 +26,13 @@ export type FilterRequest = {
   maximum_number_of_tokens_per_url?: number;
 };
 
-/** 环境变量解析出的配置；`blocklist` 字段由 01-03 计划追加。 */
+/** 环境变量解析出的配置；`blocklist` 是黑名单文本解析出的规范 host 集合（01-03 追加）。 */
 export type FilterConfig = {
   mode: FilterMode;
   /** 超量倍数，默认 1；>1 时只放大来源数与总 token */
   overfetchFactor: number;
+  /** 步 4 的结构性农场黑名单；条目命中自身与全部子域 */
+  blocklist: ReadonlySet<string>;
 };
 
 /** Phase 2 注入 Jev 客户端的位置；Phase 1 没有实现，只钉住形状。 */
