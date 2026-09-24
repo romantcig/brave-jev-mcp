@@ -11,12 +11,18 @@
  * notes/local-rules-design.md §3。
  */
 
-/** Unicode script 切段：Han / 假名 / 谚文各成连续段，其余按连续字母数字段。Han 必须在最前——假名与谚文字符同属 `\p{L}`，交替顺序决定归属。 */
+/**
+ * Unicode script 切段：Han / 假名 / 谚文各成连续段，其余按连续字母数字段。Han 必须在最前——
+ * 假名与谚文字符同属 `\p{L}`，交替顺序决定归属。假名分支用 Script_Extensions（scx）：
+ * 长音符 ー 的 Script 是 Common，scx 才把它收进假名段。最后一个分支逐字符**排除 CJK**——
+ * 汉字/假名/谚文都属 `\p{L}`，不排除时 `Sanity发布了v6版本` 会被整段粘成一个 token，
+ * 中文 query 实词全部丢失；前瞻逐字符判定是线性的，无嵌套回溯（ReDoS 安全）。
+ */
 export const SCRIPT_PATTERN: RegExp =
-  /\p{Script=Han}+|[\p{Script=Hiragana}]+|[\p{Script=Katakana}]+|[\p{Script=Hangul}]+|[\p{L}\p{N}]+/gu;
+  /\p{Script=Han}+|[\p{scx=Hiragana}]+|[\p{scx=Katakana}]+|\p{Script=Hangul}+|(?:(?![\p{Script=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{Script=Hangul}])[\p{L}\p{N}])+/gu;
 
-/** 段是否为 CJK（Han / 假名 / 谚文）；此类段转字符二元，其余段按词输出。 */
-const CJK_SEGMENT = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u;
+/** 段是否为 CJK（Han / 假名 / 谚文，假名含 scx 收编的 ー）；此类段转字符二元，其余段按词输出。 */
+const CJK_SEGMENT = /^[\p{Script=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{Script=Hangul}]+$/u;
 
 /**
  * 停用词：英文功能词与搜索套话、中文二元套话。
@@ -141,7 +147,7 @@ export function shingles(tokens: string[], n = 5): Set<string> {
 /**
  * Jaccard 相似度：交并比。
  * @returns `|A∩B| / |A∪B|`；任一集合为空时返回 0
- * @example jaccard(new Set(['a', 'b', 'c']), new Set(['a', 'b', 'd'])) === 0.4
+ * @example jaccard(new Set(['a', 'b', 'c']), new Set(['a', 'b', 'd'])) === 0.5
  * @example jaccard(new Set(), new Set(['a'])) === 0
  */
 export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
