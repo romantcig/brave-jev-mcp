@@ -277,14 +277,13 @@ export const RequestHeadersSchema = z.object({
 // Whitelist of upstream query parameters exposed to the model. `.pick()` keys must
 // exist on RequestParamsSchema, so a renamed upstream parameter fails at compile time
 // and a newly added one stays hidden until deliberately listed here.
+// 四个数值旋钮不在这里复用：对外声明去掉 `.min()`（下限由 applyMinimumValues 钳位，
+// 越界不再报错），`.max()` 保留（上限越界仍被 SDK 拒绝），因此改在下方显式声明，
+// 与 RequestParamsSchema 的 `.min()` 数值一致性由 index.test.ts 锁定。
 const Picked = RequestParamsSchema.pick({
   query: true,
   country: true,
   search_lang: true,
-  count: true,
-  maximum_number_of_urls: true,
-  maximum_number_of_tokens: true,
-  maximum_number_of_tokens_per_url: true,
   freshness: true,
   goggles: true,
 });
@@ -312,18 +311,34 @@ export const LlmContextInputSchema = z.object({
     .string()
     .describe('Result language code, e.g. "en" or "zh-hans"; usually omitted.')
     .optional(),
-  count: Picked.shape.count.describe(
-    'Number of candidate search results; 10 recommended for routine calls.'
-  ),
-  maximum_number_of_urls: Picked.shape.maximum_number_of_urls.describe(
-    'Upper bound on returned sources; 5 recommended.'
-  ),
-  maximum_number_of_tokens: Picked.shape.maximum_number_of_tokens.describe(
-    'Approximate total token budget for returned content; 4000 recommended.'
-  ),
-  maximum_number_of_tokens_per_url: Picked.shape.maximum_number_of_tokens_per_url.describe(
-    'Token cap per source; 800 recommended.'
-  ),
+  count: z
+    .number()
+    .int()
+    .max(50)
+    .describe(
+      'Number of candidate search results; 10 recommended for routine calls. Values below 1 are raised to 1.'
+    )
+    .optional(),
+  maximum_number_of_urls: z
+    .number()
+    .int()
+    .max(50)
+    .describe('Upper bound on returned sources; 5 recommended. Values below 1 are raised to 1.')
+    .optional(),
+  maximum_number_of_tokens: z
+    .number()
+    .int()
+    .max(32768)
+    .describe(
+      'Approximate total token budget for returned content; 4000 recommended. Values below 1024 are raised to 1024.'
+    )
+    .optional(),
+  maximum_number_of_tokens_per_url: z
+    .number()
+    .int()
+    .max(8192)
+    .describe('Token cap per source; 800 recommended. Values below 512 are raised to 512.')
+    .optional(),
   freshness: Picked.shape.freshness.describe(
     'Recency filter: pd = 1 day, pw = 7 days, pm = 31 days, py = 365 days, or YYYY-MM-DDtoYYYY-MM-DD.'
   ),
@@ -335,3 +350,39 @@ export const LlmContextInputSchema = z.object({
 export type LlmContextInput = z.input<typeof LlmContextInputSchema>;
 export type LlmQueryParams = z.infer<typeof RequestParamsSchema>;
 export type LlmRequestHeaders = z.infer<typeof RequestHeadersSchema>;
+
+/**
+ * 工具面下限：低于最小值的参数抬到最小值而不是拒绝（上限越界仍由声明的
+ * `.max()` 在 SDK 校验层拒绝）。数值必须与 RequestParamsSchema 的 `.min()` 一致，
+ * 由 index.test.ts 锁定。
+ */
+export const MINIMUM_VALUES = Object.freeze({
+  count: 1,
+  maximum_number_of_urls: 1,
+  maximum_number_of_tokens: 1024,
+  maximum_number_of_tokens_per_url: 512,
+} as const);
+
+/** 一次被抬到下限的参数，回传给模型让它知道阈值被调整了。 */
+export type RaisedParameter = { parameter: string; requested: number; applied: number };
+
+/**
+ * 把低于下限的数值参数抬到下限，返回生效参数与调整清单。
+ * 放在 execute() 里而不是做成 zod preprocess：preprocess 发生在 SDK 的共享
+ * 校验层内部，钳位只会静默发生，调用侧拿不到"本次调整了什么"的信号。
+ */
+export const applyMinimumValues = (
+  params: LlmContextInput
+): { adjusted: LlmContextInput; raised: RaisedParameter[] } => {
+  const adjusted = { ...params };
+  const raised: RaisedParameter[] = [];
+  for (const parameter of Object.keys(MINIMUM_VALUES) as (keyof typeof MINIMUM_VALUES)[]) {
+    const requested = adjusted[parameter];
+    const applied = MINIMUM_VALUES[parameter];
+    if (typeof requested === 'number' && requested < applied) {
+      adjusted[parameter] = applied;
+      raised.push({ parameter, requested, applied });
+    }
+  }
+  return { adjusted, raised };
+};

@@ -6,7 +6,9 @@ import {
   RequestParamsSchema,
   RequestHeadersSchema,
   LlmContextInputSchema,
+  applyMinimumValues,
   type LlmContextInput as QueryParams,
+  type RaisedParameter,
 } from './schemas/input.js';
 import { LlmContextSearchApiResponseSchema } from './schemas/output.js';
 import {
@@ -14,6 +16,7 @@ import {
   filterLlmContext,
   parseFilterConfig,
   resolveToolDescription,
+  type FilteredResponse,
 } from '../../filter/index.js';
 
 export const name = 'brave_llm_context';
@@ -52,8 +55,25 @@ export const description = `
     When relaying results, cite the source URLs from the "sources" map.
 `.trim();
 
+/** 载荷与 Brave 响应同形；只有发生下限钳位时才附加 parameter_adjustments 键。 */
+type WithAdjustments = FilteredResponse & {
+  parameter_adjustments?: Record<string, { requested: number; applied: number }>;
+};
+
+/** 写时复制附加钳位清单，不改动过滤层返回的对象；未触发时原引用返回。 */
+const withAdjustments = (payload: FilteredResponse, raised: RaisedParameter[]): WithAdjustments => {
+  if (raised.length === 0) return payload;
+  return {
+    ...payload,
+    parameter_adjustments: Object.fromEntries(
+      raised.map(({ parameter, requested, applied }) => [parameter, { requested, applied }])
+    ),
+  };
+};
+
 export const execute = async (params: QueryParams) => {
-  const parsedParams = RequestParamsSchema.parse(params);
+  const { adjusted, raised } = applyMinimumValues(params);
+  const parsedParams = RequestParamsSchema.parse(adjusted);
   const parsedHeaders = RequestHeadersSchema.parse(params);
   const filterConfig = parseFilterConfig(process.env);
   const braveParams = applyOverfetch(parsedParams, filterConfig);
@@ -61,8 +81,21 @@ export const execute = async (params: QueryParams) => {
   const response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
   const payload = success
-    ? filterLlmContext(data, { params: parsedParams, intent: params.intent }, filterConfig).result
+    ? withAdjustments(
+        filterLlmContext(data, { params: parsedParams, intent: params.intent }, filterConfig)
+          .result,
+        raised
+      )
     : z.treeifyError(error);
+
+  // stderr 是诊断通道，不进协议；只在钳位真正发生时输出一行
+  if (raised.length > 0) {
+    console.error(
+      `[brave_llm_context] raised below-minimum parameters: ${raised
+        .map((r) => `${r.parameter} ${r.requested} -> ${r.applied}`)
+        .join(', ')}`
+    );
+  }
 
   return {
     content: [{ type: 'text', text: JSON.stringify(payload) } as TextContent],

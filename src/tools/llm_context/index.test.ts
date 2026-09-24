@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { useTestClient } from '../../testUtils/mcpTestHarness.js';
 import { name } from './index.js';
-import { RequestParamsSchema } from './schemas/input.js';
+import { LlmContextInputSchema, RequestParamsSchema } from './schemas/input.js';
 
 // 过滤层读取的环境变量：经过 execute() 的用例都要先删掉，避免开发机 .env 泄漏进测试
 const FILTER_ENV_VARS = [
@@ -308,10 +308,25 @@ describe(`${name} (below-minimum clamping)`, () => {
     const tool = tools.find((t) => t.name === name);
 
     assert.ok(tool, `${name} is not listed`);
-    const perUrl = tool.inputSchema.properties.maximum_number_of_tokens_per_url;
+    const perUrl = (tool.inputSchema.properties ?? {}).maximum_number_of_tokens_per_url as {
+      maximum?: number;
+      minimum?: number;
+      description?: string;
+    };
     assert.equal(perUrl.maximum, 8192);
-    assert.equal(perUrl.minimum, undefined);
-    assert.match(perUrl.description, /below 512 are raised to 512/);
+    // zod 4 会把 .int() 的整数域渲染成隐式 minimum（±2^53-1）；业务下限 512 只写在描述里
+    assert.notEqual(perUrl.minimum, 512);
+    assert.match(perUrl.description ?? '', /below 512 are raised to 512/);
+
+    // SDK 校验层对 500 放行——下限钳位发生在 execute() 里
+    assert.equal(
+      LlmContextInputSchema.safeParse({
+        query: 'q',
+        intent: 'i',
+        maximum_number_of_tokens_per_url: 500,
+      }).success,
+      true
+    );
   });
 
   it('keeps the upstream RequestParamsSchema still rejecting below-minimum values', () => {
