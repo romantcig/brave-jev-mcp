@@ -1,25 +1,18 @@
-"""对一份 Brave 夹具跑 Jev 题库（经 Vercel AI Gateway），输出逐来源裁决表并把原始响应存到 fixtures/<name>.jev.json。
+"""对一份 Brave 夹具跑 Jev 题库（TypeSafe 直连），输出逐来源裁决表并把原始响应存到 fixtures/<name>.jev.json。
 用法: python dev/jev_probe.py fixtures/jev_release_default.json "<intent>"
-后端：环境变量 jev_API_KEY 存在则走 TypeSafe 直连（noul 协议，并发 6）；否则走 Vercel 网关（boolean 协议，串行）。代理 127.0.0.1:10808。
+后端：TypeSafe 直连（noul 协议，并发 6）；key 从环境变量 jev_API_KEY 或 TYPESAFE_API_KEY 读。代理从 HTTPS_PROXY 环境变量读，未设则直连。
+OpenRouter / Vercel 网关通道已于 2026-09-24 退役（见 notes/decisions-log.md）。
 题库与阈值集中在 QUESTIONS / THRESHOLDS，改策略只改这里。
 """
-import json, sys, time, subprocess, urllib.request, concurrent.futures as cf
+import json, sys, time, urllib.request, concurrent.futures as cf
 from pathlib import Path
 
 import os
-DIRECT = bool(os.environ.get("jev_API_KEY") or os.environ.get("TYPESAFE_API_KEY"))
-if DIRECT:
-    URL = "https://api.typesafe.ai/v1/systemone"; MODEL = "jev-latest"; WORKERS = 6; BOOL = "noul"
-else:
-    URL = "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"; MODEL = "typesafe-ai/jev"; WORKERS = 1; BOOL = "boolean"
+URL = "https://api.typesafe.ai/v1/systemone"; MODEL = "jev-latest"; WORKERS = 6; BOOL = "noul"
 
 def get_key():
-    if DIRECT:
-        return os.environ.get("jev_API_KEY") or os.environ.get("TYPESAFE_API_KEY")
-    k = os.environ.get("AI_GATEWAY_API_KEY") or os.environ.get("Vercel_API_KEY")
-    if not k:
-        k = subprocess.run(["pwsh","-NoProfile","-Command","[Environment]::GetEnvironmentVariable('Vercel_API_KEY','User')"],capture_output=True,text=True).stdout.strip()
-    assert k.startswith("vck_"), "Vercel_API_KEY missing"
+    k = os.environ.get("jev_API_KEY") or os.environ.get("TYPESAFE_API_KEY")
+    assert k, "jev_API_KEY / TYPESAFE_API_KEY missing"
     return k
 
 def prob(ans):
@@ -50,16 +43,11 @@ def build_questions(n_snips):
 
 def call(key, state, questions):
     """单次请求；网络异常（代理握手超时等）也按可重试处理"""
-    if DIRECT:
-        body = json.dumps({"model":MODEL,"state":state,"questions":questions}).encode()
-        headers = {"Authorization":f"Bearer {key}","Content-Type":"application/json"}
-    else:
-        body = json.dumps({"state":state,"questions":questions}).encode()
-        headers = {"Authorization":f"Bearer {key}","Content-Type":"application/json",
-            "ai-gateway-protocol-version":"0.0.1","ai-gateway-auth-method":"api-key",
-            "ai-evaluation-model-specification-version":"4","ai-model-id":MODEL}
+    body = json.dumps({"model":MODEL,"state":state,"questions":questions}).encode()
+    headers = {"Authorization":f"Bearer {key}","Content-Type":"application/json"}
     req = urllib.request.Request(URL, data=body, method="POST", headers=headers)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({'https':'http://127.0.0.1:10808'}))
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or ""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({'https': proxy} if proxy else {}))
     t = time.time()
     for attempt in range(6):
         try:
@@ -94,7 +82,7 @@ def main():
         for sid, s, code, resp, dt in ex.map(lambda p: one(*p), enumerate(srcs)):
             results[sid] = {"url":s["url"],"http":code,"latency_s":dt,"response":resp}
     out = fx.with_suffix(".jev.json")
-    json.dump({"intent":intent,"backend":"direct" if DIRECT else "vercel","model":MODEL,"thresholds":THRESHOLDS,"questions":SOURCE_QUESTIONS,"levels":SNIPPET_LEVELS,"results":results}, open(out,"w",encoding="utf-8"), ensure_ascii=False, indent=1)
+    json.dump({"intent":intent,"backend":"direct","model":MODEL,"thresholds":THRESHOLDS,"questions":SOURCE_QUESTIONS,"levels":SNIPPET_LEVELS,"results":results}, open(out,"w",encoding="utf-8"), ensure_ascii=False, indent=1)
     print(f"{'src':4} {'verdict':14} keep prim reas rewr fill off  snips kept/total  tok   s   url")
     tot_tok=0; tot_chars_in=0; tot_chars_kept=0
     for i, s in enumerate(srcs):

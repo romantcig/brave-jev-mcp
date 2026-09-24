@@ -1,6 +1,6 @@
 """抓取真实 Brave LLM Context 响应存为测试夹具。
 用法: python dev/fetch_fixture.py "<query>" <name> [--strict] [--freshness pm] [--urls 12] [--tokens 9000] [--per-url 750] [--count 20]
-key 从 ~/.claude.json 的 brave 条目读取; 代理走 127.0.0.1:10808。
+key 从 ~/.claude.json 的 brave 条目读取; 代理从 HTTPS_PROXY 环境变量读，未设则直连。
 """
 import json, sys, os, argparse, urllib.request, urllib.parse, time
 from pathlib import Path
@@ -16,7 +16,8 @@ if a.freshness: params['freshness']=a.freshness
 if a.strict: params['context_threshold_mode']='strict'
 url='https://api.search.brave.com/res/v1/llm/context?'+urllib.parse.urlencode(params)
 req=urllib.request.Request(url,headers={'Accept':'application/json','X-Subscription-Token':key})
-opener=urllib.request.build_opener(urllib.request.ProxyHandler({'https':'http://127.0.0.1:10808'}))
+proxy=os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy') or ''
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({'https':proxy} if proxy else {}))
 t=time.time()
 with opener.open(req,timeout=60) as r: data=json.loads(r.read().decode())
 dt=time.time()-t
