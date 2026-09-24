@@ -14,6 +14,35 @@
 import { normalizeLine } from './prefilter.js';
 
 /**
+ * 【RED 桩】步 4 / 步 8 的四个函数先落签名、函数体抛 "not implemented"，
+ * 让 nonArticle.test.ts 的新增用例在断言处失败，GREEN 提交再填实。
+ */
+
+export const FEED_TOKENS: ReadonlySet<string> = new Set<string>();
+
+export const FEED_PATH_SUFFIXES: readonly string[] = [];
+
+export function isFeedUrl(_raw: string): boolean {
+  throw new Error('isFeedUrl: not implemented (RED stub)');
+}
+
+export function isBlocklisted(_canonicalHost: string, _blocklist: ReadonlySet<string>): boolean {
+  throw new Error('isBlocklisted: not implemented (RED stub)');
+}
+
+export function isEmptySource(_survivingSnippets: readonly { text: string }[]): boolean {
+  throw new Error('isEmptySource: not implemented (RED stub)');
+}
+
+export function isOneLiner(
+  _survivingSnippets: readonly { text: string }[],
+  _queryTerms: ReadonlySet<string>,
+  _maxLength?: number
+): boolean {
+  throw new Error('isOneLiner: not implemented (RED stub)');
+}
+
+/**
  * 付费墙截断：按行扫描，找第一行（normalizeLine 后、忽略大小写）以任一标记开头的行，
  * 保留其之前的文本并 `trimEnd()`。标记只在行首匹配——句中出现（例如一篇讨论付费墙
  * 的文章）不截断，避免误伤（Assumption A15）。只做片段级，不据此判整页。
