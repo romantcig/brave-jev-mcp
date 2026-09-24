@@ -303,20 +303,36 @@ describe(`${name} (below-minimum clamping)`, () => {
     assert.equal(calls, before);
   });
 
-  it('advertises the maximum but not the minimum; the description states the floor', async () => {
+  it('advertises the maximum but no minimum at all; the description states the floor', async () => {
     const { tools } = await getClient().listTools();
     const tool = tools.find((t) => t.name === name);
 
     assert.ok(tool, `${name} is not listed`);
-    const perUrl = (tool.inputSchema.properties ?? {}).maximum_number_of_tokens_per_url as {
-      maximum?: number;
-      minimum?: number;
-      description?: string;
-    };
-    assert.equal(perUrl.maximum, 8192);
-    // zod 4 会把 .int() 的整数域渲染成隐式 minimum（±2^53-1）；业务下限 512 只写在描述里
-    assert.notEqual(perUrl.minimum, 512);
-    assert.match(perUrl.description ?? '', /below 512 are raised to 512/);
+    const properties = (tool.inputSchema.properties ?? {}) as Record<
+      string,
+      { maximum?: number; minimum?: number; description?: string }
+    >;
+    // zod 4.3.6 会把 .int() 的安全整数域渲染成 minimum: -2^53+1 噪音；用
+    // .meta({ minimum: undefined }) 压掉，业务下限只写在描述里。断言键不存在
+    // （而非 !== 512），zod 版本一变渲染行为就会在这里报警。
+    for (const key of [
+      'count',
+      'maximum_number_of_urls',
+      'maximum_number_of_tokens',
+      'maximum_number_of_tokens_per_url',
+    ]) {
+      assert.equal(
+        Object.hasOwn(properties[key] ?? {}, 'minimum'),
+        false,
+        `${key} must not advertise a minimum`
+      );
+      assert.ok(properties[key], `${key} must be advertised`);
+    }
+    assert.equal(properties.count?.maximum, 50);
+    assert.equal(properties.maximum_number_of_urls?.maximum, 50);
+    assert.equal(properties.maximum_number_of_tokens?.maximum, 32768);
+    assert.equal(properties.maximum_number_of_tokens_per_url?.maximum, 8192);
+    assert.match(properties.maximum_number_of_tokens_per_url?.description ?? '', /below 512 are raised to 512/);
 
     // SDK 校验层对 500 放行——下限钳位发生在 execute() 里
     assert.equal(
