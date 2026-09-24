@@ -8,7 +8,7 @@ import json, sys, time, urllib.request, concurrent.futures as cf
 from pathlib import Path
 
 import os
-URL = "https://api.typesafe.ai/v1/systemone"; MODEL = "jev-latest"; WORKERS = 6; BOOL = "noul"
+URL = "https://api.typesafe.ai/v1/systemone"; MODEL = "jev-1.13.0"; WORKERS = 6; BOOL = "noul"
 
 def get_key():
     k = os.environ.get("jev_API_KEY") or os.environ.get("TYPESAFE_API_KEY")
@@ -16,10 +16,9 @@ def get_key():
     return k
 
 def prob(ans):
-    """两种协议统一取"是"的概率"""
-    return ans["noul"] if "noul" in ans else ans["probability"]
+    return ans["noul"]
 
-# ---- 题库（英文题干，noul 在网关协议里叫 boolean）----
+# ---- 题库（英文题干，noul 协议）----
 SOURCE_QUESTIONS = {
  "worth_keeping": "`source` contains information or analysis about the subject of `query` that a reader pursuing `intent` would lose if this source were removed, beyond restating widely reported launch facts (funding, pricing, speed claims, founder background).",
  "is_primary": "The author of `source` is the company, person, or project that `query` is about (their own announcement, documentation, repository, or post).",
@@ -56,7 +55,7 @@ def call(key, state, questions):
         except Exception as e:  # 代理/TLS 超时
             raw = json.dumps({"error": {"message": f"network: {e}"}}); code = 599
         if code not in (429, 529, 599): break
-        time.sleep(1.5 * (2 ** attempt))   # 免费档对该模型限流严格；指数退避
+        time.sleep(1.5 * (2 ** attempt))   # 指数退避
     return code, json.loads(raw), round(time.time()-t,2)
 
 def verdict(a, n_snips):
