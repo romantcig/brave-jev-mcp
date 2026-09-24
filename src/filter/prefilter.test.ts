@@ -85,6 +85,45 @@ describe('matchesPrefix', () => {
   it('does not match when the prefix appears mid-line', () => {
     assert.equal(matchesPrefix('Read our READ MORE section first', ['READ MORE']), false);
   });
+
+  it('does not match long body lines that merely begin with a table entry', () => {
+    // 裸 startsWith 会把正常句子开头当样板删整行：Share/分享/广告/On this page/Sponsored
+    // 都常出现在正文句首（审查问题 2 的六条真实反例）
+    assert.equal(
+      matchesPrefix('Shares of Nvidia fell 5% on Tuesday after weaker guidance.', ['Share']),
+      false
+    );
+    assert.equal(
+      matchesPrefix('SharePoint Online now supports the new API for list formatting.', ['Share']),
+      false
+    );
+    assert.equal(
+      matchesPrefix('分享一下我的 Claude Code hooks 配置，关键是 PostToolUse 的写法。', ['分享']),
+      false
+    );
+    assert.equal(matchesPrefix('广告投放的新规则从下个月开始生效，涉及所有搜索引擎。', ['广告']), false);
+    assert.equal(
+      matchesPrefix('On this page, we explain how the v6 migration works.', ['On this page']),
+      false
+    );
+    assert.equal(
+      matchesPrefix('Sponsored by the NSF, this study measured the effect.', ['Sponsored']),
+      false
+    );
+  });
+
+  it('still matches whole-line entries, short prefixed lines and Chinese short lines', () => {
+    // 独立样板行（整行相等，行末标点忽略）
+    assert.equal(matchesPrefix('Share', ['Share']), true);
+    assert.equal(matchesPrefix('Read next.', ['Read next']), true);
+    assert.equal(matchesPrefix('Release time', ['Release Time:']), true);
+    // 短行 + 英文词边界：'Share' 不吞 'Shares'/'SharePoint'
+    assert.equal(matchesPrefix('Share this article', ['Share']), true);
+    assert.equal(matchesPrefix('READ MORE: the full story', ['Read more']), true);
+    // 中文表项只在短行命中（阈值远小于英文）
+    assert.equal(matchesPrefix('分享到微博', ['分享']), true);
+    assert.equal(matchesPrefix('相关阅读：往期回顾', ['相关阅读']), true);
+  });
 });
 
 describe('isTitleOnly', () => {
@@ -134,6 +173,18 @@ describe('stripBoilerplateLines', () => {
 
     assert.equal(result.emptied, false);
     assert.equal(result.text, MEZHA_SNIPPET_0);
+  });
+
+  it('keeps body lines that merely begin with a table entry (multi-line snippet)', () => {
+    // 整行删语义下，这种行不该被剥掉——片段其余行依赖它保持完整
+    const result = stripBoilerplateLines(
+      'Shares of Nvidia fell 5% on Tuesday.\nAnalysts blamed the weaker guidance.',
+      BOILERPLATE_PREFIXES,
+      'Title'
+    );
+
+    assert.equal(result.emptied, false);
+    assert.equal(result.text.startsWith('Shares of Nvidia fell 5%'), true);
   });
 
   it('reports emptied for a snippet made only of boilerplate lines', () => {

@@ -41,6 +41,22 @@ describe('truncateAtPaywall', () => {
     assert.deepEqual(result, { text, truncated: false });
   });
 
+  it('does not truncate when a body line merely begins with a marker', () => {
+    // 裸 startsWith 会把以 "Premium content" 开头的正文行当标记，截掉其后全部内容
+    const text =
+      'Headline\nPremium content is the main revenue source for many outlets.\nSecond paragraph with unique facts.';
+
+    const result = truncateAtPaywall(text, PAYWALL_MARKERS_EN);
+
+    assert.deepEqual(result, { text, truncated: false });
+  });
+
+  it('ignores trailing punctuation when matching a marker line', () => {
+    const result = truncateAtPaywall('Para one.\n\nSubscribe to continue reading.\nAfter.', PAYWALL_MARKERS_EN);
+
+    assert.deepEqual(result, { text: 'Para one.', truncated: true });
+  });
+
   it('returns the text unchanged when no marker is present', () => {
     const text = '# Heading\n\nNormal body text.';
 
