@@ -22,12 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { parseFilterConfig } from './config.js';
 import { filterLlmContext } from './pipeline.js';
 import { zeroLocal } from './stats.js';
-import type {
-  BraveLlmContextResponse,
-  LocalStats,
-  SnippetStats,
-  SourceStats,
-} from './types.js';
+import type { BraveLlmContextResponse, LocalStats, SnippetStats, SourceStats } from './types.js';
 
 const fixtureRoot = fileURLToPath(new URL('../../fixtures/', import.meta.url));
 const expectedRoot = join(fixtureRoot, 'expected');
@@ -96,7 +91,7 @@ type ExpectedFixture = {
 const listExpectedFiles = (): string[] => {
   try {
     return readdirSync(expectedRoot, { recursive: true })
-      .map((entry) => entry.split('\\').join('/'))
+      .map((entry) => String(entry).split('\\').join('/'))
       .filter((entry) => entry.endsWith('.off.json'))
       .sort();
   } catch {
@@ -134,11 +129,9 @@ const hostOf = (url: string): string => {
 };
 
 /** 按 index + part 在统计表里找一行；找不到时让断言失败。 */
-const findRow = (
-  source: SourceStats,
-  snippet: number | string
-): SnippetStats | undefined => {
-  const [indexText, partText] = typeof snippet === 'string' ? snippet.split('.') : [String(snippet)];
+const findRow = (source: SourceStats, snippet: number | string): SnippetStats | undefined => {
+  const [indexText, partText] =
+    typeof snippet === 'string' ? snippet.split('.') : [String(snippet)];
   return source.snippets.find(
     (row) =>
       row.index === Number(indexText) &&
@@ -161,9 +154,7 @@ describe('expected fixture inventory', () => {
 // ---------------------------------------------------------------------------
 
 for (const rel of listExpectedFiles()) {
-  const expected = JSON.parse(
-    readFileSync(join(expectedRoot, rel), 'utf8')
-  ) as ExpectedFixture;
+  const expected = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8')) as ExpectedFixture;
 
   describe(`off mode · ${expected.fixture}`, () => {
     const data = loadBraveFixture(expected.fixture);
@@ -206,6 +197,7 @@ for (const rel of listExpectedFiles()) {
           // 步 1 只负责转换；个别段被步 3 再删由该节的 nav 标注单独断言（sample3 4.3/4.4），
           // 这里只要求第一段幸存且以标注的前缀开头
           const firstRow = rows.find((row) => row.part === 0);
+          assert.ok(firstRow, 'a converted snippet must have a part 0');
           assert.equal(firstRow.kept, true, 'the first converted part must survive');
           // 转换后原片段行被多段取代，第一段是 <snippet>.0
           const first = survivingText(item.url, `${item.snippet}.0`);
@@ -313,10 +305,7 @@ for (const rel of listExpectedFiles()) {
       for (const meta of Object.values(result.sources)) {
         for (const key of Object.keys(meta)) {
           union.add(key);
-          assert.ok(
-            ['title', 'hostname', 'age'].includes(key),
-            `unexpected source key ${key}`
-          );
+          assert.ok(['title', 'hostname', 'age'].includes(key), `unexpected source key ${key}`);
         }
       }
       assert.deepEqual([...union].sort(), expected.final.sources_keys.slice().sort());
@@ -372,6 +361,7 @@ describe('budget trimming on a real fixture', () => {
     // 前四源不受 token 裁剪影响；第 5 源从末尾开始裁
     for (const url of braveUrls.slice(0, 4)) {
       const source = stats.sources.find((entry) => entry.url === url);
+      assert.ok(source, `source ${url} missing from stats`);
       assert.equal(
         source.snippets.some((row) => row.reason === 'budget'),
         false,
@@ -379,6 +369,7 @@ describe('budget trimming on a real fixture', () => {
       );
     }
     const fifth = stats.sources.find((entry) => entry.url === braveUrls[4]);
+    assert.ok(fifth, 'fifth source missing from stats');
     const surviving = fifth.snippets.filter((row) => row.kept).map((row) => row.index);
     const all = fifth.snippets.map((row) => row.index);
     assert.deepEqual(surviving, all.slice(0, surviving.length), 'trimming must drop tail snippets');
