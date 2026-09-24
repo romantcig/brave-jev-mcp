@@ -83,6 +83,7 @@ describe('isFeedUrl', () => {
     assert.equal(isFeedUrl('https://example.com/blog/feed/'), true);
     assert.equal(isFeedUrl('https://example.com/x?feed=rss2'), true);
     assert.equal(isFeedUrl('https://example.com/atom.xml'), true);
+    assert.equal(isFeedUrl('https://example.com/rss'), true);
   });
 
   it('does not judge substring look-alikes as feeds', () => {
@@ -90,6 +91,23 @@ describe('isFeedUrl', () => {
     assert.equal(isFeedUrl('https://example.com/feedback-form'), false);
     assert.equal(isFeedUrl('https://example.com/newsfeed-article'), false);
     assert.equal(isFeedUrl('https://example.com/grassroots'), false);
+  });
+
+  it('judges only the last path segment, never hostname tokens or hyphen/underscore compounds', () => {
+    // 审查问题 5：/[/.-_]/ 的 .-_ 是字符区间（含数字、大写字母，独独不含连字符），
+    // 导致 /blog-feed 漏判、feed_parser / atom_tools / 主机名 rss.com 误判
+    assert.equal(isFeedUrl('https://example.com/blog-feed'), false);
+    assert.equal(isFeedUrl('https://example.com/rss2json-guide'), false);
+    assert.equal(isFeedUrl('https://github.com/someone/feed_parser'), false);
+    assert.equal(isFeedUrl('https://pypi.org/project/atom_tools/'), false);
+    assert.equal(isFeedUrl('https://rss.com/blog/podcast-tips'), false);
+    assert.equal(isFeedUrl('https://atom.io/docs'), false);
+  });
+
+  it('keeps developer pages that merely contain feed-named packages', () => {
+    // 收窄规则不能误删按包名/仓库名检索的开发者页面
+    assert.equal(isFeedUrl('https://github.com/rbren/rss-parser'), false);
+    assert.equal(isFeedUrl('https://www.npmjs.com/package/rss-parser'), false);
   });
 
   it('leaves ordinary article URLs and unparseable input alone', () => {
