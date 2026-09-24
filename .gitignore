@@ -9,3 +9,9 @@ secrets/*
 notes/private-*.md
 fixtures/**/*.jev.json
 CLAUDE.local.md
+
+# planning system stays local, never published
+.planning/
+notes/
+PLAN.md
+.claude/
