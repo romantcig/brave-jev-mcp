@@ -5,14 +5,15 @@
  * 翻 `kept` / `verdict` / `reason` 或替换文本，**不 sort、不 filter 出新数组**，最后
  * 一次性重建输出——幸存来源与片段因此天然保持 Brave 原序（RULES-08）。
  *
- * 本计划（01-01）只定型位置与类型：步 1–4、7、9 是空位，步 8 只做"片段删光即丢来源"，
- * 末尾做输出重建与 `sources` 精简。后续计划往空位填实现，不改这里的顺序与签名。
+ * 01-01 定型位置与类型，01-02 填了步 1、2；步 3、4、7、9 仍是空位，步 8 只做"片段删光
+ * 即丢来源"，末尾做输出重建与 `sources` 精简。后续计划往空位填实现，不改这里的顺序与签名。
  *
  * 依据：PLAN.md §3.2、notes/local-rules-design.md、01-RESEARCH.md「纯库布局」一节。
  */
 
 import { parseFilterConfig } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
+import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { createFilterStats } from './stats.js';
 import type {
   BraveLlmContextGenericItem,
@@ -45,6 +46,8 @@ type WorkSnippet = {
   kept: boolean;
   reason?: SnippetRemovalReason;
   truncated?: boolean;
+  /** 步 2 从同页来源并入时记原来源索引；此时 `index` 是它在原来源里的片段索引 */
+  mergedFrom?: number;
 };
 
 /** 工作表里的一个来源。`url` 永远是 Brave 原始 URL；`canonical` 只用作归并键。 */
@@ -84,8 +87,7 @@ const buildWorkTable = (data: BraveLlmContextResponse): WorkSource[] => {
     return {
       index,
       url,
-      // 01-02 落地 canonicalizeUrl 之前，归并键暂等于原始 URL
-      canonical: url,
+      canonical: canonicalizeUrl(url),
       title,
       meta: lookupMeta(data?.sources, url),
       snippets: texts.map((text, snippetIndex) => ({
@@ -217,6 +219,7 @@ const projectSource = (source: WorkSource): SourceStats => {
     kept: snippet.kept,
     ...(snippet.reason !== undefined ? { reason: snippet.reason } : {}),
     ...(snippet.truncated !== undefined ? { truncated: snippet.truncated } : {}),
+    ...(snippet.mergedFrom !== undefined ? { merged_from: snippet.mergedFrom } : {}),
     chars: snippet.text.length,
   }));
 
@@ -294,7 +297,7 @@ export function filterLlmContext(
   const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
 
   splitJsonLd(table, stats); // 步 1：JSON-LD 分流
-  // 步 2 URL 规范化归并：空位，01-02 计划填（url.ts）
+  stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
   // 步 3 片段预筛：空位，01-03 计划填（prefilter.ts、tokenize.ts）
   // 步 4 feed URL 与结构性黑名单：空位，01-03 计划填（nonArticle.ts、blocklist.ts）
   // 步 5 Jev 每源一次请求：Phase 2；off 模式跳过

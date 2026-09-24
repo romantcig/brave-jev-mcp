@@ -192,8 +192,8 @@ describe('filterLlmContext', () => {
         source.hostname,
       ]),
       [
-        [0, 'https://search.brave.com/', 'https://search.brave.com/', 'search.brave.com'],
-        [1, 'https://example.com/post', 'https://example.com/post', 'example.com'],
+        [0, 'https://search.brave.com/', 'search.brave.com/', 'search.brave.com'],
+        [1, 'https://example.com/post', 'example.com/post', 'example.com'],
       ]
     );
     assert.deepEqual(

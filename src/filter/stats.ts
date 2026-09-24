@@ -8,6 +8,7 @@
  * 依据：01-RESEARCH.md「统计对象」一节。
  */
 
+import { canonicalizeUrl } from './url.js';
 import type {
   BraveLlmContextResponse,
   FilterMode,
@@ -56,8 +57,8 @@ const metaOf = (
 
 /**
  * 新建一份统计对象：记录 Brave 原始规模，并按 Brave 序为每个来源与片段建一行
- * （全部先标为保留，管道各步再翻标记）。`canonical_url` 在 01-02 落地 URL 规范化前
- * 暂等于原始 URL。
+ * （全部先标为保留，管道各步再翻标记）。`canonical_url` 是步 2 的归并键，只进统计，
+ * 输出永远用原始 URL。
  * @param mode 本次调用的模式
  * @param request 已归一化的请求摘要（上限缺省已填 Brave 默认值）
  * @param data Brave 原始响应
@@ -90,7 +91,7 @@ export function createFilterStats(
     return {
       index,
       url,
-      canonical_url: url,
+      canonical_url: canonicalizeUrl(url),
       ...(hostname !== undefined ? { hostname } : {}),
       verdict: 'keep' as const,
       snippets,

@@ -123,6 +123,8 @@ export type SnippetStats = {
   kept: boolean;
   reason?: SnippetRemovalReason;
   truncated?: boolean;
+  /** 步 2 从同页来源并入的片段：原来源的 Brave 索引；此时 `index` 是它在原来源里的片段索引 */
+  merged_from?: number;
   chars: number;
 };
 
