@@ -21,8 +21,8 @@
 export const SCRIPT_PATTERN: RegExp =
   /\p{Script=Han}+|[\p{scx=Hiragana}]+|[\p{scx=Katakana}]+|\p{Script=Hangul}+|(?:(?![\p{Script=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{Script=Hangul}])[\p{L}\p{N}])+/gu;
 
-/** 段是否为 CJK（Han / 假名 / 谚文，假名含 scx 收编的 ー）；此类段转字符二元，其余段按词输出。 */
-const CJK_SEGMENT = /^[\p{Script=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{Script=Hangul}]+$/u;
+/** 段是否为 CJK（Han / 假名 / 谚文，假名含 scx 收编的 ー）；此类段转字符二元，其余段按词输出。样板/标记表的中文条目判定也用它。 */
+export const CJK_SEGMENT = /^[\p{Script=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{Script=Hangul}]+$/u;
 
 /**
  * 停用词：英文功能词与搜索套话、中文二元套话。

@@ -101,7 +101,10 @@ describe('matchesPrefix', () => {
       matchesPrefix('分享一下我的 Claude Code hooks 配置，关键是 PostToolUse 的写法。', ['分享']),
       false
     );
-    assert.equal(matchesPrefix('广告投放的新规则从下个月开始生效，涉及所有搜索引擎。', ['广告']), false);
+    assert.equal(
+      matchesPrefix('广告投放的新规则从下个月开始生效，涉及所有搜索引擎。', ['广告']),
+      false
+    );
     assert.equal(
       matchesPrefix('On this page, we explain how the v6 migration works.', ['On this page']),
       false

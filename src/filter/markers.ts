@@ -30,10 +30,10 @@ export const PAYWALL_MARKERS_ZH: readonly string[] = [
   '加入会员查看',
 ];
 
-/** 步 3 样板行剥离的前缀表：命中行整行删。可增补。 */
+/** 步 3 样板行剥离的前缀表：命中行整行删。匹配语义见 prefilter.ts 的 matchesPrefix——
+ * 独立样板行整行相等、短行前缀带词边界（中文条目阈值更紧）；`Share`/`分享`/`广告`
+ * 这类词出现在正文长句行首时不会命中。可增补。 */
 export const BOILERPLATE_PREFIXES: readonly string[] = [
-  // 注意 `Share` 是 startsWith 语义，`Shared …` 开头的正文行会被误命中；
-  // 表项取舍（改全行匹配、加词边界或调词条）由 01-04 的夹具期望文件校准。
   'Continue after ad',
   'Share',
   'Release Time:',

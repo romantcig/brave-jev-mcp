@@ -9,10 +9,18 @@
  * Assumptions A9（行级剥离）、A10（200 字符阈值）、A11（包含度）。
  */
 
-import { containment, jaccard, tokenize } from './tokenize.js';
+import { CJK_SEGMENT, containment, jaccard, tokenize } from './tokenize.js';
+import { normalizeTitleForCompare } from './jsonld.js';
 
 /** "短"阈值：长度判定统一用 String.length（UTF-16 码元）。 */
 export const SHORT_SNIPPET_MAX = 200;
+
+/** 样板短行阈值（英文条目）：行归一化后不超过该长度才允许前缀命中——Share/分享/广告
+ * 这类词常出现在正文句首，长行必须放过。 */
+export const BOILERPLATE_SHORT_LINE_MAX = 40;
+
+/** 样板短行阈值（中文条目）：中文正文句没有空格分隔，40 码元能装下一整句，阈值远小于英文。 */
+export const BOILERPLATE_SHORT_LINE_MAX_CJK = 12;
 
 /** 页内逐字重复判定的 shingle 窗口宽度。 */
 export const SHINGLE_N = 5;
@@ -37,29 +45,43 @@ export function normalizeLine(line: string): string {
 }
 
 /**
- * 行首前缀匹配：**行与前缀两侧都用同一个 normalizeLine 归一化**再忽略大小写比对。
+ * 行首前缀匹配：**行与前缀两侧都用同一个 normalizeLine 归一化**再忽略大小写比对，
+ * 末尾标点（样板行常带句点/冒号）参与比较前剥掉。命中两条路：
+ * 1. 归一化后**整行相等**——独立样板行（`Share`、`Advertisement`）；
+ * 2. **短行前缀**：行不超过短行阈值（中文条目 12、英文 40）且以条目开头，英文条目
+ *    还要求条目末尾落在词边界——`Share` 不得吞掉 `Shares` / `SharePoint`。
  * 两侧同法归一化是必需的——前缀表里有 `## Frequently Asked Questions` 这种自带
  * 标记的条目，若只归一化行那一侧，它永远不命中。不用无界正则（ReDoS，T-01-03-01）。
- * @returns 归一化后的行以任一归一化前缀开头时为真
+ * @returns 行按上述两条路之一命中任一前缀时为真
  * @example matchesPrefix('## Frequently Asked Questions (FAQ)', ['## Frequently Asked Questions']) === true
  * @example matchesPrefix('Read our READ MORE section', ['READ MORE']) === false
+ * @example matchesPrefix('Shares of Nvidia fell 5%...', ['Share']) === false（长行放过）
  */
 export function matchesPrefix(normalizedLine: string, prefixes: readonly string[]): boolean {
-  const line = normalizeLine(normalizedLine).toLowerCase();
-  return prefixes.some((prefix) => line.startsWith(normalizeLine(prefix).toLowerCase()));
+  const line = stripTrailingPunctuation(normalizeLine(normalizedLine).toLowerCase());
+  return prefixes.some((prefix) => {
+    const entry = stripTrailingPunctuation(normalizeLine(prefix).toLowerCase());
+    if (line === entry) return true;
+
+    const max = CJK_SEGMENT.test(entry)
+      ? BOILERPLATE_SHORT_LINE_MAX_CJK
+      : BOILERPLATE_SHORT_LINE_MAX;
+    if (line.length > max || !line.startsWith(entry)) return false;
+    // 中文没有词边界概念，短行前缀即命中；英文要求条目后是非字母数字
+    if (CJK_SEGMENT.test(entry)) return true;
+    const next = line[entry.length];
+    return next === undefined || !/[a-z0-9]/.test(next);
+  });
 }
 
+/** 剥掉行末的标点、符号与空白：样板行、付费墙标记行常带句点或冒号收尾。 */
+export const stripTrailingPunctuation = (line: string): string =>
+  line.replace(/[\p{P}\p{S}\s]+$/u, '');
+
 /**
- * 来源标题比较用的归一化：去前导标记、压缩连续空白、小写——与 jsonld.ts 的
- * `normalizeTitleForCompare` 同一语义，直接复用避免两套规则漂移。
+ * 来源标题比较用的归一化（`normalizeTitleForCompare`）：直接复用 jsonld.ts 的实现，
+ * 两处语义不得漂移（01-03 SUMMARY 曾写"复用"却落成了复制，审查问题 12）。
  */
-const normalizeForTitleCompare = (text: string): string =>
-  text
-    .trim()
-    .replace(/^[#*-]+/, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
 
 /**
  * 剥离后是否只剩来源标题（归一化后相等）。
@@ -68,7 +90,7 @@ const normalizeForTitleCompare = (text: string): string =>
  * @example isTitleOnly('Body text', 'Title') === false
  */
 export function isTitleOnly(text: string, sourceTitle: string): boolean {
-  return normalizeForTitleCompare(text) === normalizeForTitleCompare(sourceTitle);
+  return normalizeTitleForCompare(text) === normalizeTitleForCompare(sourceTitle);
 }
 
 /**

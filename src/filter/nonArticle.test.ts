@@ -52,7 +52,10 @@ describe('truncateAtPaywall', () => {
   });
 
   it('ignores trailing punctuation when matching a marker line', () => {
-    const result = truncateAtPaywall('Para one.\n\nSubscribe to continue reading.\nAfter.', PAYWALL_MARKERS_EN);
+    const result = truncateAtPaywall(
+      'Para one.\n\nSubscribe to continue reading.\nAfter.',
+      PAYWALL_MARKERS_EN
+    );
 
     assert.deepEqual(result, { text: 'Para one.', truncated: true });
   });
