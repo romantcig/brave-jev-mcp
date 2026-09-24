@@ -363,6 +363,34 @@ describe('filterLlmContext', () => {
       }
     }
   });
+
+  describe('step 9 budget', () => {
+    const tightRequest: { params: FilterRequest; intent: string } = {
+      params: { query: 'brave browser', maximum_number_of_urls: 5, maximum_number_of_tokens: 10 },
+      intent: 'What Brave Search is',
+    };
+
+    it('skips the trim when the overfetch factor is 1 (Brave already honored the cap)', () => {
+      // 倍数为 1 时 Brave 已按请求上限执行输出、过滤层只删不加；估算公式为 Jev 32k
+      // 保护标定、对普通文本偏高（审查问题 6），再按估算裁只会砍掉 Brave 给的完整内容
+      const { result, stats } = filterLlmContext(payload(), tightRequest, offConfig);
+
+      assert.equal(stats.local.budget_trimmed_snippets, 0);
+      assert.equal(stats.local.budget_dropped_sources, 0);
+      assert.equal(result.grounding.generic[0].snippets.length, 2);
+      assert.equal(result.grounding.generic[1].snippets.length, 1);
+    });
+
+    it('trims back to the original request when the overfetch factor exceeds 1', () => {
+      const config: FilterConfig = { mode: 'off', overfetchFactor: 2, blocklist: new Set() };
+      const { result, stats } = filterLlmContext(payload(), tightRequest, config);
+
+      assert.equal(stats.local.budget_trimmed_snippets > 0, true);
+      assert.equal(stats.local.budget_dropped_sources > 0, true);
+      // 放大后的请求发给了 Brave（Brave 侧预算翻倍），但输出仍按模型原始请求裁回
+      assert.equal(result.grounding.generic.length, 0);
+    });
+  });
 });
 
 describe('trimSourceMeta', () => {
