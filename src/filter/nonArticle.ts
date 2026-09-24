@@ -11,21 +11,24 @@
 import { normalizeLine, stripTrailingPunctuation } from './prefilter.js';
 import { tokenize } from './tokenize.js';
 
-/** feed 判定的 token：hostname 与 pathname 按 `/ . - _` 切出的任一 token 等于其一即判 feed。可增补。 */
-export const FEED_TOKENS: ReadonlySet<string> = new Set(['rss', 'feed', 'feeds', 'atom']);
+/** feed 判定的路径末段名：末段（去掉扩展名之前）恰为其一即判 feed。可增补。 */
+export const FEED_SEGMENT_NAMES: ReadonlySet<string> = new Set(['feed', 'feeds', 'rss', 'atom']);
 
 /** 路径末段以这些后缀结尾即判 feed。可增补。 */
 export const FEED_PATH_SUFFIXES: readonly string[] = ['.xml', '.rss', '.atom'];
 
 /**
- * feed URL 判定：token 匹配而非子串——子串会误杀 `feedback`、`newsfeed-article`、
- * `grassroots`（RESEARCH Pitfall 8 / Assumption A12）。判定顺序：`feeds.` 前缀 →
- * host/path token → 路径末段后缀 → `feed` 查询参数；解析失败一律不判（保守留）。
+ * feed URL 判定，四条路按序：`feeds.` 前缀 → 路径末段后缀 → 路径末段恰为 feed 词 →
+ * `feed` 查询参数。**只看路径末段，不对主机名和整条路径做任意 token 切分**——原实现
+ * 按 `/[/.-_]/` 切 token，而字符类里 `.-_` 是区间（含数字、大写字母，独独不含连字符），
+ * 连带 feed_parser / rss2json-guide / 主机名 rss.com 全被误判成 feed，`/blog-feed` 反而
+ * 漏判（审查问题 5）；按包名/仓库名检索的开发者页面（npmjs、github）不得因此被删。
+ * 解析失败一律不判（保守留）。
  * @returns 判定为 feed 时为真
  * @example isFeedUrl('https://feeds.example.com/rss.xml') === true
  * @example isFeedUrl('https://example.com/x?feed=rss2') === true
- * @example isFeedUrl('https://example.com/feedback-form') === false
- * @example isFeedUrl('https://example.com/newsfeed-article') === false
+ * @example isFeedUrl('https://example.com/blog-feed') === false
+ * @example isFeedUrl('https://github.com/rbren/rss-parser') === false
  * @example isFeedUrl('https://example.com/grassroots') === false
  * @example isFeedUrl('not a url') === false
  */
@@ -37,18 +40,13 @@ export function isFeedUrl(raw: string): boolean {
     return false;
   }
 
-  const hostname = url.hostname.toLowerCase();
-  if (hostname.startsWith('feeds.')) return true;
-
-  const tokens = [...hostname.split(/[/.-_]/), ...url.pathname.toLowerCase().split(/[/.-_]/)];
-  if (tokens.some((token) => FEED_TOKENS.has(token))) return true;
+  if (url.hostname.toLowerCase().startsWith('feeds.')) return true;
 
   const lastSegment = url.pathname.split('/').filter(Boolean).pop();
-  if (
-    lastSegment !== undefined &&
-    FEED_PATH_SUFFIXES.some((suffix) => lastSegment.toLowerCase().endsWith(suffix))
-  ) {
-    return true;
+  if (lastSegment !== undefined) {
+    const segment = lastSegment.toLowerCase();
+    if (FEED_PATH_SUFFIXES.some((suffix) => segment.endsWith(suffix))) return true;
+    if (FEED_SEGMENT_NAMES.has(segment)) return true;
   }
 
   return url.searchParams.has('feed');
