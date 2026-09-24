@@ -10,19 +10,23 @@ const request: { params: FilterRequest; intent: string } = {
   intent: 'What Brave Search is',
 };
 
-// 最小内联载荷：两个来源，第一个两段片段带完整元数据，第二个一段片段且 age 为空数组
+// 最小内联载荷：两个来源，第一个两段片段带完整元数据，第二个一段片段且 age 为空数组。
+// 片段文本都含 query 实词（brave），步 3 预筛不命中——步 3 自身的行为在下面的专用用例里断言。
 const payload = (): BraveLlmContextResponse => ({
   grounding: {
     generic: [
       {
         url: 'https://search.brave.com/',
         title: 'Brave Search',
-        snippets: ['Brave is a privacy-focused browser and search engine.', 'Second snippet.'],
+        snippets: [
+          'Brave is a privacy-focused browser and search engine.',
+          'Second snippet about Brave.',
+        ],
       },
       {
         url: 'https://example.com/post',
         title: 'Example Post',
-        snippets: ['Example snippet.'],
+        snippets: ['Example snippet about Brave.'],
       },
     ],
     map: [],
@@ -130,6 +134,39 @@ describe('filterLlmContext', () => {
     assert.deepEqual(stats.sources, []);
   });
 
+  it('prefilters a short nav-only snippet in place during step 3', () => {
+    const data = payload();
+    data.grounding.generic[1].snippets.push('On this page\nInstallation and upgrading');
+
+    const { result, stats } = filterLlmContext(data, request, offConfig);
+
+    // 被删片段留在原位只翻 kept，幸存片段保持 Brave 原序
+    assert.deepEqual(
+      stats.sources[1].snippets.map((snippet) => [snippet.index, snippet.kept, snippet.reason]),
+      [
+        [0, true, undefined],
+        [1, false, 'nav'],
+      ]
+    );
+    assert.deepEqual(result.grounding.generic[1].snippets, ['Example snippet about Brave.']);
+    assert.equal(stats.local.snippets_prefiltered, 1);
+  });
+
+  it('truncates a snippet at a paywall marker line and counts it', () => {
+    const data = payload();
+    data.grounding.generic[0].snippets[0] =
+      'Brave is a privacy-focused browser.\nSubscribe to continue reading\njunk after the marker';
+
+    const { result, stats } = filterLlmContext(data, request, offConfig);
+
+    assert.deepEqual(
+      result.grounding.generic[0].snippets[0],
+      'Brave is a privacy-focused browser.'
+    );
+    assert.equal(stats.sources[0].snippets[0].truncated, true);
+    assert.equal(stats.local.paywall_truncated, 1);
+  });
+
   it('drops a source whose snippets are all gone and cleans its sources entry', () => {
     const data = payload();
     data.grounding.generic.push({ url: 'https://empty.example/', title: 'Empty', snippets: [] });
@@ -200,7 +237,7 @@ describe('filterLlmContext', () => {
       stats.sources[0].snippets.map((snippet) => [snippet.index, snippet.kept, snippet.chars]),
       [
         [0, true, 'Brave is a privacy-focused browser and search engine.'.length],
-        [1, true, 'Second snippet.'.length],
+        [1, true, 'Second snippet about Brave.'.length],
       ]
     );
     assert.equal(stats.output.n_sources, 2);

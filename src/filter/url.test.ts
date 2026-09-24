@@ -305,12 +305,12 @@ describe('filterLlmContext step 2', () => {
   const payload = (): BraveLlmContextResponse => ({
     grounding: {
       generic: [
-        { url: FIRST, title: 'Jev', snippets: ['Jev launched.', 'Shared paragraph.'] },
-        { url: OTHER, title: 'Other', snippets: ['Other page.'] },
+        { url: FIRST, title: 'Jev', snippets: ['Jev launched.', 'Same Jev paragraph.'] },
+        { url: OTHER, title: 'Other', snippets: ['Other Jev page.'] },
         {
           url: SAME_PAGE,
           title: 'Jev (tracked)',
-          snippets: ['Shared paragraph.', 'Extra detail.'],
+          snippets: ['Same Jev paragraph.', 'Extra Jev detail.'],
         },
       ],
       map: [],
@@ -331,8 +331,8 @@ describe('filterLlmContext step 2', () => {
     );
     assert.deepEqual(result.grounding.generic[0].snippets, [
       'Jev launched.',
-      'Shared paragraph.',
-      'Extra detail.',
+      'Same Jev paragraph.',
+      'Extra Jev detail.',
     ]);
     assert.deepEqual(Object.keys(result.sources), [FIRST, OTHER]);
     assert.deepEqual(result.sources[FIRST], { title: 'Jev', hostname: 'example.com' });

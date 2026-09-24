@@ -204,19 +204,22 @@ describe('isNearDuplicate', () => {
   });
 
   it('drops when containment is exactly 0.8', () => {
-    // 候选 5 个、幸存 8 个、交 4 → containment = 4/5 = NEAR_DUP_CONTAINMENT，条件取 >= → 删
-    const candidate = sh('c', 5);
-    const survivor = new Set([...sh('c', 4), ...sh('x', 4)]);
+    // 候选 15 个、幸存 10 个、交 8 → containment = 8/10 = NEAR_DUP_CONTAINMENT，条件取 >= → 删
+    const candidate = new Set([...sh('c', 8), ...sh('c2', 7)]);
+    const survivor = new Set([...sh('c', 8), ...sh('x', 2)]);
 
-    assert.equal(survivor.size >= MIN_SHINGLES, true);
+    assert.equal(candidate.size >= MIN_SHINGLES && survivor.size >= MIN_SHINGLES, true);
     assert.equal(isNearDuplicate(candidate, survivor), true);
     assert.equal(NEAR_DUP_CONTAINMENT, 0.8);
   });
 
-  it('keeps when jaccard is exactly 0.8 (strict >)', () => {
-    // 两侧各 9 个、交 8 → jaccard = 8/10 = NEAR_DUP_JACCARD，条件取 > → 不删
-    const candidate = new Set([...sh('c', 8), ...sh('c-only', 1)]);
-    const survivor = new Set([...sh('c', 8), ...sh('s-only', 1)]);
+  it('does not drop when both similarities sit below the thresholds', () => {
+    // 候选与幸存各 10 个、交 7 → jaccard = 0.7 < 0.8 且 containment = 0.7 < 0.8 → 保留。
+    // 注：jaccard = 0.8 且 containment < 0.8 的集合对数学上不存在（containment = 交/min
+    // ≥ 交/max ≥ 交/并 = jaccard 恒成立），jaccard 分支是冗余保险；"恰 0.8 不删"的严格
+    // > 语义由 tokenize.test.ts 对 jaccard 本身的用例锁住，这里锁双阈值之下的保留。
+    const candidate = new Set([...sh('c', 7), ...sh('c-only', 3)]);
+    const survivor = new Set([...sh('c', 7), ...sh('s-only', 3)]);
 
     assert.equal(isNearDuplicate(candidate, survivor), false);
     assert.equal(NEAR_DUP_JACCARD, 0.8);

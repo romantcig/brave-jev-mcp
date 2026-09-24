@@ -5,15 +5,26 @@
  * 翻 `kept` / `verdict` / `reason` 或替换文本，**不 sort、不 filter 出新数组**，最后
  * 一次性重建输出——幸存来源与片段因此天然保持 Brave 原序（RULES-08）。
  *
- * 01-01 定型位置与类型，01-02 填了步 1、2；步 3、4、7、9 仍是空位，步 8 只做"片段删光
- * 即丢来源"，末尾做输出重建与 `sources` 精简。后续计划往空位填实现，不改这里的顺序与签名。
+ * 01-01 定型位置与类型，01-02 填了步 1、2，01-03 填了步 3（含付费墙截断）；步 4、7、9
+ * 仍是空位，步 8 只做"片段删光即丢来源"，末尾做输出重建与 `sources` 精简。
+ * 后续计划往空位填实现，不改这里的顺序与签名。
  *
  * 依据：PLAN.md §3.2、notes/local-rules-design.md、01-RESEARCH.md「纯库布局」一节。
  */
 
 import { parseFilterConfig } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
+import { BOILERPLATE_PREFIXES, PAYWALL_MARKERS_EN, PAYWALL_MARKERS_ZH } from './markers.js';
+import { truncateAtPaywall } from './nonArticle.js';
+import {
+  isNearDuplicate,
+  isShortWithoutTerms,
+  SHINGLE_N,
+  SHORT_SNIPPET_MAX,
+  stripBoilerplateLines,
+} from './prefilter.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
+import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { createFilterStats } from './stats.js';
 import type {
   BraveLlmContextGenericItem,
@@ -130,6 +141,75 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
           return [snippet];
       }
     });
+  }
+};
+
+/** 步 3 付费墙截断用的标记全集：中英两表合并，每进程算一次。 */
+const PAYWALL_MARKERS: readonly string[] = [...PAYWALL_MARKERS_EN, ...PAYWALL_MARKERS_ZH];
+
+/**
+ * 步 3 片段预筛（含付费墙截断）：顺序固定为付费墙截断 → 样板行剥离 → 短且无实词 →
+ * 页内逐字重复（RULES-03/ordering）。被删片段留在原位只翻 `kept`；重复判定按原序
+ * 只与同来源内**已幸存**片段比，保留先出现者。`snippets_prefiltered` 记 nav 与
+ * boilerplate 两类之和，`dup_removed` 单独记，`paywall_truncated` 只记截断后保留的。
+ */
+const prefilterSnippets = (
+  table: WorkSource[],
+  stats: FilterStats,
+  terms: ReadonlySet<string>
+): void => {
+  for (const source of table) {
+    if (source.verdict !== 'keep') continue;
+
+    const survivorShingles: Set<string>[] = [];
+    for (const snippet of source.snippets) {
+      if (!snippet.kept) continue;
+
+      // 空串或纯空白：不进样板剥离以外的任何判定，按"短且无实词"处理
+      if (snippet.text.trim() === '') {
+        snippet.kept = false;
+        snippet.reason = 'nav';
+        stats.local.snippets_prefiltered += 1;
+        continue;
+      }
+
+      const paywall = truncateAtPaywall(snippet.text, PAYWALL_MARKERS);
+      if (paywall.truncated) {
+        if (paywall.text === '') {
+          snippet.kept = false;
+          snippet.reason = 'paywall_empty';
+          continue;
+        }
+        snippet.text = paywall.text;
+        snippet.truncated = true;
+        stats.local.paywall_truncated += 1;
+      }
+
+      const stripped = stripBoilerplateLines(snippet.text, BOILERPLATE_PREFIXES, source.title);
+      if (stripped.emptied) {
+        snippet.kept = false;
+        snippet.reason = 'boilerplate';
+        stats.local.snippets_prefiltered += 1;
+        continue;
+      }
+      snippet.text = stripped.text;
+
+      if (isShortWithoutTerms(snippet.text, terms, SHORT_SNIPPET_MAX)) {
+        snippet.kept = false;
+        snippet.reason = 'nav';
+        stats.local.snippets_prefiltered += 1;
+        continue;
+      }
+
+      const shingleSet = shingles(tokenize(snippet.text), SHINGLE_N);
+      if (survivorShingles.some((survivor) => isNearDuplicate(shingleSet, survivor))) {
+        snippet.kept = false;
+        snippet.reason = 'dup';
+        stats.local.dup_removed += 1;
+        continue;
+      }
+      survivorShingles.push(shingleSet);
+    }
   }
 };
 
@@ -298,7 +378,8 @@ export function filterLlmContext(
 
   splitJsonLd(table, stats); // 步 1：JSON-LD 分流
   stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
-  // 步 3 片段预筛：空位，01-03 计划填（prefilter.ts、tokenize.ts）
+  // 步 3 片段预筛：付费墙截断 → 样板剥离 → 短无实词 → 页内逐字重复（顺序固定）
+  prefilterSnippets(table, stats, contentTerms(request.params.query, request.intent));
   // 步 4 feed URL 与结构性黑名单：空位，01-03 计划填（nonArticle.ts、blocklist.ts）
   // 步 5 Jev 每源一次请求：Phase 2；off 模式跳过
   // 步 6 来源级裁决：Phase 2；off 模式无事可做
