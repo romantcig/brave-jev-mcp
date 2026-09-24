@@ -185,6 +185,16 @@ describe('isShortWithoutTerms', () => {
       false
     );
   });
+
+  it('keeps a Chinese snippet whose terms are glued to Latin words', () => {
+    // 分词曾把 "Sanity发布了v6版本" 整段粘成一个 token，query 实词 sanity/版本/发布
+    // 全部匹配不上，这条含实词的中文短片段曾被判"短且无实词"删掉
+    const terms = contentTerms('Sanity 版本 发布', 'What changed in the Sanity v6 release');
+    assert.equal(
+      isShortWithoutTerms('Sanity发布了v6版本，主要变化是配置文件迁移到新的格式。', terms),
+      false
+    );
+  });
 });
 
 describe('isNearDuplicate', () => {

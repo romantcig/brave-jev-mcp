@@ -29,6 +29,22 @@ describe('tokenize', () => {
     assert.deepEqual(tokenize('Jev 内容发布 v6'), ['jev', '内容', '容发', '发布', 'v6']);
   });
 
+  it('splits Latin or digit runs from adjacent CJK without whitespace', () => {
+    // [\p{L}\p{N}]+ 会跨越 script 边界吞掉相邻汉字：下面几串曾各自粘成一个 token，
+    // query 实词（sanity / 版本 / 发布）在 token 里找不到，短中文片段被步 3 误删
+    assert.deepEqual(tokenize('Sanity发布了v6版本'), ['sanity', '发布', '布了', 'v6', '版本']);
+    assert.deepEqual(tokenize('使用Sanity发布内容'), ['使用', 'sanity', '发布', '布内', '内容']);
+    assert.deepEqual(tokenize('v6版本发布说明'), ['v6', '版本', '本发', '发布', '布说', '说明']);
+    assert.deepEqual(tokenize('2026年发布'), ['2026', '年发', '发布']);
+    assert.deepEqual(tokenize('Claude Code的hooks配置'), ['claude', 'code', '的', 'hooks', '配置']);
+  });
+
+  it('keeps the prolonged sound mark inside the Kana run', () => {
+    // ー 的 Script 是 Common，但 Script_Extensions 含假名；若只按 Script=Katakana 切，
+    // 'サーバー' 会在 'サ' 后断开，'ーバー' 整段粘成一个非 CJK token
+    assert.deepEqual(tokenize('サーバー'), ['サー', 'ーバ', 'バー']);
+  });
+
   it('splits punctuation-delimited words', () => {
     assert.deepEqual(tokenize('sanity.config.ts'), ['sanity', 'config', 'ts']);
   });
