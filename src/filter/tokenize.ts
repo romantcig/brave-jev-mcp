@@ -158,8 +158,9 @@ export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number 
 }
 
 /**
- * 包含度：交集除以较小集合的大小——"标题加导语被抽两次"在真实数据里是包含关系，
- * Jaccard 抓不到（RESEARCH 规则 3 / Assumption A11）。
+ * 包含度：交集除以较小集合的大小（RESEARCH 规则 3 / Assumption A11 要求的两种相似度
+ * 之一）。isNearDuplicate **不**用它：判定方向是"候选自身被幸存者覆盖的比例"（交/|候选|），
+ * 若用 containment，候选是幸存者超集时包含度恒为 1，信息更全的后一条会被误删。
  * @returns `|A∩B| / min(|A|, |B|)`；任一集合为空时返回 0
  * @example containment(new Set(['a', 'b']), new Set(['a', 'b', 'c'])) === 1
  * @example containment(new Set(), new Set(['a'])) === 0

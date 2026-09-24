@@ -9,7 +9,7 @@
  * Assumptions A9（行级剥离）、A10（200 字符阈值）、A11（包含度）。
  */
 
-import { CJK_SEGMENT, containment, jaccard, tokenize } from './tokenize.js';
+import { CJK_SEGMENT, jaccard, tokenize } from './tokenize.js';
 import { normalizeTitleForCompare } from './jsonld.js';
 
 /** "短"阈值：长度判定统一用 String.length（UTF-16 码元）。 */
@@ -28,8 +28,8 @@ export const SHINGLE_N = 5;
 /** Jaccard 严格大于该值才算重复（恰为 0.8 不删）。 */
 export const NEAR_DUP_JACCARD = 0.8;
 
-/** 包含度达到该值即算重复（恰为 0.8 删）。 */
-export const NEAR_DUP_CONTAINMENT = 0.8;
+/** 候选被幸存者覆盖的 shingle 比例达到该值即算重复（恰为 0.8 删）。 */
+export const NEAR_DUP_COVERAGE = 0.8;
 
 /** 参与重复判定的最小 shingle 集合规模；更短的片段不做重复判定（保守留）。 */
 export const MIN_SHINGLES = 8;
@@ -98,7 +98,7 @@ export function isTitleOnly(text: string, sourceTitle: string): boolean {
  * @returns 剥离后的文本；`emptied` 为真表示剥空或只剩来源标题——两种情形都整片删
  *   （原因 `boilerplate`），其余情形保留剥离后的文本（动作 `boilerplate_stripped`）
  * @example stripBoilerplateLines('Share\n\n正文', ['Share'], 'T') → { text: '正文', emptied: false }
- * @example stripBoilerplateLines('Share\n\n# T', ['Share'], 'T') → { text: 'T', emptied: true }
+ * @example stripBoilerplateLines('Share\n\n# T', ['Share'], 'T') → { text: '# T', emptied: true }
  */
 export function stripBoilerplateLines(
   text: string,
@@ -118,7 +118,7 @@ export function stripBoilerplateLines(
  * 短且无实词：长度 < maxLength 且实词集里没有任何词出现在片段 token 中，两条
  * **同时满足**才删。实词集为空时恒为假（保守留）；空串按长度 0 处理（真）。
  * @returns 判定为"短且无实词"时为真
- * @example isShortWithoutTerms('On this page', terms) === true（39 字符、无实词）
+ * @example isShortWithoutTerms('On this page', terms) === true（12 字符、无实词）
  * @example isShortWithoutTerms('x'.repeat(200), terms) === false（达到阈值不删）
  * @example isShortWithoutTerms('short', new Set()) === false
  */
@@ -138,9 +138,12 @@ export function isShortWithoutTerms(
 }
 
 /**
- * 页内逐字重复：与已幸存片段的 5-gram 集合比，`jaccard > 0.8` **或**
- * `containment >= 0.8` 即重复（任一侧 shingle 少于 8 个不判——RESEARCH 实测真实
- * 重复表现为包含关系，纯 Jaccard 抓不到，见 Assumption A11）。
+ * 页内逐字重复：与已幸存片段的 5-gram 集合比，`jaccard > 0.8` **或**候选自身 ≥80% 的
+ * shingle 落在幸存者里即重复（任一侧 shingle 少于 8 个不判——RESEARCH 实测真实重复
+ * 表现为包含关系，纯 Jaccard 抓不到，见 Assumption A11）。覆盖方向必须是"候选被覆盖"：
+ * 原 containment（交/min）口径下候选是幸存者超集时包含度恒为 1，信息更全的后一条被
+ * 误删（审查问题 4）；覆盖率口径下超集候选（导语 + 扩展段）保留，子集候选（同文被
+ * 抽两次、后者更短）仍删。
  * @returns 判定为近重复时为真（保留先出现者由调用方保证：按原序只与已幸存者比）
  * @example isNearDuplicate(sameShingles, sameShingles) === true
  * @example isNearDuplicate(sevenShingles, anything) === false（不足 MIN_SHINGLES 不判）
@@ -152,8 +155,12 @@ export function isNearDuplicate(
   if (survivorShingles.size < MIN_SHINGLES || candidateShingles.size < MIN_SHINGLES) {
     return false;
   }
+  let covered = 0;
+  for (const shingle of candidateShingles) {
+    if (survivorShingles.has(shingle)) covered += 1;
+  }
   return (
     jaccard(candidateShingles, survivorShingles) > NEAR_DUP_JACCARD ||
-    containment(candidateShingles, survivorShingles) >= NEAR_DUP_CONTAINMENT
+    covered / candidateShingles.size >= NEAR_DUP_COVERAGE
   );
 }

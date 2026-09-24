@@ -8,7 +8,7 @@ import {
   isTitleOnly,
   matchesPrefix,
   MIN_SHINGLES,
-  NEAR_DUP_CONTAINMENT,
+  NEAR_DUP_COVERAGE,
   NEAR_DUP_JACCARD,
   normalizeLine,
   SHINGLE_N,
@@ -274,6 +274,7 @@ describe('isNearDuplicate', () => {
 
     assert.equal(candidate.size >= MIN_SHINGLES && survivor.size >= MIN_SHINGLES, true);
     assert.equal(isNearDuplicate(candidate, survivor), true);
+    assert.equal(NEAR_DUP_COVERAGE, 0.8);
   });
 
   it('keeps a candidate that is a superset of the survivor', () => {
