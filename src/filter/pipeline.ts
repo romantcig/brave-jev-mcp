@@ -6,13 +6,19 @@
  * 一次性重建输出——幸存来源与片段因此天然保持 Brave 原序（RULES-08）。
  *
  * 01-01 定型位置与类型，01-02 填了步 1、2，01-03 填了步 3（含付费墙截断）、步 4 与
- * 步 8；步 7、9 仍是空位，末尾做输出重建与 `sources` 精简。后续计划往空位填实现，
- * 不改这里的顺序与签名。
+ * 步 8，01-04 填了步 9（裁回预算，实现在 budget.ts）；步 10 仍是空位，末尾做输出
+ * 重建与 `sources` 精简。后续计划往空位填实现，不改这里的顺序与签名。
  *
  * 依据：PLAN.md §3.2、notes/local-rules-design.md、01-RESEARCH.md「纯库布局」一节。
  */
 
 import { parseFilterConfig } from './config.js';
+import {
+  BRAVE_DEFAULT_MAX_TOKENS,
+  BRAVE_DEFAULT_MAX_URLS,
+  summarizeOutput,
+  trimToBudget,
+} from './budget.js';
 import { splitJsonFragment } from './jsonld.js';
 import { BOILERPLATE_PREFIXES, PAYWALL_MARKERS_EN, PAYWALL_MARKERS_ZH } from './markers.js';
 import {
@@ -31,6 +37,7 @@ import {
 } from './prefilter.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
+import { estimateTokens } from './tokens.js';
 import { createFilterStats } from './stats.js';
 import type {
   BraveLlmContextGenericItem,
@@ -47,10 +54,6 @@ import type {
   SourceMetadata,
   SourceStats,
 } from './types.js';
-
-/** Brave 文档给的默认上限：模型未传 `maximum_number_of_*` 时按它们理解预算。 */
-const BRAVE_DEFAULT_MAX_URLS = 20;
-const BRAVE_DEFAULT_MAX_TOKENS = 8192;
 
 /** `age` 元素的 ISO 日期判定：前缀匹配，不数字符（EMBED-01/encoding）。 */
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
@@ -366,25 +369,13 @@ const projectSource = (source: WorkSource): SourceStats => {
 };
 
 /**
- * 输出规模的 token 估算占位：按 4 字符一 token 粗估。
- * 01-04 计划的 `tokens.ts` 会换成 notes/jev-api.md 的无分词器公式，这里不另写一份。
+ * 管道跑完后把工作表的最终裁决与输出规模写回统计对象。
+ * `output.*` 由 summarizeOutput 从工作表算（幸存片段 `String.length` 之和、
+ * 未取整估算和的 `Math.ceil`），token 口径与步 9 的裁剪判定一致。
  */
-const estimateOutputTokens = (chars: number): number => Math.ceil(chars / 4);
-
-/** 管道跑完后把工作表的最终裁决与输出规模写回统计对象。 */
-const finalizeStats = (stats: FilterStats, table: WorkSource[], result: FilteredResponse): void => {
+const finalizeStats = (stats: FilterStats, table: WorkSource[]): void => {
   stats.sources = table.map(projectSource);
-
-  const chars = result.grounding.generic.reduce(
-    (sum, item) => sum + item.snippets.reduce((inner, text) => inner + text.length, 0),
-    0
-  );
-  stats.output = {
-    n_sources: result.grounding.generic.length,
-    n_snippets: result.grounding.generic.reduce((sum, item) => sum + item.snippets.length, 0),
-    chars,
-    est_tokens: estimateOutputTokens(chars),
-  };
+  stats.output = summarizeOutput(table, estimateTokens);
 };
 
 /** 把适配行传入的请求归一成统计表的 `request` 摘要，上限缺省填 Brave 默认值。 */
@@ -436,11 +427,22 @@ export function filterLlmContext(
   // 步 6 来源级裁决：Phase 2；off 模式无事可做
   // 步 7 片段级 score 与事实指纹新颖度：Phase 2；off 模式按 Brave 序播种，本阶段一律保留
   dropEmptySources(table, stats, contentTerms(request.params.query)); // 步 8：空来源与一句话来源
-  // 步 9 裁回预算：空位，01-04 计划填（budget.ts 的 trimToBudget）
+  // 步 9 裁回预算：一律按模型原始请求值（与 applyOverfetch 放大后的参数无关），
+  // 从末源末片段往回砍、不重排；计数按裁决累加（reason 'budget' 只有本步会写）
+  trimToBudget(table, request.params, estimateTokens);
+  stats.local.budget_dropped_sources += table.filter(
+    (source) => source.verdict === 'drop' && source.reason === 'budget'
+  ).length;
+  stats.local.budget_trimmed_snippets += table.reduce(
+    (sum, source) =>
+      sum +
+      source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'budget').length,
+    0
+  );
   // 步 10 状态行：Phase 3
 
   const result = rebuildOutput(table, data);
-  finalizeStats(stats, table, result);
+  finalizeStats(stats, table);
 
   return { result, stats };
 }

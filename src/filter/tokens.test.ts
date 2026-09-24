@@ -5,10 +5,15 @@ import { fileURLToPath } from 'node:url';
 import { estimateTokens } from './tokens.js';
 
 /** 读一份 wrapped 夹具（两份 Jev 夹具顶层都是 { request, response }）。 */
-const loadWrapped = (rel: string): {
+const loadWrapped = (
+  rel: string
+): {
   request: { maximum_number_of_tokens?: number };
   response: { grounding: { generic: { snippets: string[] }[] } };
-} => JSON.parse(readFileSync(fileURLToPath(new URL(`../../fixtures/${rel}`, import.meta.url)), 'utf8'));
+} =>
+  JSON.parse(
+    readFileSync(fileURLToPath(new URL(`../../fixtures/${rel}`, import.meta.url)), 'utf8')
+  );
 
 const rawSnippets = (fixture: ReturnType<typeof loadWrapped>): string[] =>
   fixture.response.grounding.generic.flatMap((item) => item.snippets);

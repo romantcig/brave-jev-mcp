@@ -9,6 +9,7 @@ import {
   trimToBudget,
 } from './budget.js';
 import { rebuildOutput } from './pipeline.js';
+import type { FilterConfig, SnippetRemovalReason, SourceDropReason } from './types.js';
 
 const unit: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
 const doubled: FilterConfig = { mode: 'off', overfetchFactor: 2, blocklist: new Set() };
@@ -91,9 +92,9 @@ type Row = {
   canonical: string;
   title: string;
   meta: Record<string, unknown> | undefined;
-  snippets: { index: number; text: string; kept: boolean; reason?: string }[];
+  snippets: { index: number; text: string; kept: boolean; reason?: SnippetRemovalReason }[];
   verdict: 'keep' | 'drop';
-  reason?: string;
+  reason?: SourceDropReason;
 };
 
 const makeSource = (index: number, texts: string[]): Row => ({
@@ -108,7 +109,10 @@ const makeSource = (index: number, texts: string[]): Row => ({
 
 const makeTable = (sources: number, snippetsPerSource: number, weight: number): Row[] =>
   Array.from({ length: sources }, (_, s) =>
-    makeSource(s, Array.from({ length: snippetsPerSource }, () => String(weight)))
+    makeSource(
+      s,
+      Array.from({ length: snippetsPerSource }, () => String(weight))
+    )
   );
 
 /** 注入估算器：片段文本是数字字符串，估算值即该数字——推演确定。 */
@@ -117,7 +121,8 @@ const est = (text: string): number => Number(text);
 const countTrimmed = (table: Row[]): number =>
   table.reduce(
     (sum, source) =>
-      sum + source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'budget').length,
+      sum +
+      source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'budget').length,
     0
   );
 
@@ -163,7 +168,7 @@ describe('trimToBudget', () => {
       expectedUrls
     );
     // 幸存 URL 序列是 Brave 序的子序列（经输出重建后断言）
-    const { result } = rebuild(table);
+    const result = rebuild(table);
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
       expectedUrls
@@ -181,7 +186,10 @@ describe('trimToBudget', () => {
       table[4].snippets.map((snippet) => snippet.kept),
       [true, true, false, false]
     );
-    assert.equal(table[3].snippets.every((snippet) => snippet.kept), true);
+    assert.equal(
+      table[3].snippets.every((snippet) => snippet.kept),
+      true
+    );
   });
 
   it('trims nothing when the estimate equals the budget exactly', () => {
@@ -190,14 +198,20 @@ describe('trimToBudget', () => {
 
     assert.equal(countTrimmed(table), 0);
     assert.equal(countDropped(table), 0);
-    assert.equal(table.every((source) => source.verdict === 'keep'), true);
+    assert.equal(
+      table.every((source) => source.verdict === 'keep'),
+      true
+    );
   });
 
   it('keeps sources when their number equals the url cap', () => {
     const table = makeTable(5, 2, 100);
     trimToBudget(table, { maximum_number_of_urls: 5, maximum_number_of_tokens: 8192 }, est);
 
-    assert.equal(table.every((source) => source.verdict === 'keep'), true);
+    assert.equal(
+      table.every((source) => source.verdict === 'keep'),
+      true
+    );
   });
 
   it('drops every snippet and source when maxTokens is 1, leaving an empty output', () => {
@@ -206,7 +220,7 @@ describe('trimToBudget', () => {
 
     assert.equal(countTrimmed(table), 6);
     assert.equal(countDropped(table), 3);
-    const { result } = rebuild(table);
+    const result = rebuild(table);
     assert.deepEqual(result.grounding.generic, []);
     assert.deepEqual(result.sources, {});
   });
@@ -214,7 +228,11 @@ describe('trimToBudget', () => {
   it('walks backwards to the previous source once one runs out of snippets', () => {
     // 源 0 两片、源 1 一片、源 2 三片，各 100，总 600；预算 250：
     // 砍 s2 三片（源光 → drop）→ 砍 s1 一片（源光 → drop）→ 200 ≤ 250 停
-    const table = [makeSource(0, ['100', '100']), makeSource(1, ['100']), makeSource(2, ['100', '100', '100'])];
+    const table = [
+      makeSource(0, ['100', '100']),
+      makeSource(1, ['100']),
+      makeSource(2, ['100', '100', '100']),
+    ];
     trimToBudget(table, { maximum_number_of_tokens: 250 }, est);
 
     assert.equal(countTrimmed(table), 4);
@@ -228,7 +246,7 @@ describe('trimToBudget', () => {
       table[0].snippets.map((snippet) => snippet.kept),
       [true, true]
     );
-    const { result } = rebuild(table);
+    const result = rebuild(table);
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
       ['https://s0.example/']
