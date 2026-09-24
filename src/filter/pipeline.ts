@@ -184,13 +184,13 @@ const prefilterSnippets = (
 
       const paywall = truncateAtPaywall(snippet.text, PAYWALL_MARKERS);
       if (paywall.truncated) {
+        snippet.truncated = true;
         if (paywall.text === '') {
           snippet.kept = false;
           snippet.reason = 'paywall_empty';
           continue;
         }
         snippet.text = paywall.text;
-        snippet.truncated = true;
         stats.local.paywall_truncated += 1;
       }
 

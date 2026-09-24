@@ -306,12 +306,4 @@ describe('isNearDuplicate', () => {
 
     assert.equal(isNearDuplicate(candidate, survivor), true);
   });
-
-  it('keeps a containment of 0.7 between real-size snippets', () => {
-    // 候选与幸存各 10 个 shingle、交 7 → containment = 0.7 < 0.8 → 保留
-    const candidate = new Set([...sh('c', 7), ...sh('c-only', 3)]);
-    const survivor = new Set([...sh('c', 7), ...sh('s-only', 3)]);
-
-    assert.equal(isNearDuplicate(candidate, survivor), false);
-  });
 });

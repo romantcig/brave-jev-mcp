@@ -364,6 +364,26 @@ describe('filterLlmContext', () => {
     }
   });
 
+  it('marks paywall_empty rows as truncated=true with kept=false', () => {
+    // 审查测试缺口 13：截断后为空的片段此前不写 truncated，夹具测试的
+    // paywall_empty 分支一旦被走到就会挂在 undefined 断言上
+    const data = payload();
+    data.grounding.generic[1].snippets = ['Subscribe to continue reading'];
+
+    const { stats } = filterLlmContext(data, request, offConfig);
+    const source = stats.sources.find((entry) => entry.url === 'https://example.com/post');
+
+    assert.ok(source, 'source missing from stats');
+    assert.deepEqual(
+      source.snippets.map((row) => ({
+        truncated: row.truncated,
+        kept: row.kept,
+        reason: row.reason,
+      })),
+      [{ truncated: true, kept: false, reason: 'paywall_empty' }]
+    );
+  });
+
   describe('step 9 budget', () => {
     const tightRequest: { params: FilterRequest; intent: string } = {
       params: { query: 'brave browser', maximum_number_of_urls: 5, maximum_number_of_tokens: 10 },

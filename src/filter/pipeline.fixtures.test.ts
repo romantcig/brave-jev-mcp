@@ -233,6 +233,10 @@ for (const rel of listExpectedFiles()) {
         } else if (item.action === 'boilerplate') {
           assert.equal(row.kept, false);
           assert.equal(row.reason, 'boilerplate');
+        } else {
+          // dup / paywall_* 有自己的节（dedup、paywall）；标注放错节时必须当场报错，
+          // 不能静默通过（审查测试缺口 14）
+          assert.fail(`unexpected prefilter action: ${item.action}`);
         }
       });
     }
@@ -258,7 +262,11 @@ for (const rel of listExpectedFiles()) {
       it(`paywall · ${hostOf(item.url)} #${item.snippet} ${item.action}`, () => {
         const row = findRow(sourceStats(item.url), item.snippet);
         assert.ok(row, `snippet ${item.snippet} not found for ${item.url}`);
-        assert.equal(row.truncated, item.action === 'paywall_truncated');
+        assert.equal(
+          row.truncated,
+          item.action.startsWith('paywall'),
+          'both paywall actions truncate'
+        );
         assert.equal(
           row.kept,
           item.action === 'paywall_truncated',
