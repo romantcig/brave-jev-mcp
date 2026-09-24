@@ -101,7 +101,7 @@ describe('jaccard', () => {
   });
 
   it('returns the intersection over the union', () => {
-    assert.equal(jaccard(new Set(['a', 'b', 'c']), new Set(['a', 'b', 'd'])), 0.4);
+    assert.equal(jaccard(new Set(['a', 'b', 'c']), new Set(['a', 'b', 'd'])), 0.5);
   });
 
   it('returns 0 for disjoint sets', () => {
@@ -122,6 +122,10 @@ describe('containment', () => {
   });
 
   it('returns the intersection over the smaller set', () => {
-    assert.equal(containment(new Set(['a', 'b', 'c', 'd', 'e']), new Set(['a', 'b', 'c'])), 0.6);
+    // 较小集合 5 个 shingle 中 3 个落在较大集合里
+    assert.equal(
+      containment(new Set(['a', 'b', 'c', 'd', 'e']), new Set(['a', 'b', 'c', 'x', 'y'])),
+      0.6
+    );
   });
 });
