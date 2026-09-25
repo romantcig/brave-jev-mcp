@@ -264,6 +264,10 @@ export type LocalStats = {
   empty_dropped: number;
   budget_dropped_sources: number;
   budget_trimmed_snippets: number;
+  /** 步 7 后半被事实指纹新颖度删除的片段数（02-04；只进计数，不含指纹内容——LOG-03） */
+  novelty_removed: number;
+  /** 步 7 后半被跨来源 5-gram 逐字重复删除的片段数（02-04；用户已定决策 5 的独立计数） */
+  cross_source_dup_removed: number;
 };
 
 /** 统计表里单个片段的裁决；只有索引、标记与字符数，不含正文（LOG-03）。 */

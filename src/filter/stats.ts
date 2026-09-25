@@ -35,6 +35,8 @@ export const zeroLocal: Readonly<LocalStats> = Object.freeze({
   empty_dropped: 0,
   budget_dropped_sources: 0,
   budget_trimmed_snippets: 0,
+  novelty_removed: 0,
+  cross_source_dup_removed: 0,
 });
 
 /** 防御性读取 `grounding.generic`：上游已过 zod，但库对畸形输入也不抛。 */
