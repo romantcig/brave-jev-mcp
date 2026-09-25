@@ -62,7 +62,12 @@ type RuleAnnotations = {
   dedup: { url: string; snippet: number | string }[];
   feed_blocklist: { url: string; action: 'feed' | 'blocklist' }[];
   paywall: PrefilterAnnotation[];
-  empty_source: { url: string; action: 'empty' }[];
+  /** 步 8 空来源规则：'empty' 为本地原因清空，'rewrite' 为新颖度/跨源 dup 删光（02-04）。 */
+  empty_source: { url: string; action: 'empty' | 'rewrite' }[];
+  /** 步 7 后半被事实指纹新颖度删除的片段（02-04）。 */
+  novelty: { url: string; snippet: number | string }[];
+  /** 步 7 后半被跨来源 5-gram 逐字重复删除的片段（02-04；片段 reason 同 'dup' 键）。 */
+  cross_source_dup: { url: string; snippet: number | string }[];
   budget: { dropped_sources: number; trimmed_snippets: number };
 };
 
@@ -155,7 +160,17 @@ describe('expected fixture inventory', () => {
 // ---------------------------------------------------------------------------
 
 for (const rel of listExpectedFiles()) {
-  const expected = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8')) as ExpectedFixture;
+  const parsed = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8')) as ExpectedFixture;
+  // 02-04 起新增 novelty / cross_source_dup 两节；过渡期期望文件缺节按空数组兼容
+  // （两组循环零跳过零失败），Task 3 重标注后逐条生效
+  const expected: ExpectedFixture = {
+    ...parsed,
+    rules: {
+      ...parsed.rules,
+      novelty: parsed.rules.novelty ?? [],
+      cross_source_dup: parsed.rules.cross_source_dup ?? [],
+    },
+  };
   const data = loadBraveFixture(expected.fixture);
   // filterLlmContext 自 02-02 起异步：在模块顶层 await 一次结果，describe 闭包共享
   // （node:test 等模块求值完成后才开跑，顶层 await 不影响收集）
@@ -282,7 +297,26 @@ for (const rel of listExpectedFiles()) {
       it(`step8 · ${hostOf(item.url)} ${item.action}`, () => {
         const source = sourceStats(item.url);
         assert.equal(source.verdict, 'drop');
-        assert.equal(source.reason, 'empty');
+        // 'empty' = 本地原因清空；'rewrite' = 新颖度/跨源 dup 删光（02-04 归因）
+        assert.equal(source.reason, item.action);
+      });
+    }
+
+    for (const item of expected.rules.novelty) {
+      it(`novelty · ${hostOf(item.url)} #${item.snippet}`, () => {
+        const row = findRow(sourceStats(item.url), item.snippet);
+        assert.ok(row, `snippet ${item.snippet} not found for ${item.url}`);
+        assert.equal(row.kept, false);
+        assert.equal(row.reason, 'novelty');
+      });
+    }
+
+    for (const item of expected.rules.cross_source_dup) {
+      it(`cross_source_dup · ${hostOf(item.url)} #${item.snippet}`, () => {
+        const row = findRow(sourceStats(item.url), item.snippet);
+        assert.ok(row, `snippet ${item.snippet} not found for ${item.url}`);
+        assert.equal(row.kept, false);
+        assert.equal(row.reason, 'dup');
       });
     }
 
