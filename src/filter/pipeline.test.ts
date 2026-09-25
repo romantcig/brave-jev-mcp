@@ -10,6 +10,7 @@ import { createNoKeyJevStats } from './stats.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
+  ClassifyOutcome,
   FilterConfig,
   FilterRequest,
 } from './types.js';
@@ -1001,5 +1002,120 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
       assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
       cursor = found + 1;
     }
+  });
+});
+
+describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
+  // 按 state.source.id 注入预定 outcome 的合成 classify
+  const scriptedClassify =
+    (script: Record<string, ClassifyOutcome>): ClassifyDeps['classify'] =>
+    async ({ state }) => {
+      const outcome = script[state.source.id];
+      assert.ok(outcome, `no scripted outcome for ${state.source.id}`);
+      return outcome;
+    };
+
+  const breakerOpen: ClassifyOutcome = {
+    status: 'failed',
+    kind: 'breaker_open',
+    detail: 'circuit open after consecutive transient failures',
+  };
+
+  // 低概率来源级答案：裁决链五道门槛全不命中，来源保留（answers 部分缺失走
+  // T-02-03-1 防御式跳过，方向同为保守不丢——断言只关心 status 聚合）
+  const answeredLow: ClassifyOutcome = {
+    status: 'answered',
+    model: DEFAULT_JEV_MODEL,
+    answers: {
+      is_off_topic: { kind: 'noul', probability: 0.1 },
+      has_original_reasoning: { kind: 'noul', probability: 0.9 },
+    },
+    input_tokens: 100,
+  };
+
+  it('aggregates status ok when every candidate is answered', async () => {
+    const { stats } = await filterLlmContext(
+      payload(),
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify: scriptedClassify({ s0: answeredLow, s1: answeredLow }),
+      }
+    );
+
+    assert.equal(stats.jev?.status, 'ok');
+    assert.equal(stats.jev?.n_requests, 2);
+  });
+
+  it('aggregates status degraded when some candidates fail', async () => {
+    const { stats } = await filterLlmContext(
+      payload(),
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify: scriptedClassify({ s0: answeredLow, s1: { status: 'failed', kind: 'network' } }),
+      }
+    );
+
+    assert.equal(stats.jev?.status, 'degraded');
+    assert.equal(stats.jev?.n_requests, 2);
+  });
+
+  it('aggregates status breaker_open when any candidate is short-circuited (SAFE-02)', async () => {
+    const { stats } = await filterLlmContext(
+      payload(),
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify: scriptedClassify({ s0: answeredLow, s1: breakerOpen }),
+      }
+    );
+
+    assert.equal(stats.jev?.status, 'breaker_open');
+    // breaker_open 短路不计请求（02-02 记账口径）
+    assert.equal(stats.jev?.n_requests, 1);
+  });
+
+  it('records ladder skipped on the per_source row for a too_large failure (JEV-05 ladder ④)', async () => {
+    const { stats } = await filterLlmContext(
+      payload(),
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify: scriptedClassify({
+          s0: { status: 'failed', kind: 'too_large' },
+          s1: { status: 'failed', kind: 'too_large' },
+        }),
+      }
+    );
+
+    assert.equal(stats.jev?.status, 'degraded');
+    for (const row of stats.jev?.per_source ?? []) {
+      assert.equal(row.status, 'failed');
+      assert.equal(row.fail_kind, 'too_large');
+      assert.equal(row.ladder, 'skipped');
+    }
+  });
+
+  it('SAFE-02: with overfetch 2 and an all-breaker_open classify the output deep-equals the off run', async () => {
+    const overfetch2 = { ...offConfig, overfetchFactor: 2 };
+    const offRun = await filterLlmContext(payload(), request, { ...overfetch2, mode: 'off' });
+    const onRun = await filterLlmContext(
+      payload(),
+      request,
+      { ...overfetch2, mode: 'on' },
+      { classify: scriptedClassify({ s0: breakerOpen, s1: breakerOpen }) }
+    );
+
+    // 超量抓取的内容不原样放行：熔断期只跑本地规则，输出与同参数 off 模式
+    // deepEqual（步 9 trimToBudget 照常裁回）
+    assert.deepEqual(onRun.result, offRun.result);
+    // 失败来源全部按留（SAFE-01）
+    assert.deepEqual(
+      onRun.result.grounding.generic.map((item) => item.url),
+      ['https://search.brave.com/', 'https://example.com/post']
+    );
+    assert.equal(onRun.stats.jev?.status, 'breaker_open');
+    assert.equal(onRun.stats.jev?.n_requests, 0);
   });
 });

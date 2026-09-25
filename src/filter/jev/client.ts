@@ -141,6 +141,20 @@ const LADDER_TOKEN_MARGIN = 1.15;
 /** 片段级 score 题的键形态（`snip{i}`）。 */
 const SNIP_KEY_PATTERN = /^snip\d+$/;
 
+/** 连续瞬态失败达到该次数即开熔断（SAFE-02 / A7）。 */
+export const BREAKER_THRESHOLD = 3;
+
+/** 熔断开启时长毫秒数（SAFE-02：60s；到期直接闭合不做半开探测）。 */
+export const BREAKER_OPEN_MS = 60000;
+
+/** 计入熔断连续计数的失败 kind：瞬态传输类。auth / validation / too_large 是
+ * 确定性请求问题，不计入（避免配置错误伪装成熔断——本计划 flagged 微决策）。 */
+const TRANSIENT_FAILURE_KINDS: ReadonlySet<ClassifyFailKind> = new Set([
+  'timeout',
+  'rate_limited',
+  'network',
+]);
+
 /**
  * key 环境变量读取顺序（A9 落定）：探测脚本现名 `jev_API_KEY` →
  * `TYPESAFE_API_KEY`，原样沿用不发明新名。key 只从 env 参数读进闭包内存，
@@ -304,6 +318,7 @@ export function createJevClassifier(
   const { model, timeoutMs, concurrency } = config;
   const sleep =
     hooks?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = hooks?.now ?? Date.now;
 
   // 进程级并发闸（JEV-04）：active < concurrency 直接进，否则排队等唤醒。
   let active = 0;
@@ -319,8 +334,37 @@ export function createJevClassifier(
     waiters.shift()?.();
   };
 
+  // 熔断状态（SAFE-02 / A7）：连续瞬态失败计数跨请求累计；任一 answered 清零；
+  // 连续达 BREAKER_THRESHOLD → openUntil = now + BREAKER_OPEN_MS；到期直接闭合
+  // 不做半开探测。同波在途请求无取消逻辑（无 AbortController 广播）。
+  let consecutiveFailures = 0;
+  let openUntil = 0;
+
+  /** 瞬态失败记账：只有 timeout / rate_limited / network 计入熔断连续计数——
+   * auth / validation / too_large 是确定性请求问题，计入会让配置错误伪装成熔断
+   * （本计划 flagged 微决策）。 */
+  const recordFailure = (kind: ClassifyFailKind): void => {
+    if (!TRANSIENT_FAILURE_KINDS.has(kind)) return;
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= BREAKER_THRESHOLD) {
+      openUntil = now() + BREAKER_OPEN_MS;
+    }
+  };
+
   const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
-    // 熔断短路（Task 3）将在此处之前返回，不占名额；本任务直接取名额。
+    // 熔断短路：open 期直接返回，零 fetch 且不占并发名额（闸在本闭包）
+    if (openUntil !== 0) {
+      if (now() < openUntil) {
+        return {
+          status: 'failed',
+          kind: 'breaker_open',
+          detail: 'circuit open after consecutive transient failures',
+        };
+      }
+      // 到期直接闭合，不做半开探测（A7）；计数从 0 起
+      openUntil = 0;
+      consecutiveFailures = 0;
+    }
     await acquire();
     try {
       // 超限阶梯（JEV-05）：发送前降级；null = 不可再砍，不发请求
@@ -356,6 +400,7 @@ export function createJevClassifier(
           const kind: ClassifyFailKind =
             name !== undefined && ABORT_ERROR_NAMES.has(name) ? 'timeout' : 'network';
           if (attempt >= RETRY_ATTEMPTS) {
+            recordFailure(kind);
             return {
               status: 'failed',
               kind,
@@ -372,6 +417,8 @@ export function createJevClassifier(
         const bodyText = await response.text();
         const parsed = parseJevResponse(status, bodyText);
         if (parsed.ok) {
+          // 任一成功清零连续失败计数（A7）
+          consecutiveFailures = 0;
           return {
             status: 'answered',
             model: parsed.model,
@@ -392,12 +439,14 @@ export function createJevClassifier(
         }
         if (status === 429 || status === 529) {
           if (attempt >= RETRY_ATTEMPTS) {
+            recordFailure('rate_limited');
             return httpFailure('rate_limited', status, bodyText);
           }
           await sleep(backoffDelayMs(attempt));
           continue;
         }
-        // 白名单外状态（500 等）：确定性失败，不烧限额
+        // 白名单外状态（500 等）：确定性失败，不烧限额；kind 'network' 计入熔断
+        recordFailure('network');
         return httpFailure('network', status, bodyText);
       }
     } finally {
