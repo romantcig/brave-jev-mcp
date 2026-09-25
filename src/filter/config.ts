@@ -10,18 +10,19 @@
  * 02-RESEARCH.md「环境变量清单」。
  */
 
-import { DEFAULT_BLOCKLIST } from './blocklist.js';
+import { readFileSync } from 'node:fs';
+import { DEFAULT_BLOCKLIST, parseBlocklist } from './blocklist.js';
 import {
   DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
   DEFAULT_JEV_TIMEOUT_MS,
-  DEFAULT_THRESHOLDS,
   JEV_BACKEND_ENV,
   JEV_CONCURRENCY_ENV,
   JEV_MODEL_ENV,
   JEV_TIMEOUT_MS_ENV,
+  resolveThresholds,
 } from './jev/questions.js';
-import type { FilterConfig, FilterMode, JevThresholds } from './types.js';
+import type { FilterConfig, FilterMode } from './types.js';
 
 /** 合法模式集合；集合外的值（含未设）一律回落 'off'。 */
 const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'shadow', 'on']);
@@ -32,13 +33,21 @@ const isFilterMode = (value: string): value is FilterMode => MODES.has(value);
 const BACKENDS: ReadonlySet<string> = new Set(['typesafe']);
 
 /**
- * 解析全部过滤层环境变量：模式、超量倍数、Jev 组（模型 / 后端 / 超时 / 并发闸）。
- * 黑名单固定为 `DEFAULT_BLOCKLIST`（仓库外黑名单文件合并留给 EMBED-05 的
- * `JEV_FILTER_BLOCKLIST_FILE`，02-06 落地）；thresholds 直接取
- * `DEFAULT_THRESHOLDS`（配置文件覆盖解析在 02-06）。
+ * 仓库外黑名单文件的环境变量（EMBED-05）：文件内容与内置黑名单合并，影子期
+ * 手工加农场站不用改代码（blocklist.ts 注释里留给 Phase 2 的位置在此兑现）。
+ */
+export const JEV_BLOCKLIST_FILE_ENV = 'JEV_FILTER_BLOCKLIST_FILE';
+
+/**
+ * 解析全部过滤层环境变量：模式、超量倍数、Jev 组（模型 / 后端 / 超时 / 并发闸）、
+ * 十一项阈值与仓库外黑名单文件。阈值经 `JEV_FILTER_CONFIG_FILE` 指向的本地
+ * JSON 配置文件提供（用户已定决策 4，解析见 questions.ts 的 `resolveThresholds`）；
+ * 黑名单文件 `JEV_FILTER_BLOCKLIST_FILE` 与内置黑名单求并集，读不到时仅用内置
+ * 黑名单 + stderr 一行（fail-open，description.ts 先例）。
  * @param env 环境变量映射（传 `process.env` 或测试用的显式对象）
- * @returns 模式（坏值回落 off）、超量倍数（<1 或非数回落 1）、黑名单、
- *   十一项阈值默认值与 Jev 组——model 空串回落 `jev-1.13.0`（钉版，JEV-06）、
+ * @returns 模式（坏值回落 off）、超量倍数（<1 或非数回落 1）、黑名单（文件与
+ *   内置的并集；文件缺失时仅内置）、十一项阈值（配置文件逐项覆盖，坏值逐项
+ *   回落默认）与 Jev 组——model 空串回落 `jev-1.13.0`（钉版，JEV-06）、
  *   backend 集合外回落 `typesafe`、timeoutMs / concurrency 非有限数或 <1 回落
  *   15000 / 12
  * @example parseFilterConfig({}).mode === 'off'
@@ -74,12 +83,31 @@ export function parseFilterConfig(env: Record<string, string | undefined>): Filt
       ? concurrencyValue
       : DEFAULT_JEV_CONCURRENCY;
 
-  const thresholds: JevThresholds = { ...DEFAULT_THRESHOLDS };
+  // 阈值（02-06）：经单一配置文件提供，缺项/坏值逐项回落默认（resolveThresholds）。
+  const thresholds = resolveThresholds(env);
+
+  // 黑名单文件（02-06）：设了则读文件、与内置求并集为新 Set（每次调用新建，
+  // 不改内置常量）；读不到 → stderr 一行 + 仅内置黑名单（fail-open）。
+  const blocklistFilePath = env[JEV_BLOCKLIST_FILE_ENV]?.trim();
+  let blocklist: ReadonlySet<string> = DEFAULT_BLOCKLIST;
+  if (blocklistFilePath) {
+    try {
+      blocklist = new Set([
+        ...DEFAULT_BLOCKLIST,
+        ...parseBlocklist(readFileSync(blocklistFilePath, 'utf8')),
+      ]);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(
+        `[jev-filter] Unable to read blocklist file '${blocklistFilePath}': ${reason}; using the built-in blocklist only.`
+      );
+    }
+  }
 
   return {
     mode,
     overfetchFactor,
-    blocklist: DEFAULT_BLOCKLIST,
+    blocklist,
     thresholds,
     jev: { model, backend, timeoutMs, concurrency },
   };

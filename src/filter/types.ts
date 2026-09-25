@@ -33,7 +33,7 @@ export type FilterConfig = {
   overfetchFactor: number;
   /** 步 4 的结构性农场黑名单；条目命中自身与全部子域 */
   blocklist: ReadonlySet<string>;
-  /** 十一项 Jev 阈值；坏值回落 `DEFAULT_THRESHOLDS`（EMBED-05），文件覆盖解析在 02-06 */
+  /** 十一项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05），文件覆盖经 `resolveThresholds` */
   thresholds: JevThresholds;
   /** Jev 客户端配置：钉版模型、单后端（JEV-01）、超时纯兜底与进程级并发闸初值（02-05 消费） */
   jev: {
