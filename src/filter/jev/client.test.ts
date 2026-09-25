@@ -956,3 +956,214 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 传输兜底·熔断（02-05 Task 3，SAFE-02 / A7）：同一实例连续 3 次瞬态失败
+// （timeout / rate_limited / network）开 60s 熔断，熔断期 classify 短路
+// breaker_open 且零 fetch；任一成功清零；到期直接闭合不做半开探测；
+// 同波在途请求不取消；auth / validation / too_large 不计入。
+// ---------------------------------------------------------------------------
+
+describe('createJevClassifier breaker (SAFE-02)', () => {
+  const state = buildState('s0', 'https://a.example/', 'Title', ['one'], 'q', 'i');
+  const request = { state, questions: buildQuestions(0) };
+
+  it('opens after three consecutive transient failures and short-circuits with zero fetches', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return new Response('rate limited', { status: 429 });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        { sleep: async () => {}, now: () => 1000000 }
+      );
+
+      for (let i = 0; i < 3; i += 1) {
+        const outcome = await classifier.classify(request);
+        assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+        assert.equal(outcome.kind, 'rate_limited');
+      }
+      assert.equal(fetchCount, 9, 'each failure exhausts three attempts');
+
+      const fourth = await classifier.classify(request);
+      assert.ok(fourth.status === 'failed', JSON.stringify(fourth));
+      assert.equal(fourth.kind, 'breaker_open');
+      assert.equal(fetchCount, 9, 'breaker_open must short-circuit with zero fetches');
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('resets the consecutive-failure count on any answered outcome', async () => {
+    // classify 序列 f, f, ok, f, f, ok → fetch 序：429×3 | 429×3 | 200 | 429×3 | 429×3 | 200
+    let fetchCount = 0;
+    const okAt = new Set([7, 14]);
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      if (okAt.has(fetchCount)) return okResponseOf(defaultRecording.results['s0']);
+      return new Response('rate limited', { status: 429 });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        { sleep: async () => {}, now: () => 1000000 }
+      );
+
+      const kinds: string[] = [];
+      for (let i = 0; i < 6; i += 1) {
+        const outcome = await classifier.classify(request);
+        kinds.push(outcome.status === 'answered' ? 'answered' : outcome.kind);
+      }
+
+      assert.deepEqual(kinds, [
+        'rate_limited',
+        'rate_limited',
+        'answered',
+        'rate_limited',
+        'rate_limited',
+        'answered',
+      ]);
+      assert.equal(fetchCount, 14, 'no breaker_open short-circuit anywhere in the sequence');
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('closes the breaker after 60s without half-open probing and restarts the count at zero', async () => {
+    let clock = 1000000;
+    let fetchCount = 0;
+    const okAt = new Set([10, 17]);
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      if (okAt.has(fetchCount)) return okResponseOf(defaultRecording.results['s0']);
+      return new Response('rate limited', { status: 429 });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        { sleep: async () => {}, now: () => clock }
+      );
+
+      // 3 次失败 → 熔断
+      for (let i = 0; i < 3; i += 1) {
+        const outcome = await classifier.classify(request);
+        assert.ok(outcome.status === 'failed' && outcome.kind === 'rate_limited');
+      }
+      assert.equal(fetchCount, 9);
+
+      // 熔断期短路
+      const during = await classifier.classify(request);
+      assert.ok(during.status === 'failed' && during.kind === 'breaker_open');
+      assert.equal(fetchCount, 9);
+
+      // 推进 61s → 到期直接闭合（无半开探测），恢复正常路径
+      clock += 61000;
+      const after = await classifier.classify(request);
+      assert.ok(after.status === 'answered', JSON.stringify(after));
+      assert.equal(fetchCount, 10);
+
+      // 计数从 0 起：再连续 2 次失败不熔断，第 8 次仍正常发 fetch
+      for (let i = 0; i < 2; i += 1) {
+        const outcome = await classifier.classify(request);
+        assert.ok(outcome.status === 'failed' && outcome.kind === 'rate_limited');
+      }
+      const eighth = await classifier.classify(request);
+      assert.ok(eighth.status === 'answered', JSON.stringify(eighth));
+      assert.equal(fetchCount, 17);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('leaves in-flight requests alone when the breaker opens', async () => {
+    let clock = 1000000;
+    let fetchCount = 0;
+    let held: ((response: Response) => void) | undefined;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      if (fetchCount === 4) {
+        // c2 的第一次 fetch 挂起，等熔断开后由测试释放
+        return await new Promise<Response>((resolve) => {
+          held = resolve;
+        });
+      }
+      return new Response('rate limited', { status: 429 });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        { sleep: async () => {}, now: () => clock }
+      );
+
+      // c1 快速失败（fetch 1-3，连续失败 1）
+      const c1 = await classifier.classify(request);
+      assert.ok(c1.status === 'failed' && c1.kind === 'rate_limited');
+
+      // c2 在途（第一次 fetch 挂起）
+      const c2Promise = classifier.classify(request);
+      await waitFor(() => held !== undefined);
+      assert.equal(fetchCount, 4);
+
+      // c3、c4 快速失败（fetch 5-10）→ 连续 3 → 熔断开
+      await classifier.classify(request);
+      await classifier.classify(request);
+      assert.equal(fetchCount, 10);
+
+      // 释放 c2 的挂起 fetch：它继续自己的重试直到耗尽——不被取消、不短路
+      held!(new Response('rate limited', { status: 429 }));
+      const c2 = await c2Promise;
+      assert.ok(c2.status === 'failed' && c2.kind === 'rate_limited');
+      assert.equal(fetchCount, 12, 'in-flight request must finish its own retries');
+
+      // 熔断后的新调用短路
+      const c5 = await classifier.classify(request);
+      assert.ok(c5.status === 'failed' && c5.kind === 'breaker_open');
+      assert.equal(fetchCount, 12);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('does not count deterministic failures (auth) toward the breaker', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return new Response('unauthorized', { status: 401 });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        { sleep: async () => {}, now: () => 1000000 }
+      );
+
+      for (let i = 0; i < 3; i += 1) {
+        const outcome = await classifier.classify(request);
+        assert.ok(outcome.status === 'failed' && outcome.kind === 'auth');
+      }
+
+      // auth 是确定性请求问题：不计连续失败，第 4 次仍发 fetch
+      const fourth = await classifier.classify(request);
+      assert.ok(fourth.status === 'failed' && fourth.kind === 'auth');
+      assert.equal(fetchCount, 4);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+});
