@@ -502,7 +502,14 @@ describe('createJevClassifier', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      // 恒抛 → 耗尽重试（SAFE-03 网络异常白名单）；注入 no-op sleep 不真等
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        {
+          sleep: async () => {},
+        }
+      );
       const outcome = await classifier.classify({
         state,
         questions: buildQuestions(0),
@@ -525,7 +532,14 @@ describe('createJevClassifier', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      // 恒抛 → 耗尽重试（SAFE-03 网络异常白名单）；注入 no-op sleep 不真等
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        {
+          sleep: async () => {},
+        }
+      );
       const outcome = await classifier.classify({
         state,
         questions: buildQuestions(0),
@@ -547,7 +561,14 @@ describe('createJevClassifier', () => {
 
     try {
       const key = 'sk-super-secret-test-key-42';
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: key });
+      // 恒 429 → 耗尽重试；注入 no-op sleep 不真等
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: key },
+        {
+          sleep: async () => {},
+        }
+      );
       const outcome = await classifier.classify({
         state,
         questions: buildQuestions(0),
@@ -789,17 +810,19 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
   it('backs off at least 500ms after the first failure and 1000ms after the second', async () => {
     const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([
-      () => new Response('rate limited', { status: 429 }),
-    ]);
+    globalThis.fetch = scriptedFetch([() => new Response('rate limited', { status: 429 })]);
     const sleeps: number[] = [];
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, {
-        sleep: async (ms: number) => {
-          sleeps.push(ms);
-        },
-      });
+      const classifier = createJevClassifier(
+        jevConfig,
+        { jev_API_KEY: 'k' },
+        {
+          sleep: async (ms: number) => {
+            sleeps.push(ms);
+          },
+        }
+      );
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -824,13 +847,14 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
     // 尾片段 34000 个词 ≈ 34000 tokens：(estState + max estQ) × 1.15 远超 32000，
     // 砍掉尾部大片段后余下 4 个小片段满足限额
     const big = 'word '.repeat(34000);
-    const bigState = buildState('s0', 'https://a.example/', 'Title', [
-      'small one.',
-      'small two.',
-      'small three.',
-      'small four.',
-      big,
-    ], 'q', 'i');
+    const bigState = buildState(
+      's0',
+      'https://a.example/',
+      'Title',
+      ['small one.', 'small two.', 'small three.', 'small four.', big],
+      'q',
+      'i'
+    );
     let capturedBody:
       | { state: { source: { snippets: string[] } }; questions: Record<string, unknown> }
       | undefined;

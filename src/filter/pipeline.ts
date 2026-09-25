@@ -636,6 +636,8 @@ const runJevStage = async (
         url: candidate.url,
         status: 'failed',
         fail_kind: outcome.kind,
+        // 阶梯 ④（JEV-05）：too_large = 该来源不问 Jev，per_source 记 'skipped'
+        ...(outcome.kind === 'too_large' ? { ladder: 'skipped' as const } : {}),
         latency_ms: latencyMs,
       });
     }
