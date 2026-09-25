@@ -2,14 +2,17 @@
  * 步 7 后半：跨来源 5-gram 逐字去重与片段级事实指纹增量新颖度（VERDICT-03）。
  *
  * 只依赖 tokenize.ts / prefilter.ts 的度量导出与最小行类型，不 import pipeline.ts
- * （budget.ts 先例：最小行类型结构上满足管道工作表，杜绝循环导入）。
+ * （budget.ts 先例：最小行类型结构上满足管道工作表，杜绝循环导入）。按播种序
+ * 遍历只翻 `kept` / `reason` 标记，不 sort、不 filter 出新数组（RULES-08）——
+ * 幸存者保持 Brave 原序由调用方重建输出保证。
  *
  * 依据：notes/dedup-and-rewrite-policy.md（元素定义、算法、播种顺序、论证段保护——
- * 逐字权威）、02-RESEARCH.md「片段级：score 删除与指纹新颖度」。
+ * 逐字权威）、02-RESEARCH.md「片段级：score 删除与指纹新颖度」、用户已定决策 5
+ * （跨源 5-gram 通道：指纹之前、播种序一致、独立计数 cross_source_dup_removed）。
  */
 
 import { isNearDuplicate, SHINGLE_N } from '../prefilter.js';
-import { shingles, tokenize } from '../tokenize.js';
+import { STOPWORDS, shingles, tokenize } from '../tokenize.js';
 import type {
   FilterMode,
   FilterStats,
@@ -56,37 +59,176 @@ export type JevSideDeletionFlags = {
 };
 
 /**
+ * 数字指纹（n:）：含货币前后缀与 k/M/B/%/x 量词——$4.2M、193x、1,000、45%。
+ * `i` 标志让大小写量词同收；小数点只在后随数字时才属于数字本身。
+ */
+const NUMBER_PATTERN = /\$?\d+(?:[.,]\d+)*(?:k|m|b|%|x)?/gi;
+
+/**
+ * 日期指纹（d:）：ISO 串与英文月份日期（缩写或全称，"September 25, 2026"）。
+ * 线性扫描、无嵌套量词（ReDoS 安全，T-02-04-2）。
+ */
+const DATE_PATTERN =
+  /\d{4}-\d{2}-\d{2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?/gi;
+
+/**
+ * 代码标识符指纹（c:）：反引号内容（含反引号，不跨行）与 `sanity.config.ts` /
+ * `foo.bar()` 形态的点分标识符。起始字母小写——代码标识符惯例，也避开句首大写词。
+ */
+const CODE_PATTERN = /`[^`\n]+`|\b[a-z][\w-]*(?:\.[a-zA-Z_][\w]*)+(?:\(\))?/g;
+
+/**
+ * 引文指纹（q:）：直引号或弯引号包裹的 ≥ 10 码元原文，词数 ≥ 6 才收（6 词引文
+ * 至少 11 码元，长度下界与词数下界不冲突）。
+ */
+const QUOTE_PATTERN = /["\u201c\u201d]([^\u201c\u201d"]{10,})["\u201c\u201d]/g;
+
+/**
+ * 专名词组指纹（p:）：连续大写词组（句首单词也算候选——Brave 片段里公司名、
+ * 产品名常在句首）。逐词滤常见功能词后按剩余词组收进指纹。
+ */
+const PROPER_NOUN_PATTERN = /\b[A-Z][\w&'-]{1,}(?:\s+[A-Z][\w&'-]{1,})*/g;
+
+/**
+ * p: 类的功能词表：tokenize.ts 的 STOPWORDS（英文功能词与搜索套话）再补口语
+ * 代词、助动词等句首常客。共用一张表是刻意选择——"常见功能词"不写第二份权威。
+ */
+const PROPER_NOUN_STOP_EXTRA: ReadonlySet<string> = new Set([
+  'if',
+  'we',
+  'our',
+  'you',
+  'your',
+  'they',
+  'their',
+  'he',
+  'she',
+  'his',
+  'her',
+  'its',
+  "it's",
+  'but',
+  'there',
+  'here',
+  'more',
+  'most',
+  'some',
+  'all',
+  'any',
+  'may',
+  'might',
+  'will',
+  'would',
+  'could',
+  'should',
+  'shall',
+  'must',
+  'has',
+  'have',
+  'had',
+  'did',
+  'i',
+]);
+const PROPER_NOUN_STOPWORDS: ReadonlySet<string> = new Set([
+  ...STOPWORDS,
+  ...PROPER_NOUN_STOP_EXTRA,
+]);
+
+/**
  * 从片段文本提取事实指纹（五类元素，全部 toLowerCase 归一）：
  * n: 数字（含货币前后缀与 k/M/B/%/x 量词）、d: 日期串（ISO 与英文月份）、
  * c: 代码标识符（反引号内容与点分形态）、q: ≥ 6 词的引号原文、
  * p: 连续大写词组（滤常见功能词）。
+ *
+ * 指纹只进计数与比对（键 = 'n:'/'d:'/'c:'/'q:'/'p:' 前缀 + 归一原文），绝不进
+ * 统计对象或日志面（LOG-03 前置）。
  * @returns 指纹集合；空串返回空集
+ * @example extractFingerprints('raised $4.2M at 193x speed') 含 'n:$4.2m' 与 'n:193x'
+ * @example extractFingerprints('the launch was smooth') 为空集
  */
 export function extractFingerprints(text: string): Set<string> {
-  return new Set();
+  const fp = new Set<string>();
+  for (const { 0: match } of text.matchAll(NUMBER_PATTERN)) {
+    fp.add('n:' + match.toLowerCase());
+  }
+  for (const { 0: match } of text.matchAll(DATE_PATTERN)) {
+    fp.add('d:' + match.toLowerCase());
+  }
+  for (const { 0: match } of text.matchAll(CODE_PATTERN)) {
+    fp.add('c:' + match.toLowerCase());
+  }
+  for (const { 1: quote } of text.matchAll(QUOTE_PATTERN)) {
+    const trimmed = quote.trim();
+    if (trimmed.split(/\s+/).length >= 6) fp.add('q:' + trimmed.toLowerCase());
+  }
+  for (const { 0: match } of text.matchAll(PROPER_NOUN_PATTERN)) {
+    const words = match
+      .split(/\s+/)
+      .filter((word) => !PROPER_NOUN_STOPWORDS.has(word.toLowerCase()));
+    if (words.length > 0) fp.add('p:' + words.join(' ').toLowerCase());
+  }
+  return fp;
 }
+
+/** judged 行的 is_primary 概率；无 answered 答案或非有限数时返回 undefined（未判定组）。 */
+const primaryOf = (
+  judged: ReadonlyMap<string, NoveltyJudgedRow> | undefined,
+  index: number
+): number | undefined => {
+  if (judged === undefined) return undefined;
+  const row = judged.get(`s${index}`);
+  if (row === undefined || row.status !== 'answered') return undefined;
+  const probability = row.answers?.is_primary;
+  return probability !== undefined && Number.isFinite(probability) ? probability : undefined;
+};
 
 /**
  * 播种顺序（与输出顺序分开）：off 模式或无 judged 答案时即 Brave 序；
- * on/shadow 按 is_primary 概率降序（同分按 Brave 序），未判定来源排已判定之后
- * 按 Brave 序（保守：不抢先占有事实扩大删除面，A3）。
+ * on/shadow 按 is_primary 概率降序（同分按 Brave 序——比较器显式加 Brave 序
+ * 平局裁决，不依赖引擎排序稳定性），未判定来源排已判定之后按 Brave 序（保守：
+ * 不抢先占有事实扩大删除面，A3）。
  * @returns 参与播种的 keep 来源 index 序列（被丢来源不参与）
+ * @example 两来源 is_primary 0.9 与 0.5 → 0.9 先播种
+ * @example off 模式（judged 传了也忽略）→ 全 Brave 序
  */
 export function seedingOrder(
   table: ReadonlyArray<NoveltySourceRow>,
   judged: ReadonlyMap<string, NoveltyJudgedRow> | undefined,
   mode: FilterMode
 ): number[] {
-  return [];
+  const keepIndices = table.filter((entry) => entry.verdict === 'keep').map((entry) => entry.index);
+  if (mode === 'off' || judged === undefined) return keepIndices;
+
+  const judgedInBraveOrder = keepIndices.filter((index) => primaryOf(judged, index) !== undefined);
+  const unjudgedInBraveOrder = keepIndices.filter(
+    (index) => primaryOf(judged, index) === undefined
+  );
+  const primaryDescending = [...judgedInBraveOrder].sort(
+    (a, b) => (primaryOf(judged, b) ?? 0) - (primaryOf(judged, a) ?? 0) || a - b
+  );
+  return [...primaryDescending, ...unjudgedInBraveOrder];
 }
 
 /**
- * 步 7 后半：按播种序遍历 keep 来源的幸存片段。每片段先做跨来源 5-gram 逐字
- * 判定（isNearDuplicate 同一口径，命中 → reason 'dup'、独立计数），未命中再做
- * 指纹新颖度判定（fp.size >= minFacts 且 novel.size < noveltyMin 才删，reason
- * 'novelty'）；论证段保护（reasoning >= reasoningProtect）只豁免指纹新颖度，
- * 不豁免跨源 dup。幸存片段的 shingles 与指纹并入跨源并集。
- * @returns 逐源 Jev 侧删除标记表，供步 8 rewrite/empty 归因
+ * 步 7 后半：按播种序遍历 keep 来源的幸存片段（score 删除后的 kept 片段）。
+ *
+ * 每片段的判定顺序固定：
+ * 1. **跨来源 5-gram 逐字 dup 先行**（通稿转载、页内标题导语重抽）——片段的
+ *    shingles 与"已幸存 shingle 并集"按 isNearDuplicate 同一口径比较（步 3 与步 7
+ *    同一度量，否则"先于指纹"失去可比性），命中 → kept=false、reason 'dup'、
+ *    cross_source_dup_removed 加一；论证段保护**不豁免**——逐字转载不是原创论证
+ *    （用户已定决策 5 / 计划 flagged）；
+ * 2. 未命中再做**指纹新颖度**判定：novel = fp(片段) − 幸存指纹并集，
+ *    `fp.size >= minFacts 且 novel.size < noveltyMin` 才删（事实太少不判，交给
+ *    片段级评分；NOVELTY_MIN 含 2——novel=2 保留）、reason 'novelty'、
+ *    novelty_removed 加一；`reasoning >= reasoningProtect` 的来源免于此判（论证段
+ *    也含公司名等专名指纹，会被误当重复）；
+ * 3. 幸存片段的 shingles 与指纹并入并集（被删片段不并入）。
+ *
+ * 管道不重排幸存者：只翻 kept/reason 标记，输出仍按 Brave 原序重建（RULES-08）。
+ * 指纹与 shingle 只进比对，绝不进统计对象或日志面（LOG-03）。
+ * @returns 逐源 Jev 侧删除标记表（novelty / crossSourceDup 两个布尔），供步 8
+ *   rewrite/empty 归因——只在发生过对应删除时含该来源
  */
 export function applyNovelty(
   table: NoveltySourceRow[],
@@ -95,5 +237,68 @@ export function applyNovelty(
   thresholds: JevThresholds,
   stats: FilterStats
 ): ReadonlyMap<number, JevSideDeletionFlags> {
-  return new Map();
+  const flags = new Map<number, JevSideDeletionFlags>();
+  const byIndex = new Map(table.map((entry) => [entry.index, entry]));
+  const shingleUnion = new Set<string>();
+  const fingerprintUnion = new Set<string>();
+
+  const mark = (index: number, key: keyof JevSideDeletionFlags): void => {
+    const entry = flags.get(index) ?? { novelty: false, crossSourceDup: false };
+    entry[key] = true;
+    flags.set(index, entry);
+  };
+
+  /** 论证段保护：reasoning >= reasoningProtect（恰等即保护）→ 免于指纹新颖度删除。 */
+  const reasoningProtected = (index: number): boolean => {
+    if (judged === undefined) return false;
+    const row = judged.get(`s${index}`);
+    if (row === undefined || row.status !== 'answered') return false;
+    const reasoning = row.answers?.has_original_reasoning;
+    return (
+      reasoning !== undefined &&
+      Number.isFinite(reasoning) &&
+      reasoning >= thresholds.reasoningProtect
+    );
+  };
+
+  for (const index of seedingOrder(table, judged, mode)) {
+    const sourceRow = byIndex.get(index);
+    if (sourceRow === undefined || sourceRow.verdict !== 'keep') continue;
+    const exempt = reasoningProtected(index);
+
+    for (const snippet of sourceRow.snippets) {
+      if (!snippet.kept) continue;
+
+      const shingleSet = shingles(tokenize(snippet.text), SHINGLE_N);
+
+      // 跨来源 5-gram 逐字 dup 先于指纹（用户已定决策 5）；论证段保护不豁免
+      if (isNearDuplicate(shingleSet, shingleUnion)) {
+        snippet.kept = false;
+        snippet.reason = 'dup';
+        stats.local.cross_source_dup_removed += 1;
+        mark(index, 'crossSourceDup');
+        continue;
+      }
+
+      const fingerprints = extractFingerprints(snippet.text);
+      if (!exempt) {
+        let novelCount = 0;
+        for (const fingerprint of fingerprints) {
+          if (!fingerprintUnion.has(fingerprint)) novelCount += 1;
+        }
+        if (fingerprints.size >= thresholds.minFacts && novelCount < thresholds.noveltyMin) {
+          snippet.kept = false;
+          snippet.reason = 'novelty';
+          stats.local.novelty_removed += 1;
+          mark(index, 'novelty');
+          continue;
+        }
+      }
+
+      // 幸存片段的 shingles 与指纹并入并集（被删片段不并入）
+      for (const shingle of shingleSet) shingleUnion.add(shingle);
+      for (const fingerprint of fingerprints) fingerprintUnion.add(fingerprint);
+    }
+  }
+  return flags;
 }

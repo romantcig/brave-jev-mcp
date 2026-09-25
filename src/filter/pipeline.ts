@@ -39,6 +39,7 @@ import {
 } from './prefilter.js';
 import { buildQuestions, buildState, SOURCE_QUESTIONS } from './jev/questions.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
+import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
@@ -275,11 +276,18 @@ const dropNonArticles = (table: WorkSource[], config: FilterConfig, stats: Filte
  * `sources` 元数据缺条目）的来源整体丢弃；只剩一条短片段的来源按**只看 query
  * 实词**（不含 intent——步 3 已用并集过滤过）判定，不含则丢、含则留。
  * 被丢来源只翻 `verdict`，不从工作表数组里移除（RULES-05/ordering）。
+ *
+ * 归因（A2 口径，notes/dedup-and-rewrite-policy.md）：来源被删光且 `jevSideDeletions`
+ * 显示其删除含新颖度或跨源 dup → reason 'rewrite'；仅 score 或本地原因 → 维持
+ * 'empty'。不传标记时行为与 Phase 1 完全一致（全记 'empty'）。'rewrite' 丢弃
+ * 不计进 `empty_dropped`（该计数只收 reason 'empty'）——rewrite 从
+ * `stats.sources[].reason` 按原因计数（Phase 3 状态行共同来源）。
  */
 const dropEmptySources = (
   table: WorkSource[],
   stats: FilterStats,
-  queryTerms: ReadonlySet<string>
+  queryTerms: ReadonlySet<string>,
+  jevSideDeletions?: ReadonlyMap<number, JevSideDeletionFlags>
 ): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
@@ -287,9 +295,13 @@ const dropEmptySources = (
     const surviving = source.snippets.filter((snippet) => snippet.kept);
     if (!isEmptySource(surviving) && !isOneLiner(surviving, queryTerms)) continue;
 
+    const flags = jevSideDeletions?.get(source.index);
+    const emptiedByJev = flags !== undefined && (flags.novelty || flags.crossSourceDup);
     source.verdict = 'drop';
-    source.reason = 'empty';
-    stats.local.empty_dropped += 1;
+    source.reason = emptiedByJev ? 'rewrite' : 'empty';
+    if (!emptiedByJev) {
+      stats.local.empty_dropped += 1;
+    }
   }
 };
 
@@ -456,17 +468,22 @@ export async function filterLlmContext(
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
   // 步 5 Jev 每源一次请求：off 模式跳过；on/shadow 注入 classify 后全候选一波并发
   // 派发（进程级并发闸住 02-05 的 createJevClassifier，管道编排层不持状态与限流）
+  let judged: ReadonlyMap<string, JevPerSourceStats> | undefined;
+  let jevSideDeletions: ReadonlyMap<number, JevSideDeletionFlags> = new Map();
   if (config.mode !== 'off' && deps?.classify !== undefined) {
-    const judged = await runJevStage(table, request, config, deps.classify, stats);
+    judged = await runJevStage(table, request, config, deps.classify, stats);
     if (config.mode === 'on') {
       // 步 6 来源级裁决：固定顺序（off_topic → listing → self_deprecated → stale →
       // filler），p >= 门槛 + CJK 加成即丢、命中即停；失败来源按"留"（SAFE-01）
       applySourceVerdicts(table, judged, config.thresholds, stats);
       // 步 7 前半：片段 score 删除（score < snippetMin 严格小于才删）
       applySnippetScores(table, judged, config.thresholds, stats);
+      // 步 7 后半（on）：跨源逐字 dup 与事实指纹新颖度，is_primary 播种、正本应用
+      jevSideDeletions = applyNovelty(table, judged, 'on', config.thresholds, stats);
     } else {
-      // shadow：正本完全不动（输出即本地规则结果），would 层在拷贝上跑完整
-      // on 链只记 shadow_diff（VERDICT-05）；per_source 记 would 层裁决
+      // shadow：正本完全不动（输出即本地规则结果，VERDICT-05）；步 7 后半只进
+      // would 层——wouldChain 在拷贝上按 is_primary 播种跑 applyNovelty，删除计数
+      // 并入 would_remove_snippets
       stats.shadow_diff = wouldChain(
         table,
         judged,
@@ -475,11 +492,14 @@ export async function filterLlmContext(
         contentTerms(request.params.query)
       );
     }
-    // 步 7 后半片段级事实指纹新颖度：02-04 填（off 模式按 Brave 序播种）
-  } else if (config.mode !== 'off') {
-    stats.jev = createNoKeyJevStats();
+  } else {
+    // off 与 no_key（on/shadow 未注入 classify）：全部来源未判定 → Brave 序播种、
+    // 无 Jev 答案即无论证段保护（PLAN §3.2 明文设计，用户已定决策 3——off 期望
+    // 文件的重标注是设计意图不是回归；no_key 等价 off 口径，SAFE-01 前置语义）
+    if (config.mode !== 'off') stats.jev = createNoKeyJevStats();
+    jevSideDeletions = applyNovelty(table, judged, config.mode, config.thresholds, stats);
   }
-  dropEmptySources(table, stats, contentTerms(request.params.query)); // 步 8：空来源与一句话来源
+  dropEmptySources(table, stats, contentTerms(request.params.query), jevSideDeletions); // 步 8：空来源与一句话来源（含 rewrite 归因）
   // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
   // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
   // 往回砍、不重排。倍数为 1 时 Brave 已按请求上限返回、过滤层只删不加，而估算公式
@@ -680,8 +700,9 @@ const WOULD_DROP_REASONS: ReadonlySet<SourceDropReason> = new Set([
  *   加上"本地规则后幸存片段非空、却被 Jev 片段删除间接清空（score 删光后
  *   幸存数为 0，步 8 记 'empty'）"的来源——正本上它们不会被步 8 丢，是 Jev
  *   造成的真实差异；oneLiner 等正本同样会丢的来源不算。
- * - `would_remove_snippets`：拷贝上由 score（02-04 起再加 novelty/跨源 dup）
- *   造成的片段删除数。
+ * - `would_remove_snippets`：拷贝上由 score（02-03）与 novelty / 跨源 dup（02-04）
+ *   造成的片段删除数；novelty/dup 计数从一次性载体取——片段 reason 'dup' 与步 3
+ *   页内去重同键，按行数统计会混入本地删除。
  *
  * 裁决回写照常落 `stats.jev.per_source`（would 层 verdict/reason 记账进
  * per_source 但不回写正本）；步 8 的 empty 计数用一次性载体接住，不污染
@@ -706,14 +727,20 @@ const wouldChain = (
 
   applySourceVerdicts(copy, judged, thresholds, stats);
   applySnippetScores(copy, judged, thresholds, stats);
-  // score 删除后的幸存片段数快照（dropEmptySources 只翻来源标记、不动片段）
+  // score 删除后的幸存片段数快照（dropEmptySources 只翻来源标记、不动片段）；
+  // 快照在新颖度之前——"间接清空"分支只收 score 删光（novelty/dup 删光走 rewrite）
   const survivingAfterScores = new Map<string, number>();
   for (const source of copy) {
     survivingAfterScores.set(`s${source.index}`, source.snippets.filter((s) => s.kept).length);
   }
 
+  // 步 7 后半（02-04）：拷贝上按 is_primary 播种跑跨源 dup 与新颖度（would 链与
+  // on 链共用同一实现，无平行实现）；计数走一次性载体不污染正本 stats.local
+  const noveltyStats: FilterStats = { ...stats, local: { ...zeroLocal } };
+  const jevSideDeletions = applyNovelty(copy, judged, 'on', thresholds, noveltyStats);
+
   const throwawayStats: FilterStats = { ...stats, local: { ...zeroLocal } };
-  dropEmptySources(copy, throwawayStats, queryTerms);
+  dropEmptySources(copy, throwawayStats, queryTerms, jevSideDeletions);
 
   const wouldDrop: string[] = [];
   let wouldRemoveSnippets = 0;
@@ -735,6 +762,10 @@ const wouldChain = (
       (snippet) => !snippet.kept && snippet.reason === 'score'
     ).length;
   }
+  // novelty / 跨源 dup 的删除数从一次性载体取（片段上的 reason 'dup' 与步 3
+  // 页内去重同键，按片段行数统计会混入本地删除）
+  wouldRemoveSnippets +=
+    noveltyStats.local.novelty_removed + noveltyStats.local.cross_source_dup_removed;
 
   return { would_drop: wouldDrop, would_remove_snippets: wouldRemoveSnippets };
 };

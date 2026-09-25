@@ -13,6 +13,7 @@ import type {
   ClassifyOutcome,
   FilterConfig,
   FilterRequest,
+  JevAnswer,
 } from './types.js';
 
 const offConfig: FilterConfig = {
@@ -1117,5 +1118,152 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
     );
     assert.equal(onRun.stats.jev?.status, 'breaker_open');
     assert.equal(onRun.stats.jev?.n_requests, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 步 7 后半新颖度与跨源 dup（02-04）：off 删重 + rewrite 归因、三模式播种序、
+// 跨源逐字 dup 独立计数。语料以 'Brave' 开头保证过步 3 的短无实词判定。
+// ---------------------------------------------------------------------------
+
+describe('novelty and cross-source dup (02-04)', () => {
+  // s0 原文（四数字事实 + p:brave），s1 同四事实改写（词序不同 → 无共享 5-gram，
+  // 不触发跨源 dup、走指纹新颖度），s2 独有事实（全模式幸存）
+  const S0_TEXT = 'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency';
+  const S1_TEXT =
+    'Brave it costs $4.2m, runs 193x faster, and has 40% less latency at version 1.13';
+  const S2_TEXT = 'Brave unique snippet with 42% uptime details';
+
+  const noveltyPayload = (): BraveLlmContextResponse => ({
+    grounding: {
+      generic: [
+        { url: 'https://origin.example/', title: 'Origin', snippets: [S0_TEXT] },
+        { url: 'https://rewrite.example/', title: 'Rewrite', snippets: [S1_TEXT] },
+        { url: 'https://unique.example/', title: 'Unique', snippets: [S2_TEXT] },
+      ],
+      map: [],
+    },
+    sources: {},
+  });
+
+  it('off mode removes the rewritten duplicate as novelty and marks the emptied source rewrite', async () => {
+    const { result, stats } = await filterLlmContext(noveltyPayload(), request, offConfig);
+
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://origin.example/', 'https://unique.example/']
+    );
+    assert.equal(stats.local.novelty_removed, 1);
+    const rewrite = stats.sources.find((entry) => entry.url === 'https://rewrite.example/');
+    assert.equal(rewrite?.verdict, 'drop');
+    assert.equal(rewrite?.reason, 'rewrite');
+    assert.equal(stats.local.empty_dropped, 0);
+  });
+
+  it('three modes keep Brave order while novelty applies off/on and stays would-only in shadow', async () => {
+    const judgedAnswers = (primary: number): Record<string, JevAnswer> => {
+      const answers: Record<string, JevAnswer> = {};
+      for (const key of [
+        'worth_keeping',
+        'is_primary',
+        'has_original_reasoning',
+        'is_attributed_rewrite',
+        'is_template_filler',
+        'is_off_topic',
+        'is_listing',
+        'self_deprecated',
+        'stale',
+        'paywalled',
+      ]) {
+        answers[key] = { kind: 'noul', probability: key === 'is_primary' ? primary : 0 };
+      }
+      return answers;
+    };
+    const classify: ClassifyDeps['classify'] = async ({ state }) => {
+      const primary = state.source.id === 's1' ? 0.9 : state.source.id === 's0' ? 0.5 : 0.1;
+      return {
+        status: 'answered',
+        model: DEFAULT_JEV_MODEL,
+        answers: judgedAnswers(primary),
+        input_tokens: 10,
+      };
+    };
+
+    const offRun = await filterLlmContext(noveltyPayload(), request, offConfig);
+    const shadowRun = await filterLlmContext(
+      noveltyPayload(),
+      request,
+      { ...offConfig, mode: 'shadow' },
+      { classify }
+    );
+    const onRun = await filterLlmContext(
+      noveltyPayload(),
+      request,
+      { ...offConfig, mode: 'on' },
+      { classify }
+    );
+
+    // off：Brave 序播种 → s1（改写）被新颖度删除、来源记 rewrite
+    assert.deepEqual(
+      offRun.result.grounding.generic.map((item) => item.url),
+      ['https://origin.example/', 'https://unique.example/']
+    );
+    // shadow：正本不动（三源全留）；novelty 只进 would 层——is_primary 播种下
+    // s1（0.9）先播种幸存、s0（0.5）被判删 → would_drop ['s0']、计数 1
+    assert.deepEqual(
+      shadowRun.result.grounding.generic.map((item) => item.url),
+      ['https://origin.example/', 'https://rewrite.example/', 'https://unique.example/']
+    );
+    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s0']);
+    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 1);
+    // on：is_primary 播种 → s1 先播种幸存、s0 被新颖度删除
+    assert.deepEqual(
+      onRun.result.grounding.generic.map((item) => item.url),
+      ['https://rewrite.example/', 'https://unique.example/']
+    );
+    // 三模式输出都是 Brave 序子序列（幸存者不重排）
+    const inputUrls = noveltyPayload().grounding.generic.map((item) => item.url);
+    for (const outputUrls of [
+      offRun.result.grounding.generic.map((item) => item.url),
+      shadowRun.result.grounding.generic.map((item) => item.url),
+      onRun.result.grounding.generic.map((item) => item.url),
+    ]) {
+      let cursor = 0;
+      for (const url of outputUrls) {
+        const found = inputUrls.indexOf(url, cursor);
+        assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
+        cursor = found + 1;
+      }
+    }
+  });
+
+  it('cross-source verbatim duplicate is removed as dup with its own counter in off mode', async () => {
+    // 通稿转载：s1 逐字复制 s0 的长片段 → 跨源 5-gram dup（先于指纹）、独立计数；
+    // 片段被 Jev 侧删除清空的来源记 'rewrite'
+    const dupLong =
+      'the brave model ships with a streaming api and costs $4.2m per month for scale';
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          { url: 'https://wire.example/', title: 'Wire', snippets: [dupLong] },
+          { url: 'https://syndicated.example/', title: 'Syndicated', snippets: [dupLong] },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
+
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://wire.example/']
+    );
+    assert.equal(stats.local.cross_source_dup_removed, 1);
+    assert.equal(stats.local.novelty_removed, 0);
+    const syndicated = stats.sources.find((entry) => entry.url === 'https://syndicated.example/');
+    assert.equal(syndicated?.verdict, 'drop');
+    assert.equal(syndicated?.reason, 'rewrite');
+    assert.equal(stats.local.empty_dropped, 0);
   });
 });

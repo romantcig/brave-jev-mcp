@@ -355,10 +355,12 @@ describe('budget trimming on a real fixture', () => {
 
   it('keeps the first five sources in Brave order and trims from the tail', async () => {
     // 步 9 只在超量倍数 > 1 时执行（倍数 1 时 Brave 已按请求上限返回，估算裁剪只会
-    // 误砍——审查问题 6）；这里用 2x 超量抓取后按模型原始请求（5 源 / 3000 token）裁回
+    // 误砍——审查问题 6）；这里用 2x 超量抓取后按模型原始请求（5 源 / 2400 token）裁回。
+    // 预算从 Phase 1 的 3000 降到 2400：02-04 起步 7 新颖度先清掉低新颖度片段，
+    // 首 5 源幸存内容 ≈2670 token，3000 不再触发裁剪（2400 落在第 5 源区间内）。
     const { result, stats } = await filterLlmContext(
       data,
-      { params: { query, maximum_number_of_urls: 5, maximum_number_of_tokens: 3000 }, intent },
+      { params: { query, maximum_number_of_urls: 5, maximum_number_of_tokens: 2400 }, intent },
       {
         mode: 'off',
         overfetchFactor: 2,
@@ -374,7 +376,7 @@ describe('budget trimming on a real fixture', () => {
     );
     assert.equal(stats.local.budget_dropped_sources, braveUrls.length - 5);
     assert.ok(stats.local.budget_trimmed_snippets > 0, 'token budget must trim something');
-    assert.ok(stats.output.est_tokens <= 3000, 'output must fit the token budget');
+    assert.ok(stats.output.est_tokens <= 2400, 'output must fit the token budget');
 
     // 前四源不受 token 裁剪影响；第 5 源从末尾开始裁
     for (const url of braveUrls.slice(0, 4)) {
@@ -396,12 +398,14 @@ describe('budget trimming on a real fixture', () => {
 });
 
 // ---------------------------------------------------------------------------
-// off 模式不丢整份来源（无空来源误判）。
+// off 模式不做"空来源"误判：步 8 的 empty 计数必须为 0。02-04 起新颖度/跨源 dup
+// 可以把转述稿整源清空（步 8 记 'rewrite'，设计意图非回归）——输出来源数按
+// rewrite 差额对账。
 // ---------------------------------------------------------------------------
 
-describe('no fixture is dropped entirely', () => {
+describe('no fixture is dropped as empty', () => {
   for (const fixture of ['jev_release_default.json', 'jev_release_strict.json']) {
-    it(`${fixture} keeps every source in off mode`, async () => {
+    it(`${fixture} drops no source as empty in off mode`, async () => {
       const data = loadBraveFixture(fixture);
       const { result, stats } = await filterLlmContext(
         data,
@@ -412,7 +416,10 @@ describe('no fixture is dropped entirely', () => {
         offConfig
       );
       assert.equal(stats.local.empty_dropped, 0);
-      assert.equal(result.grounding.generic.length, data.grounding.generic.length);
+      const rewriteDropped = stats.sources.filter(
+        (source) => source.verdict === 'drop' && source.reason === 'rewrite'
+      ).length;
+      assert.equal(result.grounding.generic.length, data.grounding.generic.length - rewriteDropped);
     });
   }
 });
