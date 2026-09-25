@@ -42,7 +42,7 @@ import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
-import { createFilterStats, createNoKeyJevStats } from './stats.js';
+import { createFilterStats, createNoKeyJevStats, zeroLocal } from './stats.js';
 import type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,
@@ -57,6 +57,8 @@ import type {
   JevCandidate,
   JevPerSourceStats,
   JevStats,
+  JevThresholds,
+  ShadowDiff,
   SnippetRemovalReason,
   SnippetStats,
   SourceDropReason,
@@ -431,8 +433,10 @@ const toStatsRequest = (
  * 网络只发生在注入的 classify 实现里。`config` 省略时在**调用时**读 `process.env`。
  * 模式分叉：off 整段跳过 Jev（`stats.jev` 保持 null）；on/shadow 注入 classify 后
  * 对全部候选来源并发派发（步 5），未注入时记 no_key 零值对象且零请求（SAFE-01
- * 语义前置）。调用方不 `await` 会在 tsc 处报类型错——tsx 不查类型，`npm run build`
- * 是唯一漏改闸（Pitfall 1）。
+ * 语义前置）；on 在正本上应用裁决（步 6 + 步 7 前半，02-03），shadow 在拷贝上跑
+ * would 链只记 `shadow_diff`、输出仍是本地规则结果（VERDICT-05）。调用方不
+ * `await` 会在 tsc 处报类型错——tsx 不查类型，`npm run build` 是唯一漏改闸
+ * （Pitfall 1）。
  *
  * @param data Brave LLM Context 响应（已过上游 zod 校验）
  * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带
@@ -460,8 +464,17 @@ export async function filterLlmContext(
       applySourceVerdicts(table, judged, config.thresholds, stats);
       // 步 7 前半：片段 score 删除（score < snippetMin 严格小于才删）
       applySnippetScores(table, judged, config.thresholds, stats);
+    } else {
+      // shadow：正本完全不动（输出即本地规则结果），would 层在拷贝上跑完整
+      // on 链只记 shadow_diff（VERDICT-05）；per_source 记 would 层裁决
+      stats.shadow_diff = wouldChain(
+        table,
+        judged,
+        config.thresholds,
+        stats,
+        contentTerms(request.params.query)
+      );
     }
-    // shadow 模式的 would 层（拷贝表上跑完整 on 链只记 shadow_diff）：Task 2 填
     // 步 7 后半片段级事实指纹新颖度：02-04 填（off 模式按 Brave 序播种）
   } else if (config.mode !== 'off') {
     stats.jev = createNoKeyJevStats();
@@ -638,6 +651,90 @@ const runJevStage = async (
       : 'ok';
   stats.jev = jev;
   return rows;
+};
+
+/**
+ * shadow would 链会整体丢弃的来源原因集合：Jev 侧五道丢弃 + 改写（02-04 起
+ * novelty/跨源 dup 删光记 'rewrite'）。`empty` 不在其中——本地规则也会丢的
+ * 空来源不算 would 差异，只有"被 Jev 片段删除间接清空"的来源单独加回。
+ */
+const WOULD_DROP_REASONS: ReadonlySet<SourceDropReason> = new Set([
+  'off_topic',
+  'listing',
+  'self_deprecated',
+  'stale',
+  'filler',
+  'rewrite',
+]);
+
+/**
+ * shadow 模式的 would 层（VERDICT-05）：在拷贝工作表上跑完整 on 链（步 6 来源级
+ * 裁决 + 步 7 前半 score 删除 + 步 8 空来源），只取 would 记账——正本完全不动，
+ * shadow 输出即本地规则结果。拷贝是"来源逐个展开、snippets 逐条展开"的一层浅
+ * 拷贝（其余字段只读共享，本链只翻拷贝上的标记，不重排）。
+ *
+ * 记账口径（notes/shadow-mode-logging.md shadow_diff 字段）：
+ * - `would_drop`：拷贝上 verdict 为 drop 且 reason 属于 Jev 侧丢弃的来源 src id，
+ *   加上"本地规则后幸存片段非空、却被 Jev 片段删除间接清空（score 删光后
+ *   幸存数为 0，步 8 记 'empty'）"的来源——正本上它们不会被步 8 丢，是 Jev
+ *   造成的真实差异；oneLiner 等正本同样会丢的来源不算。
+ * - `would_remove_snippets`：拷贝上由 score（02-04 起再加 novelty/跨源 dup）
+ *   造成的片段删除数。
+ *
+ * 裁决回写照常落 `stats.jev.per_source`（would 层 verdict/reason 记账进
+ * per_source 但不回写正本）；步 8 的 empty 计数用一次性载体接住，不污染
+ * 正本 `stats.local`（正本随后自己跑步 8）。
+ */
+const wouldChain = (
+  table: WorkSource[],
+  judged: ReadonlyMap<string, JevPerSourceStats>,
+  thresholds: JevThresholds,
+  stats: FilterStats,
+  queryTerms: ReadonlySet<string>
+): ShadowDiff => {
+  const copy = table.map((source) => ({
+    ...source,
+    snippets: source.snippets.map((snippet) => ({ ...snippet })),
+  }));
+  // 本地规则后的幸存片段数（Jev 侧删除前口径），供"间接清空"判定
+  const survivingBeforeJev = new Map<string, number>();
+  for (const source of copy) {
+    survivingBeforeJev.set(`s${source.index}`, source.snippets.filter((s) => s.kept).length);
+  }
+
+  applySourceVerdicts(copy, judged, thresholds, stats);
+  applySnippetScores(copy, judged, thresholds, stats);
+  // score 删除后的幸存片段数快照（dropEmptySources 只翻来源标记、不动片段）
+  const survivingAfterScores = new Map<string, number>();
+  for (const source of copy) {
+    survivingAfterScores.set(`s${source.index}`, source.snippets.filter((s) => s.kept).length);
+  }
+
+  const throwawayStats: FilterStats = { ...stats, local: { ...zeroLocal } };
+  dropEmptySources(copy, throwawayStats, queryTerms);
+
+  const wouldDrop: string[] = [];
+  let wouldRemoveSnippets = 0;
+  for (const source of copy) {
+    const id = `s${source.index}`;
+    if (source.verdict === 'drop') {
+      if (source.reason !== undefined && WOULD_DROP_REASONS.has(source.reason)) {
+        wouldDrop.push(id);
+      } else if (
+        source.reason === 'empty' &&
+        (survivingBeforeJev.get(id) ?? 0) > 0 &&
+        (survivingAfterScores.get(id) ?? 0) === 0
+      ) {
+        // 被 Jev 片段删除间接清空：本地规则后有片段幸存、score 删光后被步 8 丢
+        wouldDrop.push(id);
+      }
+    }
+    wouldRemoveSnippets += source.snippets.filter(
+      (snippet) => !snippet.kept && snippet.reason === 'score'
+    ).length;
+  }
+
+  return { would_drop: wouldDrop, would_remove_snippets: wouldRemoveSnippets };
 };
 
 /**

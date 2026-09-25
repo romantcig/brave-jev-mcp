@@ -806,3 +806,200 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
     assert.equal(stats.local.empty_dropped, 1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 三模式语义矩阵（02-03 Task 2）：同一内联夹具 × off/shadow/on，on/shadow 注入
+// 同一合成 classify——off 直通、shadow 记账不动正本、on 全链生效（VERDICT-05）
+// ---------------------------------------------------------------------------
+
+describe('three-mode semantic matrix (off / shadow / on)', () => {
+  // 四来源覆盖矩阵四角：s0 来源级 keep 且 score 全过（三模式输出同）；s1 来源级
+  // off_topic 丢弃；s2 部分片段 score 删除；s3 score 删光 → 步 8 empty 间接清空。
+  // 片段都含 query 实词（brave）且短于 shingle 门槛，本地规则不误删。
+  const matrixPayload = (): BraveLlmContextResponse => ({
+    grounding: {
+      generic: [
+        {
+          url: 'https://s0.example/',
+          title: 'Keep Source',
+          snippets: [
+            'Brave keeps snippet alpha with facts.',
+            'Brave keeps snippet beta with facts.',
+          ],
+        },
+        {
+          url: 'https://s1.example/',
+          title: 'Off Topic Source',
+          snippets: ['Brave off topic snippet gamma.'],
+        },
+        {
+          url: 'https://s2.example/',
+          title: 'Partial Score Source',
+          snippets: [
+            'Brave strong snippet one.',
+            'Brave weak snippet two.',
+            'Brave weak snippet three.',
+          ],
+        },
+        {
+          url: 'https://s3.example/',
+          title: 'All Low Score Source',
+          snippets: ['Brave low snippet one.', 'Brave low snippet two.'],
+        },
+      ],
+      map: [],
+    },
+    sources: {},
+  });
+
+  /** 每源的片段 score（夹具答案推导的根基；来源级 noul 全 0，除外 s1 off_topic 0.9）。 */
+  const SNIP_SCORES: Record<string, number[]> = {
+    s0: [1.5, 1.0], // 1.0 恰等 SNIPPET_MIN → 保留
+    s1: [1.2],
+    s2: [1.5, 0.3, 0.2],
+    s3: [0.1, 0.2],
+  };
+
+  const makeClassify =
+    (counter: { calls: number }): ClassifyDeps['classify'] =>
+    async ({ state }) => {
+      counter.calls += 1;
+      const answers: Record<
+        string,
+        { kind: 'noul'; probability: number } | { kind: 'score'; score: number }
+      > = {};
+      for (const key of [
+        'worth_keeping',
+        'is_primary',
+        'has_original_reasoning',
+        'is_attributed_rewrite',
+        'is_template_filler',
+        'is_off_topic',
+        'is_listing',
+        'self_deprecated',
+        'stale',
+        'paywalled',
+      ]) {
+        answers[key] = {
+          kind: 'noul',
+          probability: state.source.id === 's1' && key === 'is_off_topic' ? 0.9 : 0,
+        };
+      }
+      for (const [i, score] of (SNIP_SCORES[state.source.id] ?? []).entries()) {
+        answers[`snip${i}`] = { kind: 'score', score };
+      }
+      return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
+    };
+
+  it('off: no classify call, stats.jev null, shadow_diff null, full local output', async () => {
+    const data = matrixPayload();
+    const counter = { calls: 0 };
+
+    const { result, stats } = await filterLlmContext(data, request, offConfig, {
+      classify: makeClassify(counter),
+    });
+
+    assert.equal(counter.calls, 0);
+    assert.equal(stats.jev, null);
+    assert.equal(stats.shadow_diff, null);
+    // 本地规则结果：4 源 8 片段全留
+    assert.deepEqual(
+      result.grounding.generic.map((item) => [item.url, item.snippets.length]),
+      [
+        ['https://s0.example/', 2],
+        ['https://s1.example/', 1],
+        ['https://s2.example/', 3],
+        ['https://s3.example/', 2],
+      ]
+    );
+  });
+
+  it('shadow: classify called, output deep-equals the off output, would bookkeeping derived from answers', async () => {
+    const counter = { calls: 0 };
+    const offRun = await filterLlmContext(matrixPayload(), request, offConfig);
+
+    const shadowRun = await filterLlmContext(
+      matrixPayload(),
+      request,
+      { ...offConfig, mode: 'shadow' },
+      { classify: makeClassify(counter) }
+    );
+
+    // Jev 照常调用（4 候选源各一次）并记账
+    assert.equal(counter.calls, 4);
+    assert.equal(shadowRun.stats.jev?.n_requests, 4);
+    // 正本不动：输出与 off 模式 deepEqual
+    assert.deepEqual(shadowRun.result, offRun.result);
+    // would_drop 与夹具答案推导一致：s1（off_topic）+ s3（score 删光间接清空）
+    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s1', 's3']);
+    // would_remove_snippets 与 score 推导一致：s2 删 2 + s3 删 2 = 4
+    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 4);
+    // would 层裁决记账进 per_source，但正本输出不受影响
+    const s1Row = shadowRun.stats.jev?.per_source.find((row) => row.src === 's1');
+    assert.equal(s1Row?.verdict, 'drop');
+    assert.equal(s1Row?.reason, 'off_topic');
+    const s0Row = shadowRun.stats.jev?.per_source.find((row) => row.src === 's0');
+    assert.equal(s0Row?.verdict, 'keep');
+    // 本地 empty 计数不被 would 链的拷贝步 8 污染（正本 4 源无一为空）
+    assert.equal(shadowRun.stats.local.empty_dropped, 0);
+  });
+
+  it('on: output equals the would view applied, dropped sources absent, Brave order kept, shadow_diff null', async () => {
+    const counter = { calls: 0 };
+    const shadowRun = await filterLlmContext(
+      matrixPayload(),
+      request,
+      { ...offConfig, mode: 'shadow' },
+      { classify: makeClassify(counter) }
+    );
+    counter.calls = 0;
+    const onRun = await filterLlmContext(
+      matrixPayload(),
+      request,
+      { ...offConfig, mode: 'on' },
+      { classify: makeClassify(counter) }
+    );
+
+    assert.ok(counter.calls > 0);
+    assert.equal(onRun.stats.shadow_diff, null);
+    // on 输出 = shadow 的 would 视图应用后的结果：would_drop 来源整源移除、
+    // 低 score 片段（score < SNIPPET_MIN）按夹具 snippet_scores 推导移除
+    const dropped = new Set(shadowRun.stats.shadow_diff?.would_drop ?? []);
+    const urlOf: Record<string, string> = {
+      s0: 'https://s0.example/',
+      s1: 'https://s1.example/',
+      s2: 'https://s2.example/',
+      s3: 'https://s3.example/',
+    };
+    const expectedGeneric = shadowRun.result.grounding.generic
+      .filter((item) => ![...dropped].some((id) => urlOf[id] === item.url))
+      .map((item) => {
+        const id = Object.keys(urlOf).find((key) => urlOf[key] === item.url);
+        const scores = SNIP_SCORES[id ?? ''] ?? [];
+        return {
+          ...item,
+          snippets: item.snippets.filter(
+            (_, i) => (scores[i] ?? 0) >= DEFAULT_THRESHOLDS.snippetMin
+          ),
+        };
+      });
+    assert.deepEqual(onRun.result.grounding.generic, expectedGeneric);
+    // 具体形状：s0 两段全留、s1 整源丢、s2 剩第一条、s3 整源丢
+    assert.deepEqual(
+      onRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
+      [
+        ['https://s0.example/', 2],
+        ['https://s2.example/', 1],
+      ]
+    );
+    // Brave 原序子序列保持
+    const data = matrixPayload();
+    const inputUrls = data.grounding.generic.map((item) => item.url);
+    let cursor = 0;
+    for (const url of onRun.result.grounding.generic.map((item) => item.url)) {
+      const found = inputUrls.indexOf(url, cursor);
+      assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
+      cursor = found + 1;
+    }
+  });
+});
