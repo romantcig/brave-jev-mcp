@@ -40,6 +40,19 @@ export type FilterDeps = {
   classify?: unknown;
 };
 
+/**
+ * Jev 候选集里的一条：本地规则层（步 1–4）后幸存的来源与其幸存片段。
+ * `id` 用探测约定 `s{braveIndex}`（与 `.jev.json` 回放夹具的 `results` 键同源）；
+ * `snippets` 是幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段），顺序即表序。
+ * 重录 dump 与管道步 5 共用同一口径（02-01）。
+ */
+export type JevCandidate = {
+  id: string;
+  url: string;
+  title: string;
+  snippets: string[];
+};
+
 /** 来源被整体丢弃的原因。前五个 Phase 1 可产生，其余 Phase 2。 */
 export type SourceDropReason =
   | 'feed'

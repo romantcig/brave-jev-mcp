@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { filterLlmContext, trimSourceMeta } from './pipeline.js';
+import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import type { BraveLlmContextResponse, FilterConfig, FilterRequest } from './types.js';
 
 const offConfig: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
@@ -410,6 +410,70 @@ describe('filterLlmContext', () => {
       // 放大后的请求发给了 Brave（Brave 侧预算翻倍），但输出仍按模型原始请求裁回
       assert.equal(result.grounding.generic.length, 0);
     });
+  });
+});
+
+describe('collectJevCandidates', () => {
+  // 四类情形内联载荷：s0 普通纯文本来源；s1 JSON-LD 转段来源（数组两个 articleBody，
+  // 步 1 转出各段都是候选片段）；s2 feed URL 来源（步 4 整源丢）；s3 与 s0 同规范
+  // URL 的待归并来源（步 2 drop+merged，其片段并入 s0）。片段都含 query 实词
+  // （brave / browser），步 3 预筛不误伤。
+  const jevPayload = (): BraveLlmContextResponse => ({
+    grounding: {
+      generic: [
+        {
+          url: 'https://search.brave.com/',
+          title: 'Brave Search',
+          snippets: [
+            'Brave is a privacy-focused browser and search engine.',
+            'Second snippet about Brave.',
+          ],
+        },
+        {
+          url: 'https://example.com/article',
+          title: 'Brave Release Notes',
+          snippets: [
+            '[{"@type":"NewsArticle","articleBody":"First body about Brave release details."},{"@type":"NewsArticle","articleBody":"Second body with more Brave analysis."}]',
+          ],
+        },
+        {
+          url: 'https://example.com/blog/feed/',
+          title: 'Feed',
+          snippets: ['Brave updates feed entry.'],
+        },
+        {
+          url: 'https://www.search.brave.com/',
+          title: 'Brave Search (www)',
+          snippets: ['Third snippet about Brave performance.'],
+        },
+      ],
+      map: [],
+    },
+    sources: {},
+  });
+
+  it('collects surviving sources with s{index} ids and excludes feed and merged ones', () => {
+    const candidates = collectJevCandidates(jevPayload(), request, offConfig);
+
+    // feed 来源（s2）与被归并来源（s3）不出现在候选集；被归并片段并入 s0 的片段序列
+    assert.deepEqual(candidates, [
+      {
+        id: 's0',
+        url: 'https://search.brave.com/',
+        title: 'Brave Search',
+        snippets: [
+          'Brave is a privacy-focused browser and search engine.',
+          'Second snippet about Brave.',
+          'Third snippet about Brave performance.',
+        ],
+      },
+      {
+        id: 's1',
+        url: 'https://example.com/article',
+        title: 'Brave Release Notes',
+        snippets: ['First body about Brave release details.', 'Second body with more Brave analysis.'],
+      },
+    ]);
   });
 });
 

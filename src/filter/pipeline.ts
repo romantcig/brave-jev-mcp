@@ -48,6 +48,7 @@ import type {
   FilterRequest,
   FilterResult,
   FilterStats,
+  JevCandidate,
   SnippetRemovalReason,
   SnippetStats,
   SourceDropReason,
@@ -283,6 +284,25 @@ const dropEmptySources = (
 };
 
 /**
+ * 本地规则层（步 1–4）的固定顺序编排：JSON-LD 分流 → URL 规范化归并 → 片段预筛
+ * （付费墙截断 → 样板剥离 → 短无实词 → 页内逐字重复）→ feed URL 与结构性黑名单。
+ * 从 `filterLlmContext` 抽出，供重录 dump 的 `collectJevCandidates` 复用同一候选口径
+ * （02-01）；`terms` 由调用方传 `contentTerms(query, intent)`。
+ */
+const runLocalRules = (
+  table: WorkSource[],
+  stats: FilterStats,
+  terms: ReadonlySet<string>,
+  config: FilterConfig
+): void => {
+  splitJsonLd(table, stats); // 步 1：JSON-LD 分流
+  stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
+  // 步 3 片段预筛：付费墙截断 → 样板剥离 → 短无实词 → 页内逐字重复（顺序固定）
+  prefilterSnippets(table, stats, terms);
+  dropNonArticles(table, config, stats); // 步 4：feed URL 与结构性黑名单
+};
+
+/**
  * 精简 `sources` 表里一条元数据：只留 `title` / `hostname` / `age`。
  * - 非对象入参返回 `{}`；`title` / `hostname` 仅在为 string 时写入。
  * - `age` 只取首个匹配 `^\d{4}-\d{2}-\d{2}` 的元素写成单元素数组；找不到就省略 `age` 键，
@@ -418,11 +438,7 @@ export function filterLlmContext(
   const table = buildWorkTable(data);
   const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
 
-  splitJsonLd(table, stats); // 步 1：JSON-LD 分流
-  stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
-  // 步 3 片段预筛：付费墙截断 → 样板剥离 → 短无实词 → 页内逐字重复（顺序固定）
-  prefilterSnippets(table, stats, contentTerms(request.params.query, request.intent));
-  dropNonArticles(table, config, stats); // 步 4：feed URL 与结构性黑名单
+  runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
   // 步 5 Jev 每源一次请求：Phase 2；off 模式跳过
   // 步 6 来源级裁决：Phase 2；off 模式无事可做
   // 步 7 片段级 score 与事实指纹新颖度：Phase 2；off 模式按 Brave 序播种，本阶段一律保留
@@ -450,4 +466,34 @@ export function filterLlmContext(
   finalizeStats(stats, table);
 
   return { result, stats };
+}
+
+/**
+ * Jev 候选集收集（02-01）：对输入跑一遍本地规则层（步 1–4），收集幸存来源与其
+ * 幸存片段。重录 dump（`dev/dump_local_rules.ts`）与管道步 5 共用同一候选口径——
+ * 录好的答案因此与生产 state 逐源逐片段对齐。
+ *
+ * 纯函数：`buildWorkTable` 建工作表、一次性 stats 只作步 1–4 计数载体（用后即弃，
+ * 不返回）、不改输入。候选条件：来源 `verdict === 'keep'` 且幸存片段 ≥ 1；
+ * `id` 取 `s{source.index}`（与探测脚本 `s0..s11` 约定一致），`url` / `title` 用
+ * 工作表原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的
+ * 片段），顺序即表序（Brave 原序）。
+ */
+export function collectJevCandidates(
+  data: BraveLlmContextResponse,
+  request: { params: FilterRequest; intent: string },
+  config: FilterConfig
+): JevCandidate[] {
+  const table = buildWorkTable(data);
+  const stats = createFilterStats('off', toStatsRequest(request, config), data);
+  runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
+
+  const candidates: JevCandidate[] = [];
+  for (const source of table) {
+    if (source.verdict !== 'keep') continue;
+    const snippets = source.snippets.filter((snippet) => snippet.kept).map((snippet) => snippet.text);
+    if (snippets.length < 1) continue;
+    candidates.push({ id: `s${source.index}`, url: source.url, title: source.title, snippets });
+  }
+  return candidates;
 }
