@@ -13,6 +13,7 @@ import type {
   BraveLlmContextResponse,
   FilterMode,
   FilterStats,
+  JevStats,
   LocalStats,
   SourceStats,
 } from './types.js';
@@ -41,6 +42,21 @@ const genericItems = (
   data: BraveLlmContextResponse
 ): BraveLlmContextResponse['grounding']['generic'] =>
   Array.isArray(data?.grounding?.generic) ? data.grounding.generic : [];
+
+/**
+ * on/shadow 模式未注入 classify 时的 Jev 统计零值（no_key）：零请求、零记账、
+ * per_source 空表——SAFE-01 语义前置（"未判定"与"判了但失败"从一开始就分开记）。
+ * 每次调用新建对象，库不持模块级可变状态。
+ */
+export function createNoKeyJevStats(): JevStats {
+  return {
+    n_requests: 0,
+    input_tokens: 0,
+    latency_ms_total: 0,
+    status: 'no_key',
+    per_source: [],
+  };
+}
 
 /** 只在 `sources` 表里确有该 URL 且元数据是对象时返回它；避免读到原型链上的属性。 */
 const metaOf = (

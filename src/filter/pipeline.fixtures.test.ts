@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseFilterConfig } from './config.js';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { filterLlmContext } from './pipeline.js';
 import { zeroLocal } from './stats.js';
 import type { BraveLlmContextResponse, LocalStats, SnippetStats, SourceStats } from './types.js';
@@ -155,15 +156,16 @@ describe('expected fixture inventory', () => {
 
 for (const rel of listExpectedFiles()) {
   const expected = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8')) as ExpectedFixture;
+  const data = loadBraveFixture(expected.fixture);
+  // filterLlmContext 自 02-02 起异步：在模块顶层 await 一次结果，describe 闭包共享
+  // （node:test 等模块求值完成后才开跑，顶层 await 不影响收集）
+  const { result, stats } = await filterLlmContext(
+    data,
+    { params: { query: expected.query, ...expected.request }, intent: expected.intent },
+    offConfig
+  );
 
   describe(`off mode · ${expected.fixture}`, () => {
-    const data = loadBraveFixture(expected.fixture);
-    const { result, stats } = filterLlmContext(
-      data,
-      { params: { query: expected.query, ...expected.request }, intent: expected.intent },
-      offConfig
-    );
-
     const sourceStats = (url: string): SourceStats => {
       const source = stats.sources.find((entry) => entry.url === url);
       assert.ok(source, `source ${url} missing from stats table`);
@@ -351,13 +353,19 @@ describe('budget trimming on a real fixture', () => {
   const intent = 'What TypeSafe released with the Jev model and how it works';
   const braveUrls = data.grounding.generic.map((item) => item.url);
 
-  it('keeps the first five sources in Brave order and trims from the tail', () => {
+  it('keeps the first five sources in Brave order and trims from the tail', async () => {
     // 步 9 只在超量倍数 > 1 时执行（倍数 1 时 Brave 已按请求上限返回，估算裁剪只会
     // 误砍——审查问题 6）；这里用 2x 超量抓取后按模型原始请求（5 源 / 3000 token）裁回
-    const { result, stats } = filterLlmContext(
+    const { result, stats } = await filterLlmContext(
       data,
       { params: { query, maximum_number_of_urls: 5, maximum_number_of_tokens: 3000 }, intent },
-      { mode: 'off', overfetchFactor: 2, blocklist: new Set() }
+      {
+        mode: 'off',
+        overfetchFactor: 2,
+        blocklist: new Set(),
+        thresholds: { ...DEFAULT_THRESHOLDS },
+        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+      }
     );
 
     assert.deepEqual(
@@ -393,9 +401,9 @@ describe('budget trimming on a real fixture', () => {
 
 describe('no fixture is dropped entirely', () => {
   for (const fixture of ['jev_release_default.json', 'jev_release_strict.json']) {
-    it(`${fixture} keeps every source in off mode`, () => {
+    it(`${fixture} keeps every source in off mode`, async () => {
       const data = loadBraveFixture(fixture);
-      const { result, stats } = filterLlmContext(
+      const { result, stats } = await filterLlmContext(
         data,
         {
           params: { query: 'Jev TypeSafe AI model release' },

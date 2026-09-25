@@ -6,7 +6,9 @@
  * 一次性重建输出——幸存来源与片段因此天然保持 Brave 原序（RULES-08）。
  *
  * 01-01 定型位置与类型，01-02 填了步 1、2，01-03 填了步 3（含付费墙截断）、步 4 与
- * 步 8，01-04 填了步 9（裁回预算，实现在 budget.ts）；步 10 仍是空位，末尾做输出
+ * 步 8，01-04 填了步 9（裁回预算，实现在 budget.ts）；02-02 把 `filterLlmContext`
+ * 改为 async 并接线步 5（全候选并发派发 + 逐源记账），`runJevStage` 是私有编排件，
+ * 不进 barrel。步 6/7 仍是空位（02-03/02-04 填），步 10 仍是空位，末尾做输出
  * 重建与 `sources` 精简。后续计划往空位填实现，不改这里的顺序与签名。
  *
  * 依据：PLAN.md §3.2、notes/local-rules-design.md、01-RESEARCH.md「纯库布局」一节。
@@ -35,13 +37,16 @@ import {
   SHORT_SNIPPET_MAX,
   stripBoilerplateLines,
 } from './prefilter.js';
+import { buildQuestions, buildState, SOURCE_QUESTIONS } from './jev/questions.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
-import { createFilterStats } from './stats.js';
+import { createFilterStats, createNoKeyJevStats } from './stats.js';
 import type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,
+  ClassifyDeps,
+  ClassifyOutcome,
   FilterConfig,
   FilterDeps,
   FilteredResponse,
@@ -49,6 +54,8 @@ import type {
   FilterResult,
   FilterStats,
   JevCandidate,
+  JevPerSourceStats,
+  JevStats,
   SnippetRemovalReason,
   SnippetStats,
   SourceDropReason,
@@ -419,29 +426,38 @@ const toStatsRequest = (
 /**
  * 过滤层入口：Brave 响应 + 请求 → 过滤后的响应 + 统计对象。
  *
- * 同步纯函数，不发任何网络请求；`config` 省略时在**调用时**读 `process.env`。
- * Phase 1 三种模式走同一路径，只在 `stats.mode` 记录；Phase 2 通过 `deps.classify`
- * 注入 Jev 客户端后才在步 5–7 分叉。
+ * 自 02-02 起异步（步 5 要 `await` 注入的 classify），仍不发任何网络请求——
+ * 网络只发生在注入的 classify 实现里。`config` 省略时在**调用时**读 `process.env`。
+ * 模式分叉：off 整段跳过 Jev（`stats.jev` 保持 null）；on/shadow 注入 classify 后
+ * 对全部候选来源并发派发（步 5），未注入时记 no_key 零值对象且零请求（SAFE-01
+ * 语义前置）。调用方不 `await` 会在 tsc 处报类型错——tsx 不查类型，`npm run build`
+ * 是唯一漏改闸（Pitfall 1）。
  *
  * @param data Brave LLM Context 响应（已过上游 zod 校验）
  * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带
  * @param config 过滤配置；省略时 `parseFilterConfig(process.env)`
- * @param _deps Phase 2 注入点；Phase 1 未使用
- * @returns `{ result, stats }`；`result` 与输入同形，`stats` 是本次调用新建的对象
+ * @param deps Phase 2 注入点：`classify` 缺省时 on/shadow 记 no_key
+ * @returns `{ result, stats }` 的 Promise；`result` 与输入同形，`stats` 是本次调用新建的对象
  */
-export function filterLlmContext(
+export async function filterLlmContext(
   data: BraveLlmContextResponse,
   request: { params: FilterRequest; intent: string },
   config: FilterConfig = parseFilterConfig(process.env),
-  _deps?: FilterDeps
-): FilterResult {
+  deps?: FilterDeps
+): Promise<FilterResult> {
   const table = buildWorkTable(data);
   const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
 
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
-  // 步 5 Jev 每源一次请求：Phase 2；off 模式跳过
-  // 步 6 来源级裁决：Phase 2；off 模式无事可做
-  // 步 7 片段级 score 与事实指纹新颖度：Phase 2；off 模式按 Brave 序播种，本阶段一律保留
+  // 步 5 Jev 每源一次请求：off 模式跳过；on/shadow 注入 classify 后全候选一波并发
+  // 派发（进程级并发闸住 02-05 的 createJevClassifier，管道编排层不持状态与限流）
+  if (config.mode !== 'off' && deps?.classify !== undefined) {
+    await runJevStage(table, request, config, deps.classify, stats);
+  } else if (config.mode !== 'off') {
+    stats.jev = createNoKeyJevStats();
+  }
+  // 步 6 来源级裁决：02-03 填（固定顺序；失败来源按"留"，本计划只记账不应用）
+  // 步 7 片段级 score 与事实指纹新颖度：02-04 填（off 模式按 Brave 序播种，本阶段一律保留）
   dropEmptySources(table, stats, contentTerms(request.params.query)); // 步 8：空来源与一句话来源
   // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
   // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
@@ -469,15 +485,157 @@ export function filterLlmContext(
 }
 
 /**
+ * 工作表 → Jev 候选集：`verdict === 'keep'` 且幸存片段 ≥ 1 的来源。`id` 取
+ * `s{source.index}`（与探测脚本 `s0..s11` 约定一致），`url` / `title` 用工作表
+ * 原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段），
+ * 顺序即表序（Brave 原序）。只读表，不翻标记、不重排（RULES-08）。
+ */
+const jevCandidatesFromTable = (table: WorkSource[]): JevCandidate[] => {
+  const candidates: JevCandidate[] = [];
+  for (const source of table) {
+    if (source.verdict !== 'keep') continue;
+    const snippets = source.snippets
+      .filter((snippet) => snippet.kept)
+      .map((snippet) => snippet.text);
+    if (snippets.length < 1) continue;
+    candidates.push({ id: `s${source.index}`, url: source.url, title: source.title, snippets });
+  }
+  return candidates;
+};
+
+/**
+ * 步 5：Jev 每源一次请求，对全部候选来源一波并发派发（Promise.allSettled——管道
+ * 编排层不持进程级状态与限流；进程级并发闸按 Responsibility Map 由 02-05 的
+ * `createJevClassifier` 闭包持有并消费 `config.jev.concurrency`，本处不建双闸）。
+ *
+ * 记账口径（SAFE-01/JEV-04）：
+ * - 候选来源（keep 且幸存片段 ≥ 1）构造 state 与题目后并发调 `classify`，每次
+ *   调用计 latency；answered → per_source 记十键概率与 snippet_scores（snip0..N
+ *   顺序）、model、input_tokens，`n_requests` 加一；
+ * - failed 且 kind 非 `breaker_open` → `n_requests` 加一、记 fail_kind；失败来源
+ *   什么都不动（按"留"，SAFE-01——删除裁决留给 02-03）；
+ * - failed kind `breaker_open` → 不计 `n_requests`（02-05 熔断短路的落点）；
+ * - keep 但幸存片段为 0 的来源（本地规则删光，步 8 会丢）→ per_source 记
+ *   status `'skipped'` 且不计请求（JEV-04"无候选不调 Jev"）；本地规则已丢的来源
+ *   不进 per_source——Jev 从不问它们。
+ * - 聚合：input_tokens / latency_ms_total 求和；status 任一 per_source
+ *   `'breaker_open'` → `'breaker_open'`，否则任一 failed → `'degraded'`，否则 `'ok'`。
+ *
+ * `config` 在本计划只随签名占位（模型 / 超时 / 并发都由注入的 classify 实现自持，
+ * 02-05 落地后其消费点在 createJevClassifier 入口），保留参数避免 02-05 再改签名。
+ */
+const runJevStage = async (
+  table: WorkSource[],
+  request: { params: FilterRequest; intent: string },
+  config: FilterConfig,
+  classify: ClassifyDeps['classify'],
+  stats: FilterStats
+): Promise<void> => {
+  const jev: JevStats = {
+    n_requests: 0,
+    input_tokens: 0,
+    latency_ms_total: 0,
+    status: 'ok',
+    per_source: [],
+  };
+  const sourceKeys = Object.keys(SOURCE_QUESTIONS);
+  const candidates = jevCandidatesFromTable(table);
+
+  // 先按表序给每个 keep 来源立 skipped 占位行，候选来源派发后覆盖——per_source
+  // 天然保持 Brave 原序（RULES-08），顺序由 Map 的插入序保证
+  const rows = new Map<string, JevPerSourceStats>();
+  for (const source of table) {
+    if (source.verdict !== 'keep') continue;
+    rows.set(`s${source.index}`, { src: `s${source.index}`, url: source.url, status: 'skipped' });
+  }
+
+  const dispatch = async (candidate: JevCandidate): Promise<void> => {
+    const state = buildState(
+      candidate.id,
+      candidate.url,
+      candidate.title,
+      candidate.snippets,
+      request.params.query,
+      request.intent
+    );
+    const questions = buildQuestions(candidate.snippets.length);
+    const startedAt = Date.now();
+
+    let outcome: ClassifyOutcome;
+    try {
+      outcome = await classify({ state, questions });
+    } catch {
+      // classify 契约是返回 failed 而非 reject；真 reject 按网络失败记账（防御注入面）
+      outcome = { status: 'failed', kind: 'network' };
+    }
+    const latencyMs = Date.now() - startedAt;
+    jev.latency_ms_total += latencyMs;
+
+    if (outcome.status === 'answered') {
+      jev.n_requests += 1;
+      jev.input_tokens += outcome.input_tokens;
+
+      const answers: Record<string, number> = {};
+      for (const key of sourceKeys) {
+        const answer = outcome.answers[key];
+        if (answer?.kind === 'noul') answers[key] = answer.probability;
+      }
+      const snippetScores: number[] = [];
+      for (let i = 0; i < candidate.snippets.length; i += 1) {
+        const answer = outcome.answers[`snip${i}`];
+        if (answer?.kind === 'score') snippetScores.push(answer.score);
+      }
+
+      rows.set(candidate.id, {
+        src: candidate.id,
+        url: candidate.url,
+        status: 'answered',
+        answers,
+        snippet_scores: snippetScores,
+        model: outcome.model,
+        input_tokens: outcome.input_tokens,
+        latency_ms: latencyMs,
+        ...(outcome.ladder !== undefined ? { ladder: outcome.ladder } : {}),
+      });
+    } else if (outcome.kind === 'breaker_open') {
+      // 熔断短路：不发真实请求，不计 n_requests（SAFE-02 记账口径）
+      rows.set(candidate.id, {
+        src: candidate.id,
+        url: candidate.url,
+        status: 'breaker_open',
+        latency_ms: latencyMs,
+      });
+    } else {
+      jev.n_requests += 1;
+      rows.set(candidate.id, {
+        src: candidate.id,
+        url: candidate.url,
+        status: 'failed',
+        fail_kind: outcome.kind,
+        latency_ms: latencyMs,
+      });
+    }
+  };
+
+  await Promise.allSettled(candidates.map(dispatch));
+
+  jev.per_source = [...rows.values()];
+  jev.status = jev.per_source.some((row) => row.status === 'breaker_open')
+    ? 'breaker_open'
+    : jev.per_source.some((row) => row.status === 'failed')
+      ? 'degraded'
+      : 'ok';
+  stats.jev = jev;
+};
+
+/**
  * Jev 候选集收集（02-01）：对输入跑一遍本地规则层（步 1–4），收集幸存来源与其
  * 幸存片段。重录 dump（`dev/dump_local_rules.ts`）与管道步 5 共用同一候选口径——
- * 录好的答案因此与生产 state 逐源逐片段对齐。
+ * 录好的答案因此与生产 state 逐源逐片段对齐（02-02 起两口径统一走
+ * `jevCandidatesFromTable`）。
  *
  * 纯函数：`buildWorkTable` 建工作表、一次性 stats 只作步 1–4 计数载体（用后即弃，
- * 不返回）、不改输入。候选条件：来源 `verdict === 'keep'` 且幸存片段 ≥ 1；
- * `id` 取 `s{source.index}`（与探测脚本 `s0..s11` 约定一致），`url` / `title` 用
- * 工作表原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的
- * 片段），顺序即表序（Brave 原序）。
+ * 不返回）、不改输入。
  */
 export function collectJevCandidates(
   data: BraveLlmContextResponse,
@@ -488,12 +646,5 @@ export function collectJevCandidates(
   const stats = createFilterStats('off', toStatsRequest(request, config), data);
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
 
-  const candidates: JevCandidate[] = [];
-  for (const source of table) {
-    if (source.verdict !== 'keep') continue;
-    const snippets = source.snippets.filter((snippet) => snippet.kept).map((snippet) => snippet.text);
-    if (snippets.length < 1) continue;
-    candidates.push({ id: `s${source.index}`, url: source.url, title: source.title, snippets });
-  }
-  return candidates;
+  return jevCandidatesFromTable(table);
 }

@@ -1,9 +1,22 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
-import type { BraveLlmContextResponse, FilterConfig, FilterRequest } from './types.js';
+import { createNoKeyJevStats } from './stats.js';
+import type {
+  BraveLlmContextResponse,
+  ClassifyDeps,
+  FilterConfig,
+  FilterRequest,
+} from './types.js';
 
-const offConfig: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
+const offConfig: FilterConfig = {
+  mode: 'off',
+  overfetchFactor: 1,
+  blocklist: new Set(),
+  thresholds: { ...DEFAULT_THRESHOLDS },
+  jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+};
 
 const request: { params: FilterRequest; intent: string } = {
   params: { query: 'brave browser', maximum_number_of_urls: 5, maximum_number_of_tokens: 4000 },
@@ -58,14 +71,34 @@ describe('filterLlmContext', () => {
     globalThis.fetch = savedFetch;
   });
 
+  it('skips the Jev stage entirely in off mode even when classify is injected (EMBED-02)', async () => {
+    let calls = 0;
+    const classify: ClassifyDeps['classify'] = async () => {
+      calls += 1;
+      return { status: 'failed', kind: 'network' };
+    };
+
+    const { stats } = await filterLlmContext(payload(), request, offConfig, { classify });
+
+    assert.equal(calls, 0);
+    assert.equal(stats.jev, null);
+  });
+
   for (const mode of ['off', 'shadow', 'on'] as const) {
-    it(`mode=${mode} performs no network call and records the mode`, () => {
+    it(`mode=${mode} performs no network call and records the mode`, async () => {
       const data = payload();
 
-      const { result, stats } = filterLlmContext(data, request, { ...offConfig, mode });
+      const { result, stats } = await filterLlmContext(data, request, { ...offConfig, mode });
 
       assert.equal(stats.mode, mode);
-      assert.equal(stats.jev, null);
+      // off 模式 Jev 整段跳过（stats.jev 保持 null，A16）；on/shadow 未注入 classify
+      // 时记 no_key 零值对象且零请求（SAFE-01 语义前置）
+      if (mode === 'off') {
+        assert.equal(stats.jev, null);
+      } else {
+        assert.deepEqual(stats.jev, createNoKeyJevStats());
+        assert.equal(stats.jev?.n_requests, 0);
+      }
       assert.equal(stats.shadow_diff, null);
       assert.deepEqual(
         result.grounding.generic.map((item) => item.snippets),
@@ -74,10 +107,10 @@ describe('filterLlmContext', () => {
     });
   }
 
-  it('passes sources and snippets through unchanged in off mode', () => {
+  it('passes sources and snippets through unchanged in off mode', async () => {
     const data = payload();
 
-    const { result } = filterLlmContext(data, request, offConfig);
+    const { result } = await filterLlmContext(data, request, offConfig);
 
     assert.deepEqual(result.grounding.generic, data.grounding.generic);
     assert.deepEqual(
@@ -86,27 +119,27 @@ describe('filterLlmContext', () => {
     );
   });
 
-  it('passes map and poi through as-is', () => {
+  it('passes map and poi through as-is', async () => {
     const data = payload();
     const map = [{ name: 'Place', url: '', title: 'Place', snippets: ['Open daily.'] }];
     const poi = { name: 'POI', url: 'https://poi.example/', title: 'POI', snippets: ['x'] };
     data.grounding.map = map;
     data.grounding.poi = poi;
 
-    const { result } = filterLlmContext(data, request, offConfig);
+    const { result } = await filterLlmContext(data, request, offConfig);
 
     assert.equal(result.grounding.map, map);
     assert.equal(result.grounding.poi, poi);
   });
 
-  it('omits poi when the input has none', () => {
-    const { result } = filterLlmContext(payload(), request, offConfig);
+  it('omits poi when the input has none', async () => {
+    const { result } = await filterLlmContext(payload(), request, offConfig);
 
     assert.equal(Object.hasOwn(result.grounding, 'poi'), false);
   });
 
-  it('trims sources to title / hostname / age in Brave order', () => {
-    const { result } = filterLlmContext(payload(), request, offConfig);
+  it('trims sources to title / hostname / age in Brave order', async () => {
+    const { result } = await filterLlmContext(payload(), request, offConfig);
 
     assert.deepEqual(Object.keys(result.sources), [
       'https://search.brave.com/',
@@ -122,10 +155,10 @@ describe('filterLlmContext', () => {
     });
   });
 
-  it('returns empty grounding and sources for an empty response', () => {
+  it('returns empty grounding and sources for an empty response', async () => {
     const data: BraveLlmContextResponse = { grounding: { generic: [], map: [] }, sources: {} };
 
-    const { result, stats } = filterLlmContext(data, request, offConfig);
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
 
     assert.deepEqual(result, { grounding: { generic: [], map: [] }, sources: {} });
     assert.equal(stats.brave.n_sources, 0);
@@ -134,11 +167,11 @@ describe('filterLlmContext', () => {
     assert.deepEqual(stats.sources, []);
   });
 
-  it('prefilters a short nav-only snippet in place during step 3', () => {
+  it('prefilters a short nav-only snippet in place during step 3', async () => {
     const data = payload();
     data.grounding.generic[1].snippets.push('On this page\nInstallation and upgrading');
 
-    const { result, stats } = filterLlmContext(data, request, offConfig);
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
 
     // 被删片段留在原位只翻 kept，幸存片段保持 Brave 原序
     assert.deepEqual(
@@ -152,12 +185,12 @@ describe('filterLlmContext', () => {
     assert.equal(stats.local.snippets_prefiltered, 1);
   });
 
-  it('truncates a snippet at a paywall marker line and counts it', () => {
+  it('truncates a snippet at a paywall marker line and counts it', async () => {
     const data = payload();
     data.grounding.generic[0].snippets[0] =
       'Brave is a privacy-focused browser.\nSubscribe to continue reading\njunk after the marker';
 
-    const { result, stats } = filterLlmContext(data, request, offConfig);
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
 
     assert.deepEqual(
       result.grounding.generic[0].snippets[0],
@@ -167,7 +200,7 @@ describe('filterLlmContext', () => {
     assert.equal(stats.local.paywall_truncated, 1);
   });
 
-  it('drops a feed-shaped source during step 4 and cleans its sources entry', () => {
+  it('drops a feed-shaped source during step 4 and cleans its sources entry', async () => {
     const data = payload();
     data.grounding.generic.push({
       url: 'https://example.com/blog/feed/',
@@ -176,7 +209,7 @@ describe('filterLlmContext', () => {
     });
     data.sources['https://example.com/blog/feed/'] = { title: 'Feed', hostname: 'example.com' };
 
-    const { result, stats } = filterLlmContext(data, request, offConfig);
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
 
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
@@ -187,11 +220,11 @@ describe('filterLlmContext', () => {
     assert.deepEqual(stats.sources[2].reason, 'feed');
   });
 
-  it('drops a blocklisted host during step 4', () => {
+  it('drops a blocklisted host during step 4', async () => {
     const data = payload();
     const config: FilterConfig = { ...offConfig, blocklist: new Set(['example.com']) };
 
-    const { result, stats } = filterLlmContext(data, request, config);
+    const { result, stats } = await filterLlmContext(data, request, config);
 
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
@@ -201,7 +234,7 @@ describe('filterLlmContext', () => {
     assert.equal(stats.sources[1].reason, 'blocklist');
   });
 
-  it('drops a source whose only snippet is JSON-LD metadata during step 8', () => {
+  it('drops a source whose only snippet is JSON-LD metadata during step 8', async () => {
     const data = payload();
     data.grounding.generic.push({
       url: 'https://example.org/meta',
@@ -210,14 +243,14 @@ describe('filterLlmContext', () => {
     });
     data.sources['https://example.org/meta'] = { title: 'Meta', hostname: 'example.org' };
 
-    const { result, stats } = filterLlmContext(data, request, offConfig);
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
 
     assert.equal(Object.hasOwn(result.sources, 'https://example.org/meta'), false);
     assert.equal(stats.local.empty_dropped, 1);
     assert.equal(stats.sources[2].reason, 'empty');
   });
 
-  it('drops a one-liner source that only shares intent terms during step 8', () => {
+  it('drops a one-liner source that only shares intent terms during step 8', async () => {
     const data = payload();
     data.grounding.generic.push({
       url: 'https://example.org/oneliner',
@@ -230,7 +263,7 @@ describe('filterLlmContext', () => {
       intent: 'about the current version',
     };
 
-    const { result, stats } = filterLlmContext(data, req, offConfig);
+    const { result, stats } = await filterLlmContext(data, req, offConfig);
 
     // 片段含 intent 实词（current/version）所以步 3 保留，但不含 query 实词 → 步 8 丢
     assert.equal(Object.hasOwn(result.sources, 'https://example.org/oneliner'), false);
@@ -238,12 +271,12 @@ describe('filterLlmContext', () => {
     assert.equal(stats.sources[2].reason, 'empty');
   });
 
-  it('drops a source whose snippets are all gone and cleans its sources entry', () => {
+  it('drops a source whose snippets are all gone and cleans its sources entry', async () => {
     const data = payload();
     data.grounding.generic.push({ url: 'https://empty.example/', title: 'Empty', snippets: [] });
     data.sources['https://empty.example/'] = { title: 'Empty', hostname: 'empty.example' };
 
-    const { result, stats } = filterLlmContext(data, request, offConfig);
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
 
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
@@ -261,20 +294,20 @@ describe('filterLlmContext', () => {
     );
   });
 
-  it('keeps a source whose metadata is missing entirely', () => {
+  it('keeps a source whose metadata is missing entirely', async () => {
     const data = payload();
     delete data.sources['https://example.com/post'];
 
-    const { result } = filterLlmContext(data, request, offConfig);
+    const { result } = await filterLlmContext(data, request, offConfig);
 
     assert.equal(result.grounding.generic.length, 2);
     assert.deepEqual(result.sources['https://example.com/post'], {});
   });
 
-  it('records Brave-order indices, per-snippet chars and request defaults in stats', () => {
+  it('records Brave-order indices, per-snippet chars and request defaults in stats', async () => {
     const data = payload();
 
-    const { stats } = filterLlmContext(
+    const { stats } = await filterLlmContext(
       data,
       { params: { query: 'brave browser' }, intent: 'What Brave Search is' },
       offConfig
@@ -319,22 +352,40 @@ describe('filterLlmContext', () => {
     assert.doesNotMatch(JSON.stringify(stats), /privacy-focused/);
   });
 
-  it('keeps stats independent across alternating configs in one process', () => {
+  it('keeps stats independent across alternating configs in one process', async () => {
     const data = payload();
-    const first = filterLlmContext(
+    const first = await filterLlmContext(
       data,
       { params: { query: 'first' }, intent: 'first intent' },
-      { mode: 'shadow', overfetchFactor: 2, blocklist: new Set() }
+      {
+        mode: 'shadow',
+        overfetchFactor: 2,
+        blocklist: new Set(),
+        thresholds: { ...DEFAULT_THRESHOLDS },
+        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+      }
     );
-    const second = filterLlmContext(
+    const second = await filterLlmContext(
       data,
       { params: { query: 'second' }, intent: 'second intent' },
-      { mode: 'on', overfetchFactor: 1, blocklist: new Set() }
+      {
+        mode: 'on',
+        overfetchFactor: 1,
+        blocklist: new Set(),
+        thresholds: { ...DEFAULT_THRESHOLDS },
+        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+      }
     );
-    const third = filterLlmContext(
+    const third = await filterLlmContext(
       data,
       { params: { query: 'first' }, intent: 'first intent' },
-      { mode: 'shadow', overfetchFactor: 2, blocklist: new Set() }
+      {
+        mode: 'shadow',
+        overfetchFactor: 2,
+        blocklist: new Set(),
+        thresholds: { ...DEFAULT_THRESHOLDS },
+        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+      }
     );
 
     assert.equal(first.stats.mode, 'shadow');
@@ -347,14 +398,14 @@ describe('filterLlmContext', () => {
     assert.deepEqual(first.stats, third.stats);
   });
 
-  it('reads process.env at call time when config is omitted', () => {
+  it('reads process.env at call time when config is omitted', async () => {
     const original = process.env.JEV_FILTER_MODE;
     process.env.JEV_FILTER_MODE = 'shadow';
 
     try {
-      assert.equal(filterLlmContext(payload(), request).stats.mode, 'shadow');
+      assert.equal((await filterLlmContext(payload(), request)).stats.mode, 'shadow');
       process.env.JEV_FILTER_MODE = 'banana';
-      assert.equal(filterLlmContext(payload(), request).stats.mode, 'off');
+      assert.equal((await filterLlmContext(payload(), request)).stats.mode, 'off');
     } finally {
       if (original === undefined) {
         delete process.env.JEV_FILTER_MODE;
@@ -364,13 +415,13 @@ describe('filterLlmContext', () => {
     }
   });
 
-  it('marks paywall_empty rows as truncated=true with kept=false', () => {
+  it('marks paywall_empty rows as truncated=true with kept=false', async () => {
     // 审查测试缺口 13：截断后为空的片段此前不写 truncated，夹具测试的
     // paywall_empty 分支一旦被走到就会挂在 undefined 断言上
     const data = payload();
     data.grounding.generic[1].snippets = ['Subscribe to continue reading'];
 
-    const { stats } = filterLlmContext(data, request, offConfig);
+    const { stats } = await filterLlmContext(data, request, offConfig);
     const source = stats.sources.find((entry) => entry.url === 'https://example.com/post');
 
     assert.ok(source, 'source missing from stats');
@@ -390,10 +441,10 @@ describe('filterLlmContext', () => {
       intent: 'What Brave Search is',
     };
 
-    it('skips the trim when the overfetch factor is 1 (Brave already honored the cap)', () => {
+    it('skips the trim when the overfetch factor is 1 (Brave already honored the cap)', async () => {
       // 倍数为 1 时 Brave 已按请求上限执行输出、过滤层只删不加；估算公式为 Jev 32k
       // 保护标定、对普通文本偏高（审查问题 6），再按估算裁只会砍掉 Brave 给的完整内容
-      const { result, stats } = filterLlmContext(payload(), tightRequest, offConfig);
+      const { result, stats } = await filterLlmContext(payload(), tightRequest, offConfig);
 
       assert.equal(stats.local.budget_trimmed_snippets, 0);
       assert.equal(stats.local.budget_dropped_sources, 0);
@@ -401,9 +452,15 @@ describe('filterLlmContext', () => {
       assert.equal(result.grounding.generic[1].snippets.length, 1);
     });
 
-    it('trims back to the original request when the overfetch factor exceeds 1', () => {
-      const config: FilterConfig = { mode: 'off', overfetchFactor: 2, blocklist: new Set() };
-      const { result, stats } = filterLlmContext(payload(), tightRequest, config);
+    it('trims back to the original request when the overfetch factor exceeds 1', async () => {
+      const config: FilterConfig = {
+        mode: 'off',
+        overfetchFactor: 2,
+        blocklist: new Set(),
+        thresholds: { ...DEFAULT_THRESHOLDS },
+        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+      };
+      const { result, stats } = await filterLlmContext(payload(), tightRequest, config);
 
       assert.equal(stats.local.budget_trimmed_snippets > 0, true);
       assert.equal(stats.local.budget_dropped_sources > 0, true);
@@ -471,7 +528,10 @@ describe('collectJevCandidates', () => {
         id: 's1',
         url: 'https://example.com/article',
         title: 'Brave Release Notes',
-        snippets: ['First body about Brave release details.', 'Second body with more Brave analysis.'],
+        snippets: [
+          'First body about Brave release details.',
+          'Second body with more Brave analysis.',
+        ],
       },
     ]);
   });

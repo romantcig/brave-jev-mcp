@@ -66,8 +66,13 @@ export const execute = async (params: QueryParams) => {
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
   const payload = success
     ? withAdjustments(
-        filterLlmContext(data, { params: parsedParams, intent: params.intent }, filterConfig)
-          .result,
+        (
+          await filterLlmContext(
+            data,
+            { params: parsedParams, intent: params.intent },
+            filterConfig
+          )
+        ).result,
         raised
       )
     : z.treeifyError(error);

@@ -8,11 +8,24 @@ import {
   summarizeOutput,
   trimToBudget,
 } from './budget.js';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { rebuildOutput } from './pipeline.js';
 import type { FilterConfig, SnippetRemovalReason, SourceDropReason } from './types.js';
 
-const unit: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
-const doubled: FilterConfig = { mode: 'off', overfetchFactor: 2, blocklist: new Set() };
+const unit: FilterConfig = {
+  mode: 'off',
+  overfetchFactor: 1,
+  blocklist: new Set(),
+  thresholds: { ...DEFAULT_THRESHOLDS },
+  jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+};
+const doubled: FilterConfig = {
+  mode: 'off',
+  overfetchFactor: 2,
+  blocklist: new Set(),
+  thresholds: { ...DEFAULT_THRESHOLDS },
+  jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+};
 
 describe('applyOverfetch', () => {
   it('returns the very same object when the factor is 1', () => {
@@ -25,9 +38,8 @@ describe('applyOverfetch', () => {
     const params = { query: 'q', maximum_number_of_urls: 5, maximum_number_of_tokens: 4001 };
 
     const result = applyOverfetch(params, {
-      mode: 'off',
+      ...unit,
       overfetchFactor: 1.5,
-      blocklist: new Set(),
     });
 
     assert.equal(result.maximum_number_of_urls, 7);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { DEFAULT_BLOCKLIST } from './blocklist.js';
 import { parseFilterConfig } from './config.js';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 
 describe('parseFilterConfig', () => {
   it('defaults to off with factor 1 when nothing is set', () => {
@@ -9,6 +10,8 @@ describe('parseFilterConfig', () => {
       mode: 'off',
       overfetchFactor: 1,
       blocklist: new Set(),
+      thresholds: { ...DEFAULT_THRESHOLDS },
+      jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
     });
   });
 
@@ -46,6 +49,43 @@ describe('parseFilterConfig', () => {
     assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '' }).overfetchFactor, 1);
     assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '-3' }).overfetchFactor, 1);
     assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: 'Infinity' }).overfetchFactor, 1);
+  });
+
+  it('falls back to the pinned model for an empty or whitespace model value', () => {
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_MODEL: '' }).jev.model, 'jev-1.13.0');
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_MODEL: '   ' }).jev.model, 'jev-1.13.0');
+    assert.equal(parseFilterConfig({}).jev.model, 'jev-1.13.0');
+  });
+
+  it('trims a custom model value', () => {
+    assert.equal(
+      parseFilterConfig({ JEV_FILTER_JEV_MODEL: ' jev-1.14.0 ' }).jev.model,
+      'jev-1.14.0'
+    );
+  });
+
+  it('falls back to the typesafe backend for values outside the backend set (JEV-01)', () => {
+    assert.equal(
+      parseFilterConfig({ JEV_FILTER_JEV_BACKEND: 'openrouter' }).jev.backend,
+      'typesafe'
+    );
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_BACKEND: '' }).jev.backend, 'typesafe');
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_BACKEND: 'typesafe' }).jev.backend, 'typesafe');
+  });
+
+  it('falls back to the 15000ms timeout for non-numeric or sub-1 values', () => {
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: 'abc' }).jev.timeoutMs, 15000);
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '-5' }).jev.timeoutMs, 15000);
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '0' }).jev.timeoutMs, 15000);
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '' }).jev.timeoutMs, 15000);
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '30000' }).jev.timeoutMs, 30000);
+  });
+
+  it('falls back to the concurrency gate value of 12 for non-numeric or sub-1 values', () => {
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: '0' }).jev.concurrency, 12);
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: 'abc' }).jev.concurrency, 12);
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: '-2' }).jev.concurrency, 12);
+    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: '6' }).jev.concurrency, 6);
   });
 
   it('is a pure function: the same env yields deep-equal results', () => {

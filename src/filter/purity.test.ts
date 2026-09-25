@@ -11,7 +11,10 @@ const isLibrarySource = (file: string): boolean =>
   file.endsWith('.ts') && !file.endsWith('.test.ts') && !file.endsWith('.d.ts');
 
 const listLibrarySources = (): string[] =>
-  (readdirSync(libraryDir, { recursive: true }) as string[]).filter(isLibrarySource).sort();
+  (readdirSync(libraryDir, { recursive: true }) as string[])
+    .map((entry) => entry.split('\\').join('/'))
+    .filter(isLibrarySource)
+    .sort();
 
 describe('src/filter purity', () => {
   const files = listLibrarySources();
@@ -25,20 +28,24 @@ describe('src/filter purity', () => {
     describe(file, () => {
       const src = readFileSync(join(libraryDir, file), 'utf8');
 
+      // 纯度门禁按深度分级（02-02）：src/filter/ 顶层文件禁一切 `../`（任何向上
+      // 都逃出库边界）；src/filter/jev/ 子目录允许一级向上（`../types.js` 导入库
+      // 内兄弟模块），禁 `../../`（逃出库边界即拦）。
+      const nested = file.includes('/');
+      const staticImportRe = nested
+        ? /(?:^|[\s;{(])import[^\n]*?from\s*['"][^'"]*\.\.\/\.\.\//m
+        : /(?:^|[\s;{(])import[^\n]*?from\s*['"][^'"]*\.\.\//m;
+      const fromRe = nested ? /\bfrom\s*['"][^'"]*\.\.\/\.\.\// : /\bfrom\s*['"][^'"]*\.\.\//;
+
       it('does not import the MCP SDK', () => {
         // 正则拆成两段写：验证配方对整个 src/filter 目录 grep 这个包名，本测试文件自己不能命中
         assert.doesNotMatch(src, /@modelcontext(?:protocol)/, `${file} imports the MCP SDK`);
       });
 
       it('does not statically import a host module', () => {
-        // src/filter/ 不在 src/ 根下：任何 `../` 都落在宿主目录，白名单为空、不枚举文件名
-        assert.doesNotMatch(
-          src,
-          /(?:^|[\s;{(])import[^\n]*?from\s*['"][^'"]*\.\.\//m,
-          `${file} imports a host module`
-        );
+        assert.doesNotMatch(src, staticImportRe, `${file} imports a host module`);
         // 多行 import / export … from 也要拦：只看 from 子句
-        assert.doesNotMatch(src, /\bfrom\s*['"][^'"]*\.\.\//, `${file} imports a host module`);
+        assert.doesNotMatch(src, fromRe, `${file} imports a host module`);
       });
 
       it('does not dynamically import a host module', () => {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { filterLlmContext } from './pipeline.js';
 import type { BraveLlmContextResponse, FilterConfig } from './types.js';
 import {
@@ -294,7 +295,13 @@ describe('mergeByCanonicalUrl', () => {
 });
 
 describe('filterLlmContext step 2', () => {
-  const offConfig: FilterConfig = { mode: 'off', overfetchFactor: 1, blocklist: new Set() };
+  const offConfig: FilterConfig = {
+    mode: 'off',
+    overfetchFactor: 1,
+    blocklist: new Set(),
+    thresholds: { ...DEFAULT_THRESHOLDS },
+    jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+  };
   const request = { params: { query: 'jev release' }, intent: 'What TypeSafe released' };
 
   const FIRST = 'https://example.com/jev';
@@ -322,8 +329,8 @@ describe('filterLlmContext step 2', () => {
     },
   });
 
-  it('outputs the merged source under its original Brave URL', () => {
-    const { result } = filterLlmContext(payload(), request, offConfig);
+  it('outputs the merged source under its original Brave URL', async () => {
+    const { result } = await filterLlmContext(payload(), request, offConfig);
 
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
@@ -338,8 +345,8 @@ describe('filterLlmContext step 2', () => {
     assert.deepEqual(result.sources[FIRST], { title: 'Jev', hostname: 'example.com' });
   });
 
-  it('records the merge in stats without counting it as a duplicate', () => {
-    const { stats } = filterLlmContext(payload(), request, offConfig);
+  it('records the merge in stats without counting it as a duplicate', async () => {
+    const { stats } = await filterLlmContext(payload(), request, offConfig);
 
     assert.equal(stats.local.url_merged, 1);
     assert.equal(stats.local.dup_removed, 0);
