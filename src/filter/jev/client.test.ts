@@ -639,3 +639,296 @@ describe('createJevClassifier', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 传输兜底·重试（02-05 Task 2，SAFE-03）：白名单只有 429 / 529 / fetch 网络异常
+// （3 次尝试、退避 500ms 起倍率 2 封顶 4s）；401 / 422 绝不重试（Pitfall 7）。
+// 时钟注入 hooks：sleep 记录时长做下限断言，不在测试里真等。
+// ---------------------------------------------------------------------------
+
+describe('createJevClassifier retry (SAFE-03)', () => {
+  const state = buildState('s0', 'https://a.example/', 'Title', ['one'], 'q', 'i');
+  const request = { state, questions: buildQuestions(1) };
+
+  /** 桩：按脚本逐次返回（脚本耗尽后重复末项）；计次。 */
+  const scriptedFetch = (responses: Array<() => Response | Promise<Response>>): typeof fetch => {
+    let call = 0;
+    return (async () => {
+      const step = responses[Math.min(call, responses.length - 1)];
+      call += 1;
+      return await step();
+    }) as typeof fetch;
+  };
+
+  it('retries 429 twice and answers on the third attempt', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => {
+        fetchCount += 1;
+        return new Response('rate limited', { status: 429 });
+      },
+      () => {
+        fetchCount += 1;
+        return new Response('rate limited', { status: 429 });
+      },
+      () => {
+        fetchCount += 1;
+        return okResponseOf(defaultRecording.results['s0']);
+      },
+    ]);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.equal(fetchCount, 3);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('exhausts three attempts against persistent 429 and fails with rate_limited', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => {
+        fetchCount += 1;
+        return new Response('rate limited', { status: 429 });
+      },
+    ]);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'rate_limited');
+      assert.equal(fetchCount, 3);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('treats 529 like 429: retries three attempts then fails with rate_limited', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => {
+        fetchCount += 1;
+        return new Response('overloaded', { status: 529 });
+      },
+    ]);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'rate_limited');
+      assert.equal(fetchCount, 3);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('retries network throws and answers on the third attempt', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => {
+        fetchCount += 1;
+        throw new Error('fetch failed');
+      },
+      () => {
+        fetchCount += 1;
+        throw new Error('fetch failed');
+      },
+      () => {
+        fetchCount += 1;
+        return okResponseOf(defaultRecording.results['s0']);
+      },
+    ]);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.equal(fetchCount, 3);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('never retries 422 — a validation failure would just 422 again (Pitfall 7)', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => {
+        fetchCount += 1;
+        return new Response('state too large', { status: 422 });
+      },
+    ]);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'validation',
+        detail: '422 state too large',
+      });
+      assert.equal(fetchCount, 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('backs off at least 500ms after the first failure and 1000ms after the second', async () => {
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => new Response('rate limited', { status: 429 }),
+    ]);
+    const sleeps: number[] = [];
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, {
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+      });
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'rate_limited');
+      assert.equal(sleeps.length, 2, `recorded sleeps: ${JSON.stringify(sleeps)}`);
+      assert.ok(sleeps[0] >= 500, `first backoff ${sleeps[0]} must be >= 500ms`);
+      assert.ok(sleeps[1] >= 1000, `second backoff ${sleeps[1]} must be >= 1000ms`);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 传输兜底·超限阶梯（02-05 Task 2，JEV-05）：发送前 estimateTokens 加 15% 余量对
+// 两条限额做保护；超限按砍尾片段 → 去片段级题 → 不问 Jev 阶梯降级，级别名记
+// answered outcome 的 ladder。估算全部走 ../tokens.js 的 estimateTokens。
+// ---------------------------------------------------------------------------
+
+describe('createJevClassifier oversize ladder (JEV-05)', () => {
+  it('cuts tail snippets and their snip questions when the 32k limit is exceeded (cut_tail)', async () => {
+    // 尾片段 34000 个词 ≈ 34000 tokens：(estState + max estQ) × 1.15 远超 32000，
+    // 砍掉尾部大片段后余下 4 个小片段满足限额
+    const big = 'word '.repeat(34000);
+    const bigState = buildState('s0', 'https://a.example/', 'Title', [
+      'small one.',
+      'small two.',
+      'small three.',
+      'small four.',
+      big,
+    ], 'q', 'i');
+    let capturedBody:
+      | { state: { source: { snippets: string[] } }; questions: Record<string, unknown> }
+      | undefined;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body));
+      return okResponseOf(defaultRecording.results['s0']);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify({
+        state: bigState,
+        questions: buildQuestions(5),
+      });
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.equal(outcome.ladder, 'cut_tail');
+      assert.ok(capturedBody, 'fetch must have been called');
+      assert.equal(
+        capturedBody.state.source.snippets.length,
+        4,
+        'the oversized tail snippet must be cut'
+      );
+      assert.equal(Object.hasOwn(capturedBody.questions, 'snip4'), false);
+      assert.ok(Object.hasOwn(capturedBody.questions, 'snip3'));
+      assert.ok(Object.hasOwn(capturedBody.questions, 'is_off_topic'));
+      assert.deepEqual(bigState.source.snippets.length, 5, 'input state must not be mutated');
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('drops all snippet questions when the 64k limit is exceeded (source_only_questions)', async () => {
+    // 500 个小片段：单题很小（32k 不超），片段题总和 × 1.15 超 64000 → 去掉全部
+    // snip 题（来源级十题保留、state 片段保留）
+    const snippets = Array.from({ length: 500 }, (_, i) => `small snippet ${i}.`);
+    const wideState = buildState('s0', 'https://a.example/', 'Title', snippets, 'q', 'i');
+    let capturedBody:
+      | { state: { source: { snippets: string[] } }; questions: Record<string, unknown> }
+      | undefined;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body));
+      return okResponseOf(defaultRecording.results['s0']);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify({
+        state: wideState,
+        questions: buildQuestions(500),
+      });
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.equal(outcome.ladder, 'source_only_questions');
+      assert.ok(capturedBody, 'fetch must have been called');
+      assert.equal(
+        Object.keys(capturedBody.questions).length,
+        10,
+        'only the ten source-level questions remain'
+      );
+      assert.equal(
+        Object.hasOwn(capturedBody.questions, 'snip0'),
+        false,
+        'all snip questions must be dropped'
+      );
+      assert.equal(capturedBody.state.source.snippets.length, 500, 'state snippets are kept');
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('skips the source entirely when even source-level questions exceed 32k (too_large)', async () => {
+    // title 200000 个连续字母 ≈ 33334 tokens：砍光片段后 state 本身仍超 32k →
+    // 不发请求，failed too_large
+    const hugeTitle = 't'.repeat(200000);
+    const hugeState = buildState('s0', 'https://a.example/', hugeTitle, ['x'], 'q', 'i');
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return okResponseOf(defaultRecording.results['s0']);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify({
+        state: hugeState,
+        questions: buildQuestions(1),
+      });
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'too_large');
+      assert.ok(outcome.detail !== undefined);
+      assert.equal(fetchCount, 0, 'an unshrinkable state must never hit the wire');
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+});
