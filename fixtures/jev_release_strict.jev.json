@@ -1,0 +1,1405 @@
+{
+ "intent": "What TypeSafe released with the Jev model and how it works",
+ "backend": "direct",
+ "model": "jev-1.13.0",
+ "thresholds": {
+  "off_topic_drop": 0.85,
+  "listing_drop": 0.8,
+  "self_deprecated": 0.7,
+  "stale_drop": 0.85,
+  "filler_drop": 0.8,
+  "reasoning_protect": 0.7,
+  "snippet_min": 1.0,
+  "min_facts": 4,
+  "novelty_min": 2,
+  "cjk_bonus": 0.1,
+  "cjk_share": 0.5
+ },
+ "questions": {
+  "worth_keeping": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` contains information or analysis about the subject of `query` that a reader pursuing `intent` would lose if this source were removed, beyond restating widely reported launch facts (funding, pricing, speed claims, founder background).",
+  "is_primary": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. The author of `source` is the company, person, or project that `query` is about (their own announcement, documentation, repository, or post).",
+  "has_original_reasoning": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` contains the author's own evaluation, criticism, comparison, or argument with stated reasons, not just reported claims.",
+  "is_attributed_rewrite": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. The specific facts in `source` are presented as coming from another outlet, bulletin, or the company's own materials (phrases like 'according to', 'as reported', 'official materials show'), with no facts the author obtained independently.",
+  "is_template_filler": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` mostly repeats the topic name and generic phrasing without specific facts, or reads like a template article assembled from headlines.",
+  "is_off_topic": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` is not about the subject of `query`.",
+  "is_listing": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` is a list of several independent articles (titles, dates, or links), not the body of a single article.",
+  "self_deprecated": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` states that it is deprecated, archived, superseded by another tool or document, or no longer maintained.",
+  "stale": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` shows code or configuration written for an older approach than the version and mechanism named in `intent`, without also showing the current approach.",
+  "paywalled": "Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise. `source` states that the rest of its content requires payment or a subscription to read."
+ },
+ "levels": [
+  "Navigation, metadata, boilerplate, or unrelated to `query`",
+  "Mentions the subject of `query` but adds no specific information",
+  "States specific information or analysis that directly serves `intent`"
+ ],
+ "results": {
+  "s0": {
+   "url": "https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711",
+   "http": 200,
+   "latency_s": 1.14,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.76
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.17
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.33
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.35
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.16
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.15
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.02
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.08
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.08
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.82,
+      "confidence": 0.73,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.02,
+       "1": 0.13,
+       "2": 0.85
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.99,
+      "confidence": 0.98,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.01,
+       "2": 0.99
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 1.43,
+      "confidence": 0.14,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.07,
+       "1": 0.42,
+       "2": 0.51
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1505,
+     "output_tokens": 235
+    }
+   }
+  },
+  "s1": {
+   "url": "https://www.heise.de/en/news/AI-model-Jev-to-make-machines-decide-faster-11457071.html",
+   "http": 200,
+   "latency_s": 1.06,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.77
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.1
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.18
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.29
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.15
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "snip0": {
+      "type": "score",
+      "score": 2.0,
+      "confidence": 1.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.37,
+      "confidence": 0.06,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.11,
+       "1": 0.42,
+       "2": 0.47
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1421,
+     "output_tokens": 220
+    }
+   }
+  },
+  "s2": {
+   "url": "https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude",
+   "http": 200,
+   "latency_s": 1.05,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.64
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.33
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.52
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.37
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.25
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.13
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.98,
+      "confidence": 0.98,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.01,
+       "2": 0.99
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.43,
+      "confidence": 0.15,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.11,
+       "1": 0.36,
+       "2": 0.53
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 1.77,
+      "confidence": 0.66,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.03,
+       "1": 0.16,
+       "2": 0.81
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1547,
+     "output_tokens": 235
+    }
+   }
+  },
+  "s3": {
+   "url": "https://aiwiki.ai/wiki/typesafe_ai",
+   "http": 200,
+   "latency_s": 1.12,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.61
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.23
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.65
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.72
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.19
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.11
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.93,
+      "confidence": 0.89,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.07,
+       "2": 0.93
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.06,
+      "confidence": 0.56,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.12,
+       "1": 0.7,
+       "2": 0.18
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 1.82,
+      "confidence": 0.73,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.15,
+       "2": 0.84
+      }
+     },
+     "snip3": {
+      "type": "score",
+      "score": 1.62,
+      "confidence": 0.42,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.09,
+       "1": 0.2,
+       "2": 0.71
+      }
+     },
+     "snip4": {
+      "type": "score",
+      "score": 1.37,
+      "confidence": 0.05,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.21,
+       "1": 0.21,
+       "2": 0.58
+      }
+     },
+     "snip5": {
+      "type": "score",
+      "score": 1.0,
+      "confidence": 0.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.38,
+       "1": 0.24,
+       "2": 0.38
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 2312,
+     "output_tokens": 280
+    }
+   }
+  },
+  "s4": {
+   "url": "https://www.explainx.ai/blog/typesafe-ai-jev-system-one-models-launch-2026",
+   "http": 200,
+   "latency_s": 1.05,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.84
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.39
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.79
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.4
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.11
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.08
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.98,
+      "confidence": 0.97,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.02,
+       "2": 0.98
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 2.0,
+      "confidence": 1.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 2.0,
+      "confidence": 1.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     },
+     "snip3": {
+      "type": "score",
+      "score": 1.54,
+      "confidence": 0.3,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.09,
+       "1": 0.29,
+       "2": 0.62
+      }
+     },
+     "snip4": {
+      "type": "score",
+      "score": 1.96,
+      "confidence": 0.93,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.03,
+       "2": 0.96
+      }
+     },
+     "snip5": {
+      "type": "score",
+      "score": 1.96,
+      "confidence": 0.94,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.03,
+       "2": 0.96
+      }
+     },
+     "snip6": {
+      "type": "score",
+      "score": 1.88,
+      "confidence": 0.82,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.03,
+       "1": 0.06,
+       "2": 0.91
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 2432,
+     "output_tokens": 295
+    }
+   }
+  },
+  "s5": {
+   "url": "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/",
+   "http": 200,
+   "latency_s": 1.16,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.85
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.3
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.92
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.38
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.11
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.05
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.81,
+      "confidence": 0.71,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.04,
+       "1": 0.11,
+       "2": 0.85
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.92,
+      "confidence": 0.88,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.06,
+       "2": 0.93
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 1.99,
+      "confidence": 0.99,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     },
+     "snip3": {
+      "type": "score",
+      "score": 1.93,
+      "confidence": 0.89,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.02,
+       "1": 0.03,
+       "2": 0.95
+      }
+     },
+     "snip4": {
+      "type": "score",
+      "score": 1.82,
+      "confidence": 0.73,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.05,
+       "1": 0.07,
+       "2": 0.88
+      }
+     },
+     "snip5": {
+      "type": "score",
+      "score": 1.53,
+      "confidence": 0.3,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.13,
+       "1": 0.21,
+       "2": 0.66
+      }
+     },
+     "snip6": {
+      "type": "score",
+      "score": 1.54,
+      "confidence": 0.31,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.12,
+       "1": 0.23,
+       "2": 0.65
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 2346,
+     "output_tokens": 295
+    }
+   }
+  },
+  "s6": {
+   "url": "https://www.datacamp.com/blog/system-one-models-jev",
+   "http": 200,
+   "latency_s": 1.06,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.83
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.26
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.37
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.4
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.18
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.02
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.09
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.05
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.99,
+      "confidence": 0.99,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.01,
+       "2": 0.99
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 2.0,
+      "confidence": 1.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 1.84,
+      "confidence": 0.76,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.02,
+       "1": 0.12,
+       "2": 0.86
+      }
+     },
+     "snip3": {
+      "type": "score",
+      "score": 1.42,
+      "confidence": 0.13,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.17,
+       "1": 0.25,
+       "2": 0.58
+      }
+     },
+     "snip4": {
+      "type": "score",
+      "score": 1.86,
+      "confidence": 0.79,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.11,
+       "2": 0.88
+      }
+     },
+     "snip5": {
+      "type": "score",
+      "score": 1.87,
+      "confidence": 0.81,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.11,
+       "2": 0.88
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 2116,
+     "output_tokens": 280
+    }
+   }
+  },
+  "s7": {
+   "url": "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude",
+   "http": 200,
+   "latency_s": 1.03,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.77
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.34
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.49
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.48
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.15
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.24
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.02
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "snip0": {
+      "type": "score",
+      "score": 2.0,
+      "confidence": 1.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 2.0,
+      "confidence": 0.99,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1433,
+     "output_tokens": 220
+    }
+   }
+  },
+  "s8": {
+   "url": "https://typesafe.ai/blog/introducing-system-one-models-and-jev",
+   "http": 200,
+   "latency_s": 1.06,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.85
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.81
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.6
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.28
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.16
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.08
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.05
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.36,
+      "confidence": 0.4,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.02,
+       "1": 0.6,
+       "2": 0.38
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.98,
+      "confidence": 0.96,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.02,
+       "2": 0.98
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 2.0,
+      "confidence": 1.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.0,
+       "2": 1.0
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1549,
+     "output_tokens": 235
+    }
+   }
+  },
+  "s9": {
+   "url": "https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch",
+   "http": 200,
+   "latency_s": 1.02,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.83
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.16
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.12
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.76
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.22
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.16
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.99,
+      "confidence": 0.98,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.01,
+       "2": 0.99
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.27,
+      "confidence": 0.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.21,
+       "1": 0.3,
+       "2": 0.49
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 1.96,
+      "confidence": 0.94,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.02,
+       "2": 0.97
+      }
+     },
+     "snip3": {
+      "type": "score",
+      "score": 1.92,
+      "confidence": 0.88,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.03,
+       "1": 0.03,
+       "2": 0.94
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1645,
+     "output_tokens": 250
+    }
+   }
+  },
+  "s10": {
+   "url": "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/",
+   "http": 200,
+   "latency_s": 1.03,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.82
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.33
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.2
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.44
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.47
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.04
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.42
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.02
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.06
+     },
+     "snip0": {
+      "type": "score",
+      "score": 0.4,
+      "confidence": 0.39,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.62,
+       "1": 0.35,
+       "2": 0.03
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.18,
+      "confidence": 0.0,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.23,
+       "1": 0.37,
+       "2": 0.39999999999999997
+      }
+     },
+     "snip2": {
+      "type": "score",
+      "score": 0.57,
+      "confidence": 0.14,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.59,
+       "1": 0.26,
+       "2": 0.15
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1601,
+     "output_tokens": 235
+    }
+   }
+  },
+  "s11": {
+   "url": "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software",
+   "http": 200,
+   "latency_s": 1.03,
+   "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+     "worth_keeping": {
+      "type": "noul",
+      "noul": 0.45
+     },
+     "is_primary": {
+      "type": "noul",
+      "noul": 0.47
+     },
+     "has_original_reasoning": {
+      "type": "noul",
+      "noul": 0.13
+     },
+     "is_attributed_rewrite": {
+      "type": "noul",
+      "noul": 0.34
+     },
+     "is_template_filler": {
+      "type": "noul",
+      "noul": 0.63
+     },
+     "is_off_topic": {
+      "type": "noul",
+      "noul": 0.04
+     },
+     "is_listing": {
+      "type": "noul",
+      "noul": 0.25
+     },
+     "self_deprecated": {
+      "type": "noul",
+      "noul": 0.03
+     },
+     "stale": {
+      "type": "noul",
+      "noul": 0.07
+     },
+     "paywalled": {
+      "type": "noul",
+      "noul": 0.1
+     },
+     "snip0": {
+      "type": "score",
+      "score": 1.52,
+      "confidence": 0.27,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.01,
+       "1": 0.47,
+       "2": 0.52
+      }
+     },
+     "snip1": {
+      "type": "score",
+      "score": 1.94,
+      "confidence": 0.91,
+      "legend": {
+       "0": "Navigation, metadata, boilerplate, or unrelated to `query`",
+       "1": "Mentions the subject of `query` but adds no specific information",
+       "2": "States specific information or analysis that directly serves `intent`"
+      },
+      "probabilities": {
+       "0": 0.0,
+       "1": 0.06,
+       "2": 0.94
+      }
+     }
+    },
+    "usage": {
+     "input_tokens": 1276,
+     "output_tokens": 220
+    }
+   }
+  }
+ }
+}

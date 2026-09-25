@@ -7,6 +7,7 @@ OpenRouter / Vercel 网关通道已于 2026-09-24 退役（见 notes/decisions-l
 题库与阈值集中在 SOURCE_QUESTIONS / THRESHOLDS，改策略只改这里。
 """
 import json, subprocess, sys, time, urllib.request
+from pathlib import Path
 
 import os
 URL = "https://api.typesafe.ai/v1/systemone"; MODEL = "jev-1.13.0"; BOOL = "noul"
