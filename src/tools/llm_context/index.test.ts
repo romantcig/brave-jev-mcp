@@ -9,6 +9,10 @@ const FILTER_ENV_VARS = [
   'JEV_FILTER_MODE',
   'JEV_FILTER_OVERFETCH_FACTOR',
   'JEV_FILTER_TOOL_DESCRIPTION_FILE',
+  'JEV_FILTER_JEV_MODEL',
+  'JEV_FILTER_JEV_BACKEND',
+  'JEV_FILTER_JEV_TIMEOUT_MS',
+  'JEV_FILTER_JEV_CONCURRENCY',
 ] as const;
 
 // 声明白名单：补丁脚本 KEEP_PARAMS 逐字；再加必填 intent
@@ -182,6 +186,68 @@ describe(`${name} (missing intent)`, () => {
     assert.equal(result.isError, true);
     assert.match(JSON.stringify(result.content), /intent/);
     assert.equal(calls, 0);
+  });
+});
+
+describe(`${name} (no jev key, mode on)`, () => {
+  useIsolatedFilterEnv();
+
+  let calls = 0;
+
+  const getClient = useTestClient((url) => {
+    if (url.pathname === '/res/v1/llm/context') {
+      calls++;
+      return braveResponse;
+    }
+  });
+
+  it('treats a missing key as off: normal result, one stderr line, zero Jev traffic', async () => {
+    // key 变量不在 FILTER_ENV_VARS 名单（全局约定名），本用例内单独装卸：
+    // Windows 的 process.env 大小写不敏感，delete 覆盖本机 shell 的 JEV_API_KEY
+    const savedKeys: Array<[string, string | undefined]> = ['jev_API_KEY', 'TYPESAFE_API_KEY'].map(
+      (key) => [key, process.env[key]]
+    );
+    for (const [key] of savedKeys) delete process.env[key];
+    process.env.JEV_FILTER_MODE = 'on';
+
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+
+    try {
+      const result = await getClient().callTool({
+        name,
+        arguments: {
+          query: 'brave browser',
+          intent: 'What Brave Search is and how it differs from other engines',
+        },
+      });
+
+      // 输出正常（no_key 等价 off：本地规则对夹具零删减，stats.jev 由管道记 no_key
+      // 零值对象——pipeline.test.ts 的未注入 classify 用例已锁该记账）
+      assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+      const payload = JSON.parse((result.content as { text: string }[])[0].text);
+      assert.deepEqual(payload.grounding.generic, braveResponse.grounding.generic);
+
+      // 一行带 [jev-filter] 前缀的 stderr 说明
+      assert.equal(errors.length, 1, `expected exactly one stderr line, got ${errors.length}`);
+      assert.ok(
+        errors[0].some((arg) => String(arg).includes('[jev-filter]')),
+        JSON.stringify(errors[0])
+      );
+
+      // 只有 Brave 一次调用——桩对 Jev 端点未 mock，任何 Jev 出站请求都会抛错失败
+      assert.equal(calls, 1);
+    } finally {
+      console.error = originalError;
+      delete process.env.JEV_FILTER_MODE;
+      for (const [key, value] of savedKeys) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 

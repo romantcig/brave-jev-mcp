@@ -16,12 +16,14 @@ export {
   type WithAdjustments,
 } from './clamp.js';
 export { parseFilterConfig } from './config.js';
+export { createJevClassifier, hasJevKey } from './jev/client.js';
 export { resolveToolDescription } from './description.js';
 export { filterLlmContext, trimSourceMeta } from './pipeline.js';
 export { createFilterStats, zeroLocal } from './stats.js';
 export type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,
+  ClassifyDeps,
   FilterConfig,
   FilterDeps,
   FilteredResponse,

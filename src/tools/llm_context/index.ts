@@ -12,12 +12,15 @@ import { LlmContextSearchApiResponseSchema } from './schemas/output.js';
 import {
   applyMinimumValues,
   applyOverfetch,
+  createJevClassifier,
   filterLlmContext,
+  hasJevKey,
   logRaisedToStderr,
   parseFilterConfig,
   resolveToolDescription,
   withAdjustments,
 } from '../../filter/index.js';
+import type { ClassifyDeps, FilterConfig, FilterDeps } from '../../filter/index.js';
 
 export const name = 'brave_llm_context';
 
@@ -55,6 +58,24 @@ export const description = `
     When relaying results, cite the source URLs from the "sources" map.
 `.trim();
 
+// 进程级 Jev 分类器惰性单例（A13）：熔断计数与并发闸住 createJevClassifier 闭包，
+// 跨请求复用——库自身无模块级可变状态（stats.ts 不变式）。mode 为 off 时不创建、
+// 不读 key；mode 非 off 且 key 缺失时按等价 off 处理（EMBED-05：stderr 一行、
+// 不传 deps，管道记 no_key 零请求），实例只在 key 可用时创建。
+let jevClassifier: ClassifyDeps | undefined;
+
+const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
+  if (config.mode === 'off') return undefined;
+  if (!hasJevKey(process.env)) {
+    console.error(
+      '[jev-filter] No Jev API key found (jev_API_KEY / TYPESAFE_API_KEY); treating Jev filtering as off.'
+    );
+    return undefined;
+  }
+  jevClassifier ??= createJevClassifier(config.jev, process.env);
+  return { classify: jevClassifier.classify };
+};
+
 export const execute = async (params: QueryParams) => {
   const { adjusted, raised } = applyMinimumValues(params);
   const parsedParams = RequestParamsSchema.parse(adjusted);
@@ -70,7 +91,8 @@ export const execute = async (params: QueryParams) => {
           await filterLlmContext(
             data,
             { params: parsedParams, intent: params.intent },
-            filterConfig
+            filterConfig,
+            jevDepsFor(filterConfig)
           )
         ).result,
         raised

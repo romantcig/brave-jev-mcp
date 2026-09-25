@@ -21,7 +21,7 @@ import type {
   FilterConfig,
   FilterRequest,
 } from '../types.js';
-import { buildRequest } from './client.js';
+import { buildRequest, createJevClassifier, hasJevKey, JEVI_ENDPOINT } from './client.js';
 import { parseJevResponse } from './client.js';
 import { DEFAULT_JEV_MODEL, SOURCE_QUESTIONS, buildQuestions, buildState } from './questions.js';
 
@@ -386,5 +386,256 @@ describe('empty response with classify injected (VERDICT-06)', () => {
     assert.deepEqual(result, { grounding: { generic: [], map: [] }, sources: {} });
     assert.equal(stats.jev?.n_requests, 0);
     assert.deepEqual(stats.jev?.per_source, []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 传输兜底（02-05 Task 1）：globalThis.fetch 桩（装卸纪律照 mcpTestHarness 26-46）
+// ——零网络验证请求形状、状态码映射、key 语义与进程级并发闸。
+// ---------------------------------------------------------------------------
+
+/** createJevClassifier 的入参 config（02-02 config 解析的同形状字面量）。 */
+const jevConfig = {
+  model: DEFAULT_JEV_MODEL,
+  backend: 'typesafe' as const,
+  timeoutMs: 15000,
+  concurrency: 12,
+};
+
+/** 轮询直到条件成立（并发闸用例的挂起计数同步）；超时失败。 */
+const waitFor = async (condition: () => boolean, timeoutMs = 2000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(condition(), 'waitFor condition not met before deadline');
+};
+
+/** 200 响应体：default 夹具 s0 的真实形状（含十来源级题答案与 snip0..N）。 */
+const okResponseOf = (entry: { response: unknown }): Response =>
+  new Response(JSON.stringify(entry.response), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+
+describe('hasJevKey', () => {
+  it('accepts either probe-script variable name with a non-blank value (A9 order names)', () => {
+    assert.equal(hasJevKey({}), false);
+    assert.equal(hasJevKey({ jev_API_KEY: '' }), false);
+    assert.equal(hasJevKey({ jev_API_KEY: '   ' }), false);
+    assert.equal(hasJevKey({ TYPESAFE_API_KEY: '' }), false);
+    assert.equal(hasJevKey({ jev_API_KEY: 'k' }), true);
+    assert.equal(hasJevKey({ TYPESAFE_API_KEY: 'k' }), true);
+    assert.equal(hasJevKey({ jev_API_KEY: undefined, TYPESAFE_API_KEY: 'k' }), true);
+  });
+});
+
+describe('createJevClassifier', () => {
+  const state = buildState('s0', 'https://a.example/', 'Title', ['one', 'two'], 'q', 'i');
+
+  it('sends the pinned request shape to the single endpoint with the bearer header', async () => {
+    const entry = defaultRecording.results['s0'];
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input instanceof Request ? input.url : input);
+      capturedInit = init;
+      return okResponseOf(entry);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'probe-order-key' });
+      const questions = buildQuestions(2);
+      const outcome = await classifier.classify({ state, questions });
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.equal(outcome.model, 'jev-1.13.0');
+      assert.equal(outcome.input_tokens, entry.response.usage.input_tokens);
+      assert.equal(outcome.answers['worth_keeping']?.kind, 'noul');
+
+      assert.equal(capturedUrl, JEVI_ENDPOINT);
+      assert.equal(capturedInit?.method, 'POST');
+      const headers = capturedInit?.headers as Record<string, string>;
+      assert.equal(headers['Authorization'], 'Bearer probe-order-key');
+      assert.equal(headers['Content-Type'], 'application/json');
+      assert.ok(capturedInit?.signal instanceof AbortSignal, 'must pass an abort signal');
+      const body = JSON.parse(String(capturedInit?.body)) as {
+        model: string;
+        state: unknown;
+        questions: Record<string, unknown>;
+      };
+      assert.equal(body.model, DEFAULT_JEV_MODEL);
+      assert.deepEqual(body.state, state);
+      assert.equal(Object.keys(body.questions).length, 12);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('maps 401 to auth failure with exactly one fetch attempt', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return new Response('unauthorized', { status: 401 });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify({
+        state,
+        questions: buildQuestions(0),
+      });
+
+      assert.deepEqual(outcome, { status: 'failed', kind: 'auth', detail: '401 unauthorized' });
+      assert.equal(fetchCount, 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('maps an AbortError throw to timeout', async () => {
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new DOMException('This operation was aborted', 'AbortError');
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify({
+        state,
+        questions: buildQuestions(0),
+      });
+
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'timeout',
+        detail: 'This operation was aborted',
+      });
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('maps a generic throw to network', async () => {
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error('fetch failed');
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify({
+        state,
+        questions: buildQuestions(0),
+      });
+
+      assert.deepEqual(outcome, { status: 'failed', kind: 'network', detail: 'fetch failed' });
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('never leaks the key or auth header through failure details (T-02-05-1)', async () => {
+    let capturedAuth = '';
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedAuth = (init?.headers as Record<string, string>)['Authorization'];
+      return new Response('rate limited', { status: 429 });
+    }) as typeof fetch;
+
+    try {
+      const key = 'sk-super-secret-test-key-42';
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: key });
+      const outcome = await classifier.classify({
+        state,
+        questions: buildQuestions(0),
+      });
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'rate_limited');
+      assert.ok(outcome.detail !== undefined, 'HTTP failure must carry a detail');
+      // 头只在请求构造处拼接，值正确
+      assert.equal(capturedAuth, `Bearer ${key}`);
+      // detail 无 key 值、无鉴权头关键字
+      assert.equal(outcome.detail.includes(key), false, `detail leaked key: ${outcome.detail}`);
+      assert.match(outcome.detail, /^429 /);
+      assert.equal(/bearer/i.test(outcome.detail), false);
+      assert.equal(/authorization/i.test(outcome.detail), false);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('reads the key in probe-script order: jev_API_KEY first, then TYPESAFE_API_KEY', async () => {
+    const authOf = async (env: Record<string, string | undefined>): Promise<string> => {
+      let captured = '';
+      const saved = globalThis.fetch;
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        captured = (init?.headers as Record<string, string>)['Authorization'];
+        return okResponseOf(defaultRecording.results['s0']);
+      }) as typeof fetch;
+      try {
+        const classifier = createJevClassifier(jevConfig, env);
+        await classifier.classify({ state, questions: buildQuestions(0) });
+        return captured;
+      } finally {
+        globalThis.fetch = saved;
+      }
+    };
+
+    assert.equal(
+      await authOf({ jev_API_KEY: 'primary', TYPESAFE_API_KEY: 'fallback' }),
+      'Bearer primary'
+    );
+    assert.equal(await authOf({ TYPESAFE_API_KEY: 'fallback' }), 'Bearer fallback');
+  });
+
+  it('caps concurrent fetches at the configured limit and queues the rest (JEV-04)', async () => {
+    const entry = defaultRecording.results['s0'];
+    const responseBody = JSON.stringify(entry.response);
+    let inflight = 0;
+    let peak = 0;
+    const pending: Array<() => void> = [];
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      inflight += 1;
+      peak = Math.max(peak, inflight);
+      await new Promise<void>((resolve) => pending.push(resolve));
+      inflight -= 1;
+      return new Response(responseBody, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const questions = buildQuestions(1);
+      const request = { state, questions };
+
+      // 15 个并发提交：12 个立即进 fetch，3 个在闭包信号量上排队
+      const promises = Array.from({ length: 15 }, () => classifier.classify(request));
+      await waitFor(() => pending.length >= 12);
+      assert.ok(peak <= 12, `peak ${peak} must not exceed the limit 12`);
+      assert.equal(pending.length, 12, '12 admitted, 3 queued');
+
+      // 释放首批：名额释放后排队的 3 个补发
+      while (pending.length > 0) pending.shift()!();
+      await waitFor(() => pending.length >= 3);
+      assert.ok(peak <= 12, `peak ${peak} must still not exceed the limit 12`);
+
+      while (pending.length > 0) pending.shift()!();
+      const outcomes = await Promise.all(promises);
+      assert.equal(outcomes.length, 15);
+      for (const outcome of outcomes) {
+        assert.equal(outcome.status, 'answered', JSON.stringify(outcome));
+      }
+      assert.ok(peak <= 12, `final peak ${peak} must not exceed the limit 12`);
+      assert.ok(peak >= 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
   });
 });
