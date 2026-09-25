@@ -38,6 +38,7 @@ import {
   stripBoilerplateLines,
 } from './prefilter.js';
 import { buildQuestions, buildState, SOURCE_QUESTIONS } from './jev/questions.js';
+import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
@@ -452,12 +453,19 @@ export async function filterLlmContext(
   // 步 5 Jev 每源一次请求：off 模式跳过；on/shadow 注入 classify 后全候选一波并发
   // 派发（进程级并发闸住 02-05 的 createJevClassifier，管道编排层不持状态与限流）
   if (config.mode !== 'off' && deps?.classify !== undefined) {
-    await runJevStage(table, request, config, deps.classify, stats);
+    const judged = await runJevStage(table, request, config, deps.classify, stats);
+    if (config.mode === 'on') {
+      // 步 6 来源级裁决：固定顺序（off_topic → listing → self_deprecated → stale →
+      // filler），p >= 门槛 + CJK 加成即丢、命中即停；失败来源按"留"（SAFE-01）
+      applySourceVerdicts(table, judged, config.thresholds, stats);
+      // 步 7 前半：片段 score 删除（score < snippetMin 严格小于才删）
+      applySnippetScores(table, judged, config.thresholds, stats);
+    }
+    // shadow 模式的 would 层（拷贝表上跑完整 on 链只记 shadow_diff）：Task 2 填
+    // 步 7 后半片段级事实指纹新颖度：02-04 填（off 模式按 Brave 序播种）
   } else if (config.mode !== 'off') {
     stats.jev = createNoKeyJevStats();
   }
-  // 步 6 来源级裁决：02-03 填（固定顺序；失败来源按"留"，本计划只记账不应用）
-  // 步 7 片段级 score 与事实指纹新颖度：02-04 填（off 模式按 Brave 序播种，本阶段一律保留）
   dropEmptySources(table, stats, contentTerms(request.params.query)); // 步 8：空来源与一句话来源
   // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
   // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
@@ -523,6 +531,9 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidate[] => {
  *
  * `config` 在本计划只随签名占位（模型 / 超时 / 并发都由注入的 classify 实现自持，
  * 02-05 落地后其消费点在 createJevClassifier 入口），保留参数避免 02-05 再改签名。
+ *
+ * @returns 逐源 judged 结果映射（键 = src id `s{index}`，值 = per_source 行对象
+ * 引用）——步 6/7 的裁决消费入口；shadow 的 would 层共用同一映射。
  */
 const runJevStage = async (
   table: WorkSource[],
@@ -530,7 +541,7 @@ const runJevStage = async (
   config: FilterConfig,
   classify: ClassifyDeps['classify'],
   stats: FilterStats
-): Promise<void> => {
+): Promise<Map<string, JevPerSourceStats>> => {
   const jev: JevStats = {
     n_requests: 0,
     input_tokens: 0,
@@ -626,6 +637,7 @@ const runJevStage = async (
       ? 'degraded'
       : 'ok';
   stats.jev = jev;
+  return rows;
 };
 
 /**

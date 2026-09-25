@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import { createNoKeyJevStats } from './stats.js';
@@ -584,5 +588,221 @@ describe('trimSourceMeta', () => {
     assert.notEqual(first, second);
     assert.notEqual(first.age, meta.age);
     assert.deepEqual(meta, snapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// on 模式裁决端到端（02-03）：回放夹具驱动 + 合成 classify，步 6/7 前半接线、
+// 步 8 score 删光归 'empty'、幸存者 Brave 原序不变式
+// ---------------------------------------------------------------------------
+
+describe('on-mode verdicts end to end (replay fixture)', () => {
+  const fixtureRoot = fileURLToPath(new URL('../../fixtures/', import.meta.url));
+  const expectedRoot = join(fixtureRoot, 'expected');
+
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+  /** 三形状 Brave 夹具加载器（与 pipeline.fixtures.test.ts 同逻辑，不建 testUtils）。 */
+  const loadBraveData = (rel: string): BraveLlmContextResponse => {
+    const parsed: unknown = JSON.parse(readFileSync(join(fixtureRoot, rel), 'utf8'));
+    assert.ok(isRecord(parsed), `${rel} is not an object`);
+    if ('response' in parsed) return parsed.response as BraveLlmContextResponse;
+    return parsed as BraveLlmContextResponse;
+  };
+
+  /** 期望文件头三件套：query / intent / request 与录制口径一致（02-01 守卫镜像）。 */
+  const loadExpectedHeader = (
+    rel: string
+  ): { query: string; intent: string; request: Omit<FilterRequest, 'query'> } => {
+    const parsed: unknown = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8'));
+    assert.ok(isRecord(parsed), `${rel} is not an object`);
+    assert.equal(typeof parsed.query, 'string', `${rel} has no query`);
+    assert.equal(typeof parsed.intent, 'string', `${rel} has no intent`);
+    assert.ok(isRecord(parsed.request), `${rel} has no request`);
+    return {
+      query: parsed.query as string,
+      intent: parsed.intent as string,
+      request: parsed.request as Omit<FilterRequest, 'query'>,
+    };
+  };
+
+  /** 回放传输：按 state.source.id 取录制条目，200 走生产同一条 parseJevResponse。 */
+  const replay: ClassifyDeps['classify'] = async ({ state }) => {
+    const parsed: unknown = JSON.parse(
+      readFileSync(join(fixtureRoot, 'jev_release_default.jev.json'), 'utf8')
+    );
+    assert.ok(isRecord(parsed) && isRecord(parsed.results), 'recording has no results');
+    const results = parsed.results as Record<
+      string,
+      {
+        http: number;
+        response: { model: string; answers: unknown; usage: { input_tokens: number } };
+      }
+    >;
+    const entry = results[state.source.id];
+    if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
+    const parsedResponse = parseJevResponse(entry.http, JSON.stringify(entry.response));
+    return parsedResponse.ok
+      ? {
+          status: 'answered',
+          model: parsedResponse.model,
+          answers: parsedResponse.answers,
+          input_tokens: parsedResponse.input_tokens,
+        }
+      : { status: 'failed', kind: 'validation' };
+  };
+
+  const braveOrderIsSubsequence = (data: BraveLlmContextResponse, outputUrls: string[]) => {
+    const inputUrls = data.grounding.generic.map((item) => item.url);
+    let cursor = 0;
+    for (const url of outputUrls) {
+      const found = inputUrls.indexOf(url, cursor);
+      assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
+      cursor = found + 1;
+    }
+  };
+
+  it('keeps every source under the default thresholds and removes exactly the low-score snippets', async () => {
+    const data = loadBraveData('jev_release_default.json');
+    const expected = loadExpectedHeader('jev_release_default.off.json');
+    const fixtureRequest = {
+      params: { ...expected.request, query: expected.query },
+      intent: expected.intent,
+    };
+
+    const { result, stats } = await filterLlmContext(
+      data,
+      fixtureRequest,
+      { ...offConfig, mode: 'on' },
+      { classify: replay }
+    );
+
+    // 真实录好的答案全部低于五道门槛：12 源来源级 keep
+    const perSource = stats.jev?.per_source ?? [];
+    assert.equal(perSource.length, 12);
+    for (const row of perSource) {
+      assert.equal(row.status, 'answered', `${row.src} status`);
+      assert.equal(row.verdict, 'keep', `${row.src} verdict`);
+    }
+    // 幸存者保持 Brave 原序子序列
+    braveOrderIsSubsequence(
+      data,
+      result.grounding.generic.map((item) => item.url)
+    );
+    // score 删除计数与夹具 snippet_scores 推导一致（s8 4 + s9 4 + s10 2 = 10）
+    const derived = perSource.reduce(
+      (sum, row) =>
+        sum +
+        (row.snippet_scores ?? []).filter((score) => score < DEFAULT_THRESHOLDS.snippetMin).length,
+      0
+    );
+    const removed = stats.sources.reduce(
+      (sum, source) =>
+        sum +
+        source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'score').length,
+      0
+    );
+    assert.equal(removed, 10);
+    assert.equal(removed, derived);
+    // 没有来源被 score 删光：步 8 不产生 empty
+    assert.equal(stats.local.empty_dropped, 0);
+  });
+
+  it('drops every candidate as off_topic when the threshold is lowered and returns empty without refill', async () => {
+    const data = loadBraveData('jev_release_default.json');
+    const expected = loadExpectedHeader('jev_release_default.off.json');
+    const fixtureRequest = {
+      params: { ...expected.request, query: expected.query },
+      intent: expected.intent,
+    };
+    const config: FilterConfig = {
+      ...offConfig,
+      mode: 'on',
+      // default 夹具全部来源 CJK 占比 0、is_off_topic >= 0.02：门槛降到 0.01 后全部命中
+      thresholds: { ...DEFAULT_THRESHOLDS, offTopicDrop: 0.01 },
+    };
+
+    const { result, stats } = await filterLlmContext(data, fixtureRequest, config, {
+      classify: replay,
+    });
+
+    // 被来源级丢弃的来源不在输出；过滤后为空返回空不补回（VERDICT-06）
+    assert.deepEqual(result.grounding.generic, []);
+    assert.deepEqual(result.sources, {});
+    // stats.sources 保持 Brave 原序（只翻标记不重排）且 reason 正确
+    assert.deepEqual(
+      stats.sources.map((source) => [source.index, source.reason]),
+      Array.from({ length: 12 }, (_, index) => [index, 'off_topic'])
+    );
+    for (const row of stats.jev?.per_source ?? []) {
+      assert.equal(row.verdict, 'drop', `${row.src} verdict`);
+      assert.equal(row.reason, 'off_topic', `${row.src} reason`);
+    }
+    // 来源级已丢的来源不再跑 score 删除
+    const scoreRemoved = stats.sources.reduce(
+      (sum, source) =>
+        sum +
+        source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'score').length,
+      0
+    );
+    assert.equal(scoreRemoved, 0);
+  });
+
+  it('marks a source whose snippets are all score-removed as empty in step 8', async () => {
+    // 步 8 归因口径（notes/dedup-and-rewrite-policy.md）：仅 score/本地原因删光 →
+    // 'empty'；novelty/跨源 dup 删光记 'rewrite' 的分支属 02-04
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://a.example/',
+            title: 'A',
+            snippets: ['Brave fact one.', 'Brave fact two.'],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+    const answers: Record<string, number> = {};
+    for (const key of [
+      'worth_keeping',
+      'is_primary',
+      'has_original_reasoning',
+      'is_attributed_rewrite',
+      'is_template_filler',
+      'is_off_topic',
+      'is_listing',
+      'self_deprecated',
+      'stale',
+      'paywalled',
+    ]) {
+      answers[key] = 0;
+    }
+    const classify: ClassifyDeps['classify'] = async () => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      answers: {
+        ...Object.fromEntries(
+          Object.entries(answers).map(([key, probability]) => [key, { kind: 'noul', probability }])
+        ),
+        snip0: { kind: 'score', score: 0.1 },
+        snip1: { kind: 'score', score: 0.2 },
+      },
+      input_tokens: 10,
+    });
+
+    const { result, stats } = await filterLlmContext(
+      data,
+      request,
+      { ...offConfig, mode: 'on' },
+      { classify }
+    );
+
+    assert.deepEqual(result.grounding.generic, []);
+    assert.equal(stats.sources[0].verdict, 'drop');
+    assert.equal(stats.sources[0].reason, 'empty');
+    assert.equal(stats.local.empty_dropped, 1);
   });
 });

@@ -108,11 +108,11 @@ const singleSource = (
 
 describe('cjkShareOf', () => {
   it('counts CJK characters over title plus all text characters', () => {
-    // 你好 = 2 CJK；'世界ab' = 2 CJK + 2 latin；title 5 chars 全 latin
-    // CJK 4 / total (5 + 6) = 4/11
+    // '世界ab' = 2 CJK + 2 latin；title 'Hello' 5 chars 全 latin
+    // CJK 2 / total (5 + 4) = 2/9
     const share = cjkShareOf('Hello', ['世界ab']);
 
-    assert.ok(Math.abs(share - 4 / 11) < 1e-12, `expected 4/11, got ${share}`);
+    assert.ok(Math.abs(share - 2 / 9) < 1e-12, `expected 2/9, got ${share}`);
   });
 
   it('returns 0 when there are no CJK characters or no text at all', () => {
@@ -130,7 +130,12 @@ describe('cjkShareOf', () => {
 describe('applySourceVerdicts', () => {
   it('drops at exactly the off_topic threshold (p >= threshold) and keeps just below', () => {
     const dropped = singleSource({ is_off_topic: 0.85 });
-    applySourceVerdicts(dropped.table, buildJudged([dropped.row]), DEFAULT_THRESHOLDS, dropped.stats);
+    applySourceVerdicts(
+      dropped.table,
+      buildJudged([dropped.row]),
+      DEFAULT_THRESHOLDS,
+      dropped.stats
+    );
     assert.equal(dropped.table[0].verdict, 'drop');
     assert.equal(dropped.table[0].reason, 'off_topic');
     assert.equal(dropped.row.verdict, 'drop');
@@ -144,7 +149,12 @@ describe('applySourceVerdicts', () => {
 
   it('drops a listing at 0.80 and stops the chain at off_topic first when both exceed', () => {
     const listing = singleSource({ is_listing: 0.8 });
-    applySourceVerdicts(listing.table, buildJudged([listing.row]), DEFAULT_THRESHOLDS, listing.stats);
+    applySourceVerdicts(
+      listing.table,
+      buildJudged([listing.row]),
+      DEFAULT_THRESHOLDS,
+      listing.stats
+    );
     assert.equal(listing.table[0].verdict, 'drop');
     assert.equal(listing.table[0].reason, 'listing');
 
@@ -206,10 +216,7 @@ describe('applySourceVerdicts', () => {
 
   it('rescues a 0.90 off_topic with the CJK bonus when the share is above the threshold', () => {
     // title 2 CJK + text 2 CJK + 2 latin → CJK 4 / 6 ≈ 0.667 > 0.5 → bonus 0.10
-    const rescued = singleSource(
-      { is_off_topic: 0.9 },
-      { title: '你好', texts: ['世界ab'] }
-    );
+    const rescued = singleSource({ is_off_topic: 0.9 }, { title: '你好', texts: ['世界ab'] });
     applySourceVerdicts(
       rescued.table,
       buildJudged([rescued.row]),
