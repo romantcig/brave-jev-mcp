@@ -4,7 +4,7 @@
   "intent": "How to upgrade Sanity Studio to the current v6 major version (sanity.config.ts based)",
   "request": {},
   "mode": "off",
-  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。含已核实的短无实词命中与包含式重复（0.875）。",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。含已核实的短无实词命中与包含式重复（0.875）。02-04 重标注：步 7 新增 novelty 4 条 + 跨源 dup 2 条（docs/upgrade 重复 docs/studio/upgrade 正文与目录行，5-gram containment ≥ 0.8），novel ≤ 1 逐条复核为'标注漏'。",
   "rules": {
     "jsonld": [],
     "url_merge": [],
@@ -38,6 +38,34 @@
     "feed_blocklist": [],
     "paywall": [],
     "empty_source": [],
+    "novelty": [
+      {
+        "url": "https://www.sanity.io/docs/upgrade",
+        "snippet": 0
+      },
+      {
+        "url": "https://www.sanity.io/docs/upgrade",
+        "snippet": 3
+      },
+      {
+        "url": "https://www.sanity.io/docs/upgrade",
+        "snippet": 4
+      },
+      {
+        "url": "https://www.reddit.com/r/sanity_io/comments/1u34sat/sanity_studio_v6_is_out_builds_29_faster_on_vite/",
+        "snippet": 2
+      }
+    ],
+    "cross_source_dup": [
+      {
+        "url": "https://www.sanity.io/docs/upgrade",
+        "snippet": 1
+      },
+      {
+        "url": "https://www.sanity.io/docs/upgrade",
+        "snippet": 6
+      }
+    ],
     "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
   },
   "final": {
@@ -51,11 +79,11 @@
     ],
     "kept_snippets": {
       "https://www.sanity.io/docs/studio/upgrade": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-      "https://www.sanity.io/docs/upgrade": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.sanity.io/docs/upgrade": [2, 5],
       "https://www.sanity.io/docs/changelog/28d9d6b8-46be-467d-bb6a-72d0e4b420e8": [0],
       "https://agent-skills.md/skills/sanity-io/agent-toolkit/sanity-studio-upgrade": [0, 1, 3, 4, 5, 6, 7],
       "https://www.sanity.io/blog/sanity-studio-v6": [0, 1, 2, 3, 4, 5, 6],
-      "https://www.reddit.com/r/sanity_io/comments/1u34sat/sanity_studio_v6_is_out_builds_29_faster_on_vite/": [0, 1, 2, 3, 4]
+      "https://www.reddit.com/r/sanity_io/comments/1u34sat/sanity_studio_v6_is_out_builds_29_faster_on_vite/": [0, 1, 3, 4]
     },
     "sources_keys": ["age", "hostname", "title"],
     "sources_age": {
@@ -64,7 +92,12 @@
       "https://www.sanity.io/blog/sanity-studio-v6": ["2026-06-09"],
       "https://www.reddit.com/r/sanity_io/comments/1u34sat/sanity_studio_v6_is_out_builds_29_faster_on_vite/": ["2026-06-11"]
     },
-    "n_snippets": 37,
-    "local": { "snippets_prefiltered": 1, "dup_removed": 1 }
+    "n_snippets": 31,
+    "local": {
+      "snippets_prefiltered": 1,
+      "dup_removed": 1,
+      "novelty_removed": 4,
+      "cross_source_dup_removed": 2
+    }
   }
 }

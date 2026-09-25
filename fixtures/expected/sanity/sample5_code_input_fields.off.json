@@ -4,7 +4,7 @@
   "intent": "How to build custom input components with conditional fields for the current Sanity Studio (v6, sanity.config.ts based)",
   "request": {},
   "mode": "off",
-  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。npm 与 sanity.io 两站的重复代码块是跨来源的（步 3 只判同源内），同源内 Angular/Rust 两例的包含度不足 0.8——都是不删的反例。",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。npm 与 sanity.io 两站的重复代码块是跨来源的（步 3 只判同源内），同源内 Angular/Rust 两例的包含度不足 0.8——都是不删的反例。02-04 重标注：步 7 新增 novelty 4 条 + 跨源 dup 2 条（README 代码块与数据模型示例跨页逐字复制），novel ≤ 1 逐条复核为'标注漏'。",
   "rules": {
     "jsonld": [],
     "url_merge": [],
@@ -13,6 +13,34 @@
     "feed_blocklist": [],
     "paywall": [],
     "empty_source": [],
+    "novelty": [
+      {
+        "url": "https://www.bekk.christmas/post/2023/11/make-your-own-input-components-in-sanity",
+        "snippet": 3
+      },
+      {
+        "url": "https://www.npmjs.com/package/@pdftron/sanity-code-input",
+        "snippet": 0
+      },
+      {
+        "url": "https://www.npmjs.com/package/@pdftron/sanity-code-input",
+        "snippet": 4
+      },
+      {
+        "url": "https://www.npmjs.com/package/@pdftron/sanity-code-input",
+        "snippet": 6
+      }
+    ],
+    "cross_source_dup": [
+      {
+        "url": "https://www.sanity.io/plugins/code-input",
+        "snippet": 2
+      },
+      {
+        "url": "https://www.npmjs.com/package/@pdftron/sanity-code-input",
+        "snippet": 5
+      }
+    ],
     "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
   },
   "final": {
@@ -27,9 +55,9 @@
     "kept_snippets": {
       "https://gist.github.com/kmelve/57f19f4c7c1093d394122536f234bb18": [0, 1, 2, 3, 4, 5, 6],
       "https://www.npmjs.com/package/@sanity/code-input": [0, 1, 2, 3, 4],
-      "https://www.sanity.io/plugins/code-input": [0, 1, 2, 3, 4, 5],
-      "https://www.bekk.christmas/post/2023/11/make-your-own-input-components-in-sanity": [0, 1, 2, 3, 4],
-      "https://www.npmjs.com/package/@pdftron/sanity-code-input": [0, 1, 2, 3, 4, 5, 6],
+      "https://www.sanity.io/plugins/code-input": [0, 1, 3, 4, 5],
+      "https://www.bekk.christmas/post/2023/11/make-your-own-input-components-in-sanity": [0, 1, 2, 4],
+      "https://www.npmjs.com/package/@pdftron/sanity-code-input": [1, 2, 3],
       "https://www.sanity.io/guides/custom-input-3rd-party-data": [0, 1, 2, 3, 4]
     },
     "sources_keys": ["age", "hostname", "title"],
@@ -40,7 +68,7 @@
       "https://www.npmjs.com/package/@pdftron/sanity-code-input": ["2024-01-11"],
       "https://www.sanity.io/guides/custom-input-3rd-party-data": ["2025-02-05"]
     },
-    "n_snippets": 35,
-    "local": {}
+    "n_snippets": 29,
+    "local": { "novelty_removed": 4, "cross_source_dup_removed": 2 }
   }
 }

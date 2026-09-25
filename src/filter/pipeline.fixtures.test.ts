@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseFilterConfig } from './config.js';
+import { splitJsonFragment } from './jsonld.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { filterLlmContext } from './pipeline.js';
 import { zeroLocal } from './stats.js';
@@ -212,16 +213,25 @@ for (const rel of listExpectedFiles()) {
             assert.equal(row.part, part, 'converted parts must run 0..k in order');
           });
           // 步 1 只负责转换；个别段被步 3 再删由该节的 nav 标注单独断言（sample3 4.3/4.4），
-          // 这里只要求第一段幸存且以标注的前缀开头
-          const firstRow = rows.find((row) => row.part === 0);
-          assert.ok(firstRow, 'a converted snippet must have a part 0');
-          assert.equal(firstRow.kept, true, 'the first converted part must survive');
-          // 转换后原片段行被多段取代，第一段是 <snippet>.0
-          const first = survivingText(item.url, `${item.snippet}.0`);
-          assert.ok(
-            first.startsWith(`${item.first_part_prefix}`),
-            `first part should start with "${item.first_part_prefix}", got "${first.slice(0, 60)}"`
+          // 被步 7 新颖度/跨源 dup 再删由 novelty / cross_source_dup 两节单独断言（02-04）。
+          // 转换内容对原始夹具文本直调同一 splitJsonFragment 验证——不依赖幸存，
+          // 步 1 的验证力不因步 7 的删除而减弱。
+          const rawItem = loadBraveFixture(expected.fixture).grounding.generic.find(
+            (entry) => entry.url === item.url
           );
+          const rawSnippet = rawItem?.snippets[item.snippet];
+          assert.ok(
+            typeof rawSnippet === 'string',
+            `raw snippet #${item.snippet} of ${item.url} not found in fixture`
+          );
+          const split = splitJsonFragment(rawSnippet, rawItem?.title ?? '');
+          assert.equal(split.action, 'converted');
+          if (split.action === 'converted') {
+            assert.ok(
+              split.parts[0].startsWith(`${item.first_part_prefix}`),
+              `first part should start with "${item.first_part_prefix}", got "${split.parts[0].slice(0, 60)}"`
+            );
+          }
         } else {
           assert.equal(rows.length, 1);
           assert.equal(rows[0].kept, false);

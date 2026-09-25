@@ -8,6 +8,7 @@
     "maximum_number_of_tokens_per_url": 750
   },
   "mode": "off",
+  "note": "02-04 重标注：步 7 新颖度生效（Brave 序播种、无论证段保护）新增 10 条 novelty 删除、0 条跨源 dup；therundown 被新颖度删光 → 步 8 记 'rewrite'（rubric 黄金样本本判'丢-转述'，设计意图非回归）。逐条按 notes/labeling-rubric.md 问法 6 复核：novel ≤ 1（attribution 词组 p:unlike rlhf / p:try / 模板数字 / 已覆盖事实），实质独有事实在幸存片段——判'标注漏'（Phase 1 无新颖度通道）。",
   "rules": {
     "jsonld": [
       {
@@ -62,7 +63,55 @@
     "dedup": [],
     "feed_blocklist": [],
     "paywall": [],
-    "empty_source": [],
+    "empty_source": [
+      {
+        "url": "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software",
+        "action": "rewrite"
+      }
+    ],
+    "novelty": [
+      {
+        "url": "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/",
+        "snippet": 1
+      },
+      {
+        "url": "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/",
+        "snippet": "2.0"
+      },
+      {
+        "url": "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/",
+        "snippet": "2.1"
+      },
+      {
+        "url": "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/",
+        "snippet": "2.3"
+      },
+      {
+        "url": "https://www.datacamp.com/blog/system-one-models-jev",
+        "snippet": 0
+      },
+      {
+        "url": "https://www.datacamp.com/blog/system-one-models-jev",
+        "snippet": 1
+      },
+      {
+        "url": "https://www.datacamp.com/blog/system-one-models-jev",
+        "snippet": 5
+      },
+      {
+        "url": "https://typesafe.ai/blog/introducing-system-one-models-and-jev",
+        "snippet": 0
+      },
+      {
+        "url": "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software",
+        "snippet": 0
+      },
+      {
+        "url": "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software",
+        "snippet": 1
+      }
+    ],
+    "cross_source_dup": [],
     "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
   },
   "final": {
@@ -77,8 +126,7 @@
       "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude",
       "https://typesafe.ai/blog/introducing-system-one-models-and-jev",
       "https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch",
-      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/",
-      "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software"
+      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/"
     ],
     "kept_snippets": {
       "https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711": [0, 1, 2],
@@ -86,13 +134,12 @@
       "https://pasqualepillitteri.it/en/news/16460/typesafe-jev-chatless-ai-beats-claude": [0, 1, 2],
       "https://aiwiki.ai/wiki/typesafe_ai": [0, 1, 2, 3, 4, 5],
       "https://www.explainx.ai/blog/typesafe-ai-jev-system-one-models-launch-2026": [0, "1.0", "1.1", "1.2", "1.3", "1.4", "1.5"],
-      "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/": [0, 1, "2.0", "2.1", "2.2", "2.3", "2.4"],
-      "https://www.datacamp.com/blog/system-one-models-jev": [0, 1, 2, 3, 4, 5],
+      "https://flowtivity.ai/blog/jev-typesafe-ai-decision-model/": [0, "2.2", "2.4"],
+      "https://www.datacamp.com/blog/system-one-models-jev": [2, 3, 4],
       "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude": [0, 1],
-      "https://typesafe.ai/blog/introducing-system-one-models-and-jev": [0, 1, 2],
+      "https://typesafe.ai/blog/introducing-system-one-models-and-jev": [1, 2],
       "https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch": [0, 1, 2, 3],
-      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/": [0, 1, 2],
-      "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software": [0, 1]
+      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/": [0, 1, 2]
     },
     "sources_keys": ["age", "hostname", "title"],
     "sources_age": {
@@ -106,10 +153,14 @@
       "https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude": ["2026-09-16"],
       "https://typesafe.ai/blog/introducing-system-one-models-and-jev": ["2026-09-15"],
       "https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch": ["2026-09-18"],
-      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/": ["2026-09-18"],
-      "https://www.therundown.ai/news/typesafe-jev-ai-decisions-software": ["2026-09-16"]
+      "https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/": ["2026-09-18"]
     },
-    "n_snippets": 48,
-    "local": { "jsonld_converted": 2, "jsonld_dropped": 2 }
+    "n_snippets": 38,
+    "local": {
+      "jsonld_converted": 2,
+      "jsonld_dropped": 2,
+      "novelty_removed": 10,
+      "cross_source_dup_removed": 0
+    }
   }
 }

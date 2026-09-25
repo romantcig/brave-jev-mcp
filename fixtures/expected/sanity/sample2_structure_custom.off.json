@@ -4,7 +4,7 @@
   "intent": "How to customize Sanity Structure Builder with custom document ordering and grouping",
   "request": {},
   "mode": "off",
-  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。本夹具验证代码片段为主的来源在 off 模式下全部保留，各规则节零命中。",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。本夹具验证代码片段为主的来源在 off 模式下全部保留，各规则节零命中。 02-04 重标注：步 7 新颖度与跨源 dup 零命中（新增两节为空数组，note 留痕备查）。",
   "rules": {
     "jsonld": [],
     "url_merge": [],
@@ -13,7 +13,12 @@
     "feed_blocklist": [],
     "paywall": [],
     "empty_source": [],
-    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+    "novelty": [],
+    "cross_source_dup": [],
+    "budget": {
+      "dropped_sources": 0,
+      "trimmed_snippets": 0
+    }
   },
   "final": {
     "urls": [
@@ -24,19 +29,54 @@
       "https://www.npmjs.com/package/@sanity/hierarchical-document-list"
     ],
     "kept_snippets": {
-      "https://dev.to/nayankyada/how-i-customise-sanity-structure-builder-with-custom-ordering-and-grouping-3boh": [0, 1, 2],
-      "https://www.buildwithmatija.com/blog/sanity-custom-sorting-options": [0, 1, 2],
-      "https://www.sanity.io/plugins/orderable-document-list": [0, 1],
-      "https://www.sanity.io/docs/studio/structure-builder-reference": [0, 1, 2, 3, 4],
-      "https://www.npmjs.com/package/@sanity/hierarchical-document-list": [0, 1, 2]
+      "https://dev.to/nayankyada/how-i-customise-sanity-structure-builder-with-custom-ordering-and-grouping-3boh": [
+        0,
+        1,
+        2
+      ],
+      "https://www.buildwithmatija.com/blog/sanity-custom-sorting-options": [
+        0,
+        1,
+        2
+      ],
+      "https://www.sanity.io/plugins/orderable-document-list": [
+        0,
+        1
+      ],
+      "https://www.sanity.io/docs/studio/structure-builder-reference": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "https://www.npmjs.com/package/@sanity/hierarchical-document-list": [
+        0,
+        1,
+        2
+      ]
     },
-    "sources_keys": ["age", "hostname", "title"],
+    "sources_keys": [
+      "age",
+      "hostname",
+      "title"
+    ],
     "sources_age": {
-      "https://dev.to/nayankyada/how-i-customise-sanity-structure-builder-with-custom-ordering-and-grouping-3boh": ["2026-06-27"],
-      "https://www.buildwithmatija.com/blog/sanity-custom-sorting-options": ["2025-09-17"],
-      "https://www.sanity.io/plugins/orderable-document-list": ["2026-07-07"],
-      "https://www.sanity.io/docs/studio/structure-builder-reference": ["2026-07-09"],
-      "https://www.npmjs.com/package/@sanity/hierarchical-document-list": ["2025-12-18"]
+      "https://dev.to/nayankyada/how-i-customise-sanity-structure-builder-with-custom-ordering-and-grouping-3boh": [
+        "2026-06-27"
+      ],
+      "https://www.buildwithmatija.com/blog/sanity-custom-sorting-options": [
+        "2025-09-17"
+      ],
+      "https://www.sanity.io/plugins/orderable-document-list": [
+        "2026-07-07"
+      ],
+      "https://www.sanity.io/docs/studio/structure-builder-reference": [
+        "2026-07-09"
+      ],
+      "https://www.npmjs.com/package/@sanity/hierarchical-document-list": [
+        "2025-12-18"
+      ]
     },
     "n_snippets": 16,
     "local": {}
