@@ -214,6 +214,75 @@ describe('parseJevResponse', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 解析边界（T-02-02-1 白名单收窄的六个具名用例）：畸形/恶意形状一律 ok:false
+// 而非 spread 或抛错；白名单外的键忽略不进结果。
+// ---------------------------------------------------------------------------
+
+describe('parseJevResponse boundaries', () => {
+  it('ignores answer keys outside the protocol whitelist', () => {
+    const body = JSON.stringify({
+      model: 'jev-1.13.0',
+      answers: {
+        is_off_topic: { type: 'noul', noul: 0.2 },
+        junk_typed: { type: 'wat' },
+        junk_value: 'text',
+      },
+      usage: { input_tokens: 5 },
+    });
+
+    const parsed = parseJevResponse(200, body);
+    assert.ok(parsed.ok);
+    assert.deepEqual(Object.keys(parsed.answers), ['is_off_topic']);
+    assert.deepEqual(parsed.answers['is_off_topic'], { kind: 'noul', probability: 0.2 });
+  });
+
+  it('returns kind shape when a noul answer lacks its numeric value', () => {
+    const body = JSON.stringify({
+      model: 'jev-1.13.0',
+      answers: { is_off_topic: { type: 'noul' } },
+      usage: { input_tokens: 5 },
+    });
+
+    assert.deepEqual(parseJevResponse(200, body), { ok: false, kind: 'shape' });
+  });
+
+  it('returns kind shape when a score answer lacks its score', () => {
+    const body = JSON.stringify({
+      model: 'jev-1.13.0',
+      answers: { snip0: { type: 'score', confidence: 0.5 } },
+      usage: { input_tokens: 5 },
+    });
+
+    assert.deepEqual(parseJevResponse(200, body), { ok: false, kind: 'shape' });
+  });
+
+  it('returns kind shape when the body is not JSON', () => {
+    assert.deepEqual(parseJevResponse(200, '<html>gateway timeout</html>'), {
+      ok: false,
+      kind: 'shape',
+    });
+  });
+
+  it('returns kind http with the status for a 422 validation failure', () => {
+    assert.deepEqual(parseJevResponse(422, '{"error":{"message":"state too large"}}'), {
+      ok: false,
+      kind: 'http',
+      status: 422,
+    });
+  });
+
+  it('returns kind shape when input_tokens is missing (JEV-02 contract)', () => {
+    const body = JSON.stringify({
+      model: 'jev-1.13.0',
+      answers: {},
+      usage: { output_tokens: 3 },
+    });
+
+    assert.deepEqual(parseJevResponse(200, body), { ok: false, kind: 'shape' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 端到端回放：on 模式 + 注入回放 classify，整条真实路径零网络
 // ---------------------------------------------------------------------------
 

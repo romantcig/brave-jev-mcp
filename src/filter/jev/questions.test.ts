@@ -1,11 +1,15 @@
 /**
- * 题库常量单测：十键齐全、总指令前缀、计数公式与 state 形状。
- * probe ↔ 生产的深比较门禁（两份 `.jev.json` 夹具顶层 questions / levels 与
- * 本表逐字对账）在 Task 2 追加；这里先锁常量表自身的结构与形状。
+ * 题库常量单测：十键齐全、总指令前缀、计数公式、state 形状，以及 probe ↔ 生产
+ * 的深比较门禁——两份重录 `.jev.json` 夹具的顶层 questions / levels 与本表
+ * 逐字对账，probe 录制题库与生产题库任何一侧改动都会在这里红（02-01 三处
+ * 同源对齐的根基）。
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
@@ -17,6 +21,8 @@ import {
   buildQuestions,
   buildState,
 } from './questions.js';
+
+const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
 
 describe('SOURCE_QUESTIONS', () => {
   it('has exactly the ten v3 source-level keys', () => {
@@ -141,4 +147,36 @@ describe('buildState', () => {
     const state = buildState('s1', 'https://b.example/', 'T', snippets, 'q', 'i');
     assert.equal(state.source.snippets, snippets);
   });
+});
+
+// ---------------------------------------------------------------------------
+// probe ↔ 生产题库深比较门禁：夹具顶层 questions（含总指令前缀的完整题干）与
+// levels 必须与本表逐键逐字一致——录制口径与生产口径从此锁死。
+// ---------------------------------------------------------------------------
+
+describe('recorded question bank deep compare', () => {
+  for (const name of ['jev_release_default', 'jev_release_strict']) {
+    describe(name, () => {
+      const parsed: unknown = JSON.parse(
+        readFileSync(join(fixtureRoot, `${name}.jev.json`), 'utf8')
+      );
+      assert.ok(
+        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed),
+        `${name}.jev.json is not an object`
+      );
+      const recording = parsed as { questions: Record<string, string>; levels: string[] };
+
+      it('locks the ten recorded questions to the constant table verbatim', () => {
+        const expected: Record<string, string> = {};
+        for (const [key, text] of Object.entries(SOURCE_QUESTIONS)) {
+          expected[key] = `${GLOBAL_INSTRUCTION} ${text}`;
+        }
+        assert.deepEqual(recording.questions, expected);
+      });
+
+      it('locks the three snippet levels to SNIPPET_LEVELS', () => {
+        assert.deepEqual(recording.levels, [...SNIPPET_LEVELS]);
+      });
+    });
+  }
 });

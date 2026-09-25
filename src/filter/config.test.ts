@@ -20,6 +20,23 @@ describe('parseFilterConfig', () => {
     assert.equal(DEFAULT_BLOCKLIST.size, 0);
   });
 
+  it('carries the eleven DEFAULT_THRESHOLDS values verbatim when nothing overrides them (02-06 adds file overrides)', () => {
+    assert.deepEqual(parseFilterConfig({}).thresholds, {
+      offTopicDrop: 0.85,
+      listingDrop: 0.8,
+      selfDeprecated: 0.7,
+      staleDrop: 0.85,
+      fillerDrop: 0.8,
+      reasoningProtect: 0.7,
+      snippetMin: 1.0,
+      minFacts: 4,
+      noveltyMin: 2,
+      cjkBonus: 0.1,
+      cjkShare: 0.5,
+    });
+    assert.deepEqual(parseFilterConfig({}).thresholds, { ...DEFAULT_THRESHOLDS });
+  });
+
   it('reads each valid mode', () => {
     assert.equal(parseFilterConfig({ JEV_FILTER_MODE: 'off' }).mode, 'off');
     assert.equal(parseFilterConfig({ JEV_FILTER_MODE: 'shadow' }).mode, 'shadow');
