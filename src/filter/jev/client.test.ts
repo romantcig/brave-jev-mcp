@@ -1535,4 +1535,99 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
     }
   });
 
+  it('returns the slot on every failure path so the next request still runs (E1)', async () => {
+    // concurrency 1：三种失败（fetch 恒抛 / 恒 500 / 恒 401）各发一次请求，之后第
+    // 四个正常请求必须还能完成——失败路径漏还名额会让它永远排队（超时保护：挂住即失败）
+    let behavior: 'throw' | '500' | '401' | 'ok' = 'throw';
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      if (behavior === 'throw') throw new Error('fetch failed');
+      if (behavior === '500') return new Response('boom', { status: 500 });
+      if (behavior === '401') return new Response('unauthorized', { status: 401 });
+      return okResponseOf(defaultRecording.results['s0']);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        { ...jevConfig, concurrency: 1 },
+        { jev_API_KEY: 'k' },
+        { sleep: async () => {}, random: () => 0, now: () => 1000000 }
+      );
+
+      for (const [kind, expected] of [
+        ['throw', 'network'],
+        ['500', 'network'],
+        ['401', 'auth'],
+      ] as const) {
+        behavior = kind;
+        const outcome = await classifier.classify(request);
+        assert.ok(outcome.status === 'failed', `${kind} ${JSON.stringify(outcome)}`);
+        assert.equal((outcome as { kind: string }).kind, expected, kind);
+      }
+
+      behavior = 'ok';
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('the fourth request hung: the slot was never returned')),
+          1500
+        )
+      );
+      const fourth = await Promise.race([classifier.classify(request), timeout]);
+      assert.equal(fourth.status, 'answered', JSON.stringify(fourth));
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('uses the configured timeout instead of a hard-coded one (E2)', async () => {
+    /** 假 fetch：遵守传入的 signal，abort 时以 signal.reason reject；delayMs null = 永不返回。 */
+    const signalAwareFetch =
+      (delayMs: number | null) => async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        return await new Promise<Response>((resolve, reject) => {
+          const timer =
+            delayMs === null
+              ? undefined
+              : setTimeout(() => resolve(okResponseOf(defaultRecording.results['s0'])), delayMs);
+          signal?.addEventListener('abort', () => {
+            if (timer !== undefined) clearTimeout(timer);
+            reject(signal.reason);
+          });
+        });
+      };
+
+    const saved = globalThis.fetch;
+    try {
+      // timeout 1000ms，fetch 50ms 后返回 → 必须成功（能抓住"写死更短超时"的实现）
+      globalThis.fetch = signalAwareFetch(50) as typeof fetch;
+      const fast = createJevClassifier(
+        { ...jevConfig, timeoutMs: 1000 },
+        { jev_API_KEY: 'k' },
+        { random: () => 0 }
+      );
+      const answered = await fast.classify(request);
+      assert.equal(answered.status, 'answered', JSON.stringify(answered));
+
+      // fetch 永不返回 → 必须按 timeout 失败，且不重试
+      let fetchCount = 0;
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        fetchCount += 1;
+        const signal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        });
+      }) as typeof fetch;
+      const slow = createJevClassifier(
+        { ...jevConfig, timeoutMs: 1000 },
+        { jev_API_KEY: 'k' },
+        { random: () => 0 }
+      );
+      const timedOut = await slow.classify(request);
+      assert.ok(timedOut.status === 'failed', JSON.stringify(timedOut));
+      assert.equal((timedOut as { kind: string }).kind, 'timeout');
+      assert.equal(fetchCount, 1, 'a timeout must not be retried');
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
 });
