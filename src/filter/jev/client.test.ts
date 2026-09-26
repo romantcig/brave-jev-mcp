@@ -494,14 +494,16 @@ describe('createJevClassifier', () => {
     }
   });
 
-  it('maps an AbortError throw to timeout', async () => {
+  it('maps an AbortError throw to timeout without retrying', async () => {
+    let fetchCount = 0;
     const saved = globalThis.fetch;
     globalThis.fetch = (async () => {
+      fetchCount += 1;
       throw new DOMException('This operation was aborted', 'AbortError');
     }) as typeof fetch;
 
     try {
-      // 恒抛 → 耗尽重试（SAFE-03 网络异常白名单）；注入 no-op sleep 不真等
+      // 超时不重试（2026-09-27 定）：一次失败即返回，注入 no-op sleep 只是为了不走真退避
       const classifier = createJevClassifier(
         jevConfig,
         { jev_API_KEY: 'k' },
@@ -519,6 +521,7 @@ describe('createJevClassifier', () => {
         kind: 'timeout',
         detail: 'This operation was aborted',
       });
+      assert.equal(fetchCount, 1, 'a timeout must not be retried');
     } finally {
       globalThis.fetch = saved;
     }
@@ -661,9 +664,10 @@ describe('createJevClassifier', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 传输兜底·重试（02-05 Task 2，SAFE-03）：白名单只有 429 / 529 / fetch 网络异常
-// （3 次尝试、退避 500ms 起倍率 2 封顶 4s）；401 / 422 绝不重试（Pitfall 7）。
-// 时钟注入 hooks：sleep 记录时长做下限断言，不在测试里真等。
+// 传输兜底·重试（2026-09-27 定）：超时（含读正文）不重试；fetch 其他异常、408、
+// 429/529、其余 5xx 重试；401/403/422/其他 4xx/200 形状坏不重试。退避
+// min(500×2^(n-1), 5000) 再乘 (1 - 0.25×random)；Retry-After 优先，> 5s 就不再
+// 重试。hooks 注入 sleep / random / now，测试不真等。
 // ---------------------------------------------------------------------------
 
 describe('createJevClassifier retry (SAFE-03)', () => {
@@ -678,6 +682,30 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       call += 1;
       return await step();
     }) as typeof fetch;
+  };
+
+  /** 恒定状态码的桩 + 计次。 */
+  const statusFetch = (status: number, body = 'error', headers?: Record<string, string>) => {
+    const counter = { calls: 0 };
+    const fetchImpl = (async () => {
+      counter.calls += 1;
+      return new Response(body, { status, headers });
+    }) as typeof fetch;
+    return { fetchImpl, counter };
+  };
+
+  /** 收集退避时长的 hooks（random 固定）。 */
+  const sleepRecorder = (random = 0) => {
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      hooks: {
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+        random: () => random,
+      },
+    };
   };
 
   it('retries 429 twice and answers on the third attempt', async () => {
@@ -710,14 +738,9 @@ describe('createJevClassifier retry (SAFE-03)', () => {
   });
 
   it('exhausts three attempts against persistent 429 and fails with rate_limited', async () => {
-    let fetchCount = 0;
     const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([
-      () => {
-        fetchCount += 1;
-        return new Response('rate limited', { status: 429 });
-      },
-    ]);
+    const { fetchImpl, counter } = statusFetch(429, 'rate limited');
+    globalThis.fetch = fetchImpl;
 
     try {
       const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
@@ -725,21 +748,16 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
       assert.equal(outcome.kind, 'rate_limited');
-      assert.equal(fetchCount, 3);
+      assert.equal(counter.calls, 3);
     } finally {
       globalThis.fetch = saved;
     }
   });
 
   it('treats 529 like 429: retries three attempts then fails with rate_limited', async () => {
-    let fetchCount = 0;
     const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([
-      () => {
-        fetchCount += 1;
-        return new Response('overloaded', { status: 529 });
-      },
-    ]);
+    const { fetchImpl, counter } = statusFetch(529, 'overloaded');
+    globalThis.fetch = fetchImpl;
 
     try {
       const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
@@ -747,7 +765,76 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
       assert.equal(outcome.kind, 'rate_limited');
-      assert.equal(fetchCount, 3);
+      assert.equal(counter.calls, 3);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('retries 408 and other 5xx (500, 503) to the full three attempts', async () => {
+    const saved = globalThis.fetch;
+    try {
+      for (const status of [408, 500, 503]) {
+        const { fetchImpl, counter } = statusFetch(status, 'transient');
+        globalThis.fetch = fetchImpl;
+        const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+        const outcome = await classifier.classify(request);
+        assert.ok(outcome.status === 'failed', `${status} ${JSON.stringify(outcome)}`);
+        assert.equal(outcome.kind, status === 408 ? 'timeout' : 'network', `${status} kind`);
+        assert.equal(counter.calls, 3, `${status} must be retried three times`);
+      }
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('does not retry 403 (auth) and does not count it toward the breaker', async () => {
+    const saved = globalThis.fetch;
+    const { fetchImpl, counter } = statusFetch(403, 'forbidden');
+    globalThis.fetch = fetchImpl;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.deepEqual(outcome, { status: 'failed', kind: 'auth', detail: '403 forbidden' });
+      assert.equal(counter.calls, 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('does not retry 404 (validation) either', async () => {
+    const saved = globalThis.fetch;
+    const { fetchImpl, counter } = statusFetch(404, 'not found');
+    globalThis.fetch = fetchImpl;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.deepEqual(outcome, { status: 'failed', kind: 'validation', detail: '404 not found' });
+      assert.equal(counter.calls, 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('never retries 422 — a validation failure would just 422 again (Pitfall 7)', async () => {
+    const saved = globalThis.fetch;
+    const { fetchImpl, counter } = statusFetch(422, 'state too large');
+    globalThis.fetch = fetchImpl;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'validation',
+        detail: '422 state too large',
+      });
+      assert.equal(counter.calls, 1);
     } finally {
       globalThis.fetch = saved;
     }
@@ -782,53 +869,200 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     }
   });
 
-  it('never retries 422 — a validation failure would just 422 again (Pitfall 7)', async () => {
-    let fetchCount = 0;
+  it('backs off exactly 500ms then 1000ms when random returns 0', async () => {
     const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([
-      () => {
-        fetchCount += 1;
-        return new Response('state too large', { status: 422 });
-      },
-    ]);
+    globalThis.fetch = scriptedFetch([() => new Response('rate limited', { status: 429 })]);
+    const { sleeps, hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
-      assert.deepEqual(outcome, {
-        status: 'failed',
-        kind: 'validation',
-        detail: '422 state too large',
-      });
-      assert.equal(fetchCount, 1);
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.deepEqual(sleeps, [500, 1000]);
     } finally {
       globalThis.fetch = saved;
     }
   });
 
-  it('backs off at least 500ms after the first failure and 1000ms after the second', async () => {
+  it('shaves at most 25% off each backoff when random returns 1', async () => {
     const saved = globalThis.fetch;
     globalThis.fetch = scriptedFetch([() => new Response('rate limited', { status: 429 })]);
-    const sleeps: number[] = [];
+    const { sleeps, hooks } = sleepRecorder(1);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.deepEqual(sleeps, [375, 750]);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('honours retry-after-ms over the ordinary backoff', async () => {
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => new Response('rate limited', { status: 429, headers: { 'retry-after-ms': '1200' } }),
+      () => okResponseOf(defaultRecording.results['s0']),
+    ]);
+    const { sleeps, hooks } = sleepRecorder(0);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.deepEqual(sleeps, [1200]);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('reads retry-after as seconds when retry-after-ms is absent', async () => {
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => new Response('rate limited', { status: 429, headers: { 'retry-after': '3' } }),
+      () => okResponseOf(defaultRecording.results['s0']),
+    ]);
+    const { sleeps, hooks } = sleepRecorder(0);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.deepEqual(sleeps, [3000]);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('gives up after one fetch when retry-after exceeds the 5s cap', async () => {
+    const saved = globalThis.fetch;
+    const { fetchImpl, counter } = statusFetch(429, 'rate limited', { 'retry-after': '10' });
+    globalThis.fetch = fetchImpl;
+    const { sleeps, hooks } = sleepRecorder(0);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'rate_limited');
+      assert.equal(counter.calls, 1, 'a long retry-after must not be retried');
+      assert.deepEqual(sleeps, []);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('converts an HTTP-date retry-after into a wait using hooks.now', async () => {
+    const saved = globalThis.fetch;
+    const now = 1_800_000_000_000;
+    const date = new Date(now + 3000).toUTCString();
+    globalThis.fetch = scriptedFetch([
+      () => new Response('rate limited', { status: 429, headers: { 'retry-after': date } }),
+      () => okResponseOf(defaultRecording.results['s0']),
+    ]);
+    const { sleeps, hooks } = sleepRecorder(0);
 
     try {
       const classifier = createJevClassifier(
         jevConfig,
         { jev_API_KEY: 'k' },
-        {
-          sleep: async (ms: number) => {
-            sleeps.push(ms);
-          },
-        }
+        { ...hooks, now: () => now }
       );
       const outcome = await classifier.classify(request);
 
-      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
-      assert.equal(outcome.kind, 'rate_limited');
-      assert.equal(sleeps.length, 2, `recorded sleeps: ${JSON.stringify(sleeps)}`);
-      assert.ok(sleeps[0] >= 500, `first backoff ${sleeps[0]} must be >= 500ms`);
-      assert.ok(sleeps[1] >= 1000, `second backoff ${sleeps[1]} must be >= 1000ms`);
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.deepEqual(sleeps, [3000]);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('falls back to the ordinary backoff when retry-after is garbage', async () => {
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => new Response('rate limited', { status: 429, headers: { 'retry-after': 'soon-ish' } }),
+      () => okResponseOf(defaultRecording.results['s0']),
+    ]);
+    const { sleeps, hooks } = sleepRecorder(0);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.deepEqual(sleeps, [500]);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('retries a body-read disconnect (TypeError) and succeeds on the next attempt', async () => {
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = scriptedFetch([
+      () => {
+        fetchCount += 1;
+        // 响应头已到、读正文时连接断开
+        return {
+          status: 200,
+          headers: new Headers(),
+          text: async () => {
+            throw new TypeError('terminated');
+          },
+        } as unknown as Response;
+      },
+      () => {
+        fetchCount += 1;
+        return okResponseOf(defaultRecording.results['s0']);
+      },
+    ]);
+    const { hooks } = sleepRecorder(0);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.equal(fetchCount, 2);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('treats a body-read timeout as timeout without retrying and counts it toward the breaker', async () => {
+    const saved = globalThis.fetch;
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return {
+        status: 200,
+        headers: new Headers(),
+        text: async () => {
+          throw new DOMException('The operation was aborted', 'TimeoutError');
+        },
+      } as unknown as Response;
+    }) as typeof fetch;
+    const { hooks } = sleepRecorder(0);
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const first = await classifier.classify(request);
+      assert.ok(first.status === 'failed', JSON.stringify(first));
+      assert.equal(first.kind, 'timeout');
+      assert.equal(fetchCount, 1, 'a body-read timeout must not be retried');
+
+      // 同一实例再连续两次超时 → 三次连续瞬态失败 → 熔断打开
+      await classifier.classify(request);
+      await classifier.classify(request);
+      const fourth = await classifier.classify(request);
+      assert.ok(fourth.status === 'failed', JSON.stringify(fourth));
+      assert.equal(fourth.kind, 'breaker_open', 'body-read timeouts must count toward the breaker');
     } finally {
       globalThis.fetch = saved;
     }
@@ -882,6 +1116,8 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
       assert.ok(Object.hasOwn(capturedBody.questions, 'snip3'));
       assert.ok(Object.hasOwn(capturedBody.questions, 'is_off_topic'));
       assert.deepEqual(bigState.source.snippets.length, 5, 'input state must not be mutated');
+      // cut_tail 降级：answered outcome 必须回报真正发出去的片段数（管道据此对齐分数）
+      assert.equal(outcome.sent_snippets, 4);
     } finally {
       globalThis.fetch = saved;
     }
@@ -922,6 +1158,8 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
         'all snip questions must be dropped'
       );
       assert.equal(capturedBody.state.source.snippets.length, 500, 'state snippets are kept');
+      // 该级别不发任何 snip 题 → 实发片段数 0（管道据此把 snippet_scores 记为 []）
+      assert.equal(outcome.sent_snippets, 0);
     } finally {
       globalThis.fetch = saved;
     }
@@ -1165,4 +1403,136 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
       globalThis.fetch = saved;
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// 批 C 的另外两处 + 批 E 的两个测试盲区（02-FIX）：熔断在出闸后复查、并发闸名额
+// 交接、失败路径还名额、超时值不被写死。
+// ---------------------------------------------------------------------------
+
+describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E)', () => {
+  const state = buildState('s0', 'https://a.example/', 'Title', ['one'], 'q', 'i');
+  const request = { state, questions: buildQuestions(1) };
+
+  it('re-checks the breaker after the queue so parked requests do not fire (C3)', async () => {
+    // concurrency 1。先制造 2 次连续瞬态失败（离阈值 3 差一步），再让一个请求挂住
+    // 占住名额、两个排进闸；挂住的请求耗尽重试时把熔断打开——排队者醒来后必须复查
+    // 熔断，不再发 fetch
+    let fetchCount = 0;
+    let releaseHeld: ((response: Response) => void) | undefined;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      if (fetchCount === 7) {
+        // A 的首次 fetch 挂住，等测试释放
+        return await new Promise<Response>((resolve) => {
+          releaseHeld = resolve;
+        });
+      }
+      return new Response('rate limited', { status: 429 });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        { ...jevConfig, concurrency: 1 },
+        { jev_API_KEY: 'k' },
+        { sleep: async () => {}, random: () => 0, now: () => 1000000 }
+      );
+
+      // 两次失败（各 3 次尝试，fetch 1-6）→ 连续失败计数 2
+      for (let i = 0; i < 2; i += 1) {
+        const outcome = await classifier.classify(request);
+        assert.ok(outcome.status === 'failed' && outcome.kind === 'rate_limited');
+      }
+      assert.equal(fetchCount, 6);
+
+      // A 占住唯一名额并挂住；B、C 在闸上排队
+      const held = classifier.classify(request);
+      await waitFor(() => releaseHeld !== undefined && fetchCount === 7);
+      const queuedB = classifier.classify(request);
+      const queuedC = classifier.classify(request);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // 释放 A：它继续自己的重试直到耗尽（fetch 8、9），第 3 次连续失败 → 熔断打开
+      releaseHeld!(new Response('rate limited', { status: 429 }));
+      const heldOutcome = await held;
+      assert.ok(heldOutcome.status === 'failed' && heldOutcome.kind === 'rate_limited');
+      assert.equal(fetchCount, 9);
+
+      const [b, c] = await Promise.all([queuedB, queuedC]);
+      for (const [name, outcome] of [
+        ['B', b],
+        ['C', c],
+      ] as const) {
+        assert.ok(outcome.status === 'failed', `${name} ${JSON.stringify(outcome)}`);
+        assert.equal(
+          (outcome as { kind: string }).kind,
+          'breaker_open',
+          `${name} must re-check the breaker after waking`
+        );
+      }
+      assert.equal(
+        fetchCount,
+        9,
+        'parked requests must not fire any fetch after the breaker opened'
+      );
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('hands the slot to the head waiter instead of reopening a gap (C4)', async () => {
+    // concurrency 1。旧实现 release 先 `active -= 1` 再唤醒等待者，等待者的
+    // `active += 1` 在微任务里才跑——两者之间进入的新调用会看到空位直接开跑，
+    // 在途数超过上限。这里精确制造那个窗口：释放 A 的同一同步回合，用微任务插入
+    // 新调用 C（它排在 A 的续体之后、被唤醒的等待者之前）。
+    let inflight = 0;
+    let peak = 0;
+    const pending: Array<() => void> = [];
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      inflight += 1;
+      peak = Math.max(peak, inflight);
+      await new Promise<void>((resolve) => pending.push(resolve));
+      inflight -= 1;
+      return okResponseOf(defaultRecording.results['s0']);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        { ...jevConfig, concurrency: 1 },
+        { jev_API_KEY: 'k' },
+        { random: () => 0 }
+      );
+
+      const promises: Array<Promise<{ status: string }>> = [];
+      promises.push(classifier.classify(request)); // A 立即在途
+      await waitFor(() => pending.length === 1);
+      promises.push(classifier.classify(request)); // B 排队
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // 释放 A，并在同一同步回合排队一个微任务插入 C
+      pending.shift()!();
+      const inserted = Promise.resolve().then(() => classifier.classify(request));
+      promises.push(inserted);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(peak, 1, `the inserted call must queue, not jump the gate (peak ${peak})`);
+
+      // 再放行两次：B（被交接的名额）与 C
+      for (let i = 0; i < 2; i += 1) {
+        await waitFor(() => pending.length > 0);
+        pending.shift()!();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      const outcomes = await Promise.all(promises);
+      for (const outcome of outcomes) {
+        assert.equal(outcome.status, 'answered', JSON.stringify(outcome));
+      }
+      assert.equal(peak, 1, `peak in-flight fetches must be exactly 1, saw ${peak}`);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
 });
