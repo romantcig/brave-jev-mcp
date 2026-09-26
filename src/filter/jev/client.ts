@@ -117,17 +117,23 @@ export function parseJevResponse(status: number, bodyText: string): ParsedJevRes
 /** Jev 直连端点（notes/jev-api.md 实录）；后端集合只有 typesafe，无第二端点。 */
 export const JEVI_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
-/** 重试总尝试次数（SAFE-03 / A5 落定；探测脚本的 6 次口径不适用于服务器）。 */
+/** 重试总尝试次数（SAFE-03；每次尝试各自持有超时信号）。 */
 export const RETRY_ATTEMPTS = 3;
 
-/** 首次重试前的退避毫秒数（A5）。 */
+/** 首次重试前的退避毫秒数。 */
 export const RETRY_BACKOFF_BASE_MS = 500;
 
-/** 退避倍率：500 → 1000 → 2000 …（A5）。 */
+/** 退避倍率：500 → 1000 …（与封顶、随机抖动一同构成 `backoffDelayMs`）。 */
 export const RETRY_BACKOFF_MULTIPLIER = 2;
 
-/** 单次退避封顶毫秒数（A5；影子期可调）。 */
-export const RETRY_BACKOFF_CAP_MS = 4000;
+/**
+ * 单次退避封顶毫秒数（PLAN 第 5 节"兜底"行：500 × 2^(n-1) 封顶 5s，再随机减最多
+ * 25%）。同一常量也是 Retry-After 的分界：服务端要求等更久就不再重试。
+ */
+export const RETRY_BACKOFF_CAP_MS = 5000;
+
+/** 退避的随机抖动上限比例：`(1 - 0.25 × random)`（PLAN 第 5 节"兜底"行）。 */
+export const RETRY_JITTER_RATIO = 0.25;
 
 /** 32k 限额：state + 最长单题（token，notes/jev-api.md；JEV-05）。 */
 const LADDER_LIMIT_32K = 32000;
@@ -191,9 +197,48 @@ const readKey = (env: Record<string, string | undefined>): string => {
 /** AbortSignal.timeout 触发的 reject 名（Node 实测 'TimeoutError'；手动 abort 为 'AbortError'），二者都按超时记。 */
 const ABORT_ERROR_NAMES: ReadonlySet<string> = new Set(['AbortError', 'TimeoutError']);
 
-/** 第 attempt 次尝试失败后的退避毫秒数：500 × 2^(attempt-1) 封顶 4000（A5）。 */
-const backoffDelayMs = (attempt: number): number =>
-  Math.min(RETRY_BACKOFF_BASE_MS * RETRY_BACKOFF_MULTIPLIER ** (attempt - 1), RETRY_BACKOFF_CAP_MS);
+/**
+ * 第 attempt 次尝试失败后的退避毫秒数：`min(500 × 2^(attempt-1), 5000)`，再乘
+ * `(1 - 0.25 × random)`（PLAN 第 5 节"兜底"行：封顶 5s、随机减最多 25%）。
+ * `random` 由 hooks 注入，测试用固定值做精确断言。
+ */
+const backoffDelayMs = (attempt: number, random: () => number): number => {
+  const capped = Math.min(
+    RETRY_BACKOFF_BASE_MS * RETRY_BACKOFF_MULTIPLIER ** (attempt - 1),
+    RETRY_BACKOFF_CAP_MS
+  );
+  return capped * (1 - RETRY_JITTER_RATIO * random());
+};
+
+/**
+ * 解析 Retry-After 的等待毫秒数：先 `retry-after-ms`（毫秒，可小数），再
+ * `retry-after`（秒数，或 HTTP 日期——按 `now` 换算成距现在的毫秒数）。
+ * 头缺失、空、非数或换算成负数 → undefined（用普通退避）。
+ */
+export const parseRetryAfterMs = (response: Response, now: () => number): number | undefined => {
+  const header = (name: string): string | null => {
+    const value = response.headers.get(name);
+    return value !== null && value.trim() !== '' ? value.trim() : null;
+  };
+
+  const msHeader = header('retry-after-ms');
+  if (msHeader !== null) {
+    const ms = Number(msHeader);
+    return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
+  }
+
+  const secondsHeader = header('retry-after');
+  if (secondsHeader === null) return undefined;
+
+  // 纯数字（含小数）= 秒数；解析不了再按 HTTP 日期试
+  const seconds = Number(secondsHeader);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : undefined;
+
+  const date = Date.parse(secondsHeader);
+  if (!Number.isFinite(date)) return undefined;
+  const delta = date - now();
+  return delta >= 0 ? delta : undefined;
+};
 
 /** HTTP 失败的 detail：只含状态码与 body 前 200 字符摘要（T-02-05-1）。 */
 const httpFailure = (
@@ -208,14 +253,20 @@ const httpFailure = (
 
 /**
  * 超限阶梯（JEV-05，A12 判据映射）：发送前用 `estimateTokens` 加 15% 余量对两条
- * 限额做保护（超限直接 422，不是截断——必须自己降级）。
+ * 限额做保护（超限后果官方未写明——社区报告为直接拒绝，故发送前自行降级）。
  *
  * - ② 32k（state + 最长单题）超 → 从尾片段开始逐个砍（Brave 序），每砍一片段
  *   同时删对应 `snip{i}` 题，重算直到满足或片段砍光（ladder `cut_tail`）。
  * - ③ 64k（state + 全部问题）超 → 去掉全部 snip 题（来源级题与 state 片段保留，
- *   ladder `source_only_questions`——深于 cut_tail，直接覆盖）。
+ *   ladder `source_only_questions`——深于 cut_tail，直接覆盖）。**这一级实用上
+ *   走不到**：②先把 state 压进 32k 以内，此后要超 64k 需要约 460 道片段题，保留
+ *   作兜底，不为它单独加测试。
  * - ④ 仅来源级题仍超 32k（state 本身不可再砍）→ 返回 null：该来源不问 Jev
  *   （too_large；per_source 的 ladder `'skipped'` 由管道按 kind 记账）。
+ *
+ * 返回生效后的 state / questions 与**实际带 score 题发出的片段数**（`cut_tail` 砍尾
+ * 后比入参少、`source_only_questions` 为 0——该级不发任何 snip 题），供管道把片段
+ * 分数按位置对齐到真实发送范围。
  *
  * 估算只复用 `../tokens.js` 的 `estimateTokens`（01-04 明文，不复制实现）。
  * 写时复制：绝不改入参 state / questions（砍尾 slice 拷贝、删题浅拷贝）。
@@ -225,7 +276,7 @@ const applyOversizeLadder = (
   state: JevState,
   questions: Record<string, JevQuestion>,
   ladder: { value?: JevLadderLevel }
-): { state: JevState; questions: Record<string, JevQuestion> } | null => {
+): { state: JevState; questions: Record<string, JevQuestion>; sentSnippets: number } | null => {
   let workState = state;
   let workQuestions = questions;
 
@@ -266,47 +317,62 @@ const applyOversizeLadder = (
   // ④ 仅来源级题仍超 32k（state 本身不可再砍）→ 该来源不问 Jev
   if (over32k(workState, workQuestions)) return null;
 
-  return { state: workState, questions: workQuestions };
+  const sentSnippets = Object.keys(workQuestions).filter((name) =>
+    SNIP_KEY_PATTERN.test(name)
+  ).length;
+
+  return { state: workState, questions: workQuestions, sentSnippets };
 };
 
-/** 测试注入的时钟与睡眠（02-05 A5/A7）：缺省用全局实现。 */
+/** 测试注入的时钟、睡眠与随机数（缺省用全局实现）。 */
 export type JevClassifierHooks = {
-  /** 单调时钟：熔断窗口计时（Task 3）用；缺省 `Date.now`。 */
+  /** 单调时钟：熔断窗口计时与 Retry-After 日期换算用；缺省 `Date.now`。 */
   now?: () => number;
   /** 退避睡眠；缺省 `setTimeout`。测试注入立即 resolve 以做下限断言。 */
   sleep?: (ms: number) => Promise<void>;
+  /** 退避抖动用的随机数（`[0,1)`）；缺省 `Math.random`，测试注入固定值。 */
+  random?: () => number;
 };
 
 /**
  * 创建 Jev 分类器：工厂闭包形态（照 src/protocols/rebinding.ts 先例）——进程级
- * 状态（并发信号量；熔断计数由 Task 3 填）全部住闭包，库无模块级可变状态。
- * 每个实例独立：测试每用例新建实例互不污染。
+ * 状态（并发信号量、熔断计数）全部住闭包，库无模块级可变状态。每个实例独立：
+ * 测试每用例新建实例互不污染。
  *
  * 并发闸（JEV-04，Responsibility Map 划定层级）：上限 `config.jev.concurrency`
- * （默认 12，02-02 config 解析坏值回落），一波全发、超出排队等待，**跨管道调用
- * 生效**——管道只做全候选并发派发，不建双闸。名额在 classify 全程持有（重试不
- * 加闸、不重复取名额）。
+ * （默认 12），一波全发、超出排队等待，**跨管道调用生效**——管道只做全候选并发
+ * 派发，不建双闸。名额在 classify 全程持有（重试不加闸、不重复取名额）；释放时
+ * 直接把名额交给队首等待者（**交接**，不先减后加），否则新调用会插队使在途数
+ * 超过上限。
  *
- * 超时（SAFE-01）：每次尝试各自套 `AbortSignal.timeout(config.jev.timeoutMs)`
- * （默认 15000），不手写 Promise.race。abort 类错误 → 'timeout'，其余抛错 →
- * 'network'。
+ * 熔断（SAFE-02）：**进闸之前与出闸之后各查一次**——熔断打开时已在队列里的请求
+ * 醒来后照样会发，故出闸后复查，命中则释放名额并返回 `breaker_open`（零 fetch、
+ * 不计 n_requests，与短路同口径）。
  *
- * 重试（SAFE-03）：白名单只有 HTTP 429 / 529 与 fetch 网络异常（含超时）——
- * `RETRY_ATTEMPTS`（3）次尝试、退避 500ms 起倍率 2 封顶 4s。401 / 422 绝不重试
- * （422 重试必然再 422，Pitfall 7）；其余状态与 200 形状坏同样快速失败。
+ * 超时（SAFE-01）：每次尝试各自套 `AbortSignal.timeout(config.jev.timeoutMs)`，
+ * 不手写 Promise.race。
+ *
+ * 重试（SAFE-03，2026-09-27 定）：
+ * - **超时（含读正文阶段）不重试**，立即 `timeout` 失败；fetch 的其他异常重试
+ *   （`network`）。
+ * - HTTP：408 重试（`timeout`）、429/529 重试（`rate_limited`）、其余 5xx 重试
+ *   （`network`）；401/403 不重试（`auth`）、422 与其他 4xx 不重试（`validation`）、
+ *   200 但形状坏不重试（`validation`）。
+ * - 总尝试次数 `RETRY_ATTEMPTS`(3)；退避 `min(500×2^(n-1), 5000)` 再随机减最多
+ *   25%（`hooks.random`）。可重试响应上的 **Retry-After** 优先：解析值 ≤ 5s 就用它
+ *   代替本次退避；> 5s 则不再重试、立即按该状态的 kind 失败（计入熔断）。
+ * - 计入熔断的 kind 只有瞬态类（timeout / rate_limited / network）。
  *
  * 超限阶梯（JEV-05）：发送前按 `applyOversizeLadder` 降级；不可再砍 → 不发请求
- * 直接 failed 'too_large'。answered outcome 带实际生效的 ladder 级别名（未降级
- * 不记）；too_large 的 per_source ladder `'skipped'` 由管道按 kind 记账。
+ * 直接 failed 'too_large'。answered outcome 带实际生效的 ladder 级别名与真正发送
+ * 的片段数 `sent_snippets`（未降级可省略——管道据此把 snip 分数按位置对齐）。
  *
- * HTTP 状态映射：401 → 'auth'、422 → 'validation'、429/529 → 'rate_limited'、
- * 其余状态 → 'network'；200 但形状坏 → 'validation'（与回放传输同口径）。失败
- * 一律返回 failed 联合不抛（SAFE-01：单来源失败按"留"）。detail 只含状态码与
+ * 失败一律返回 failed 联合不抛（SAFE-01：单来源失败按"留"）。detail 只含状态码与
  * body 前 200 字符摘要，绝不拼接鉴权头或 key 值（T-02-05-1）。
  *
- * @param config `FilterConfig['jev']`（model / backend / timeoutMs / concurrency）
+ * @param config `FilterConfig['jev']`（model / timeoutMs / concurrency）
  * @param env key 来源（生产传 `process.env`；测试传显式对象）
- * @param hooks 可选时钟 / 睡眠注入（测试用）
+ * @param hooks 可选时钟 / 睡眠 / 随机数注入（测试用）
  * @returns `{ classify }`——管道经 `FilterDeps.classify` 注入
  */
 export function createJevClassifier(
@@ -319,30 +385,36 @@ export function createJevClassifier(
   const sleep =
     hooks?.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const now = hooks?.now ?? Date.now;
+  const random = hooks?.random ?? Math.random;
 
   // 进程级并发闸（JEV-04）：active < concurrency 直接进，否则排队等唤醒。
   let active = 0;
   const waiters: Array<() => void> = [];
   const acquire = async (): Promise<void> => {
-    if (active >= concurrency) {
-      await new Promise<void>((resolve) => waiters.push(resolve));
+    if (active < concurrency) {
+      active += 1;
+      return;
     }
-    active += 1;
+    await new Promise<void>((resolve) => waiters.push(resolve));
   };
+  /** 名额交接：有等待者时把名额直接交给队首（计数不变），没有才减计数。 */
   const release = (): void => {
+    const next = waiters.shift();
+    if (next !== undefined) {
+      next();
+      return;
+    }
     active -= 1;
-    waiters.shift()?.();
   };
 
-  // 熔断状态（SAFE-02 / A7）：连续瞬态失败计数跨请求累计；任一 answered 清零；
+  // 熔断状态（SAFE-02）：连续瞬态失败计数跨请求累计；任一 answered 清零；
   // 连续达 BREAKER_THRESHOLD → openUntil = now + BREAKER_OPEN_MS；到期直接闭合
   // 不做半开探测。同波在途请求无取消逻辑（无 AbortController 广播）。
   let consecutiveFailures = 0;
   let openUntil = 0;
 
   /** 瞬态失败记账：只有 timeout / rate_limited / network 计入熔断连续计数——
-   * auth / validation / too_large 是确定性请求问题，计入会让配置错误伪装成熔断
-   * （本计划 flagged 微决策）。 */
+   * auth / validation / too_large 是确定性请求问题，计入会让配置错误伪装成熔断。 */
   const recordFailure = (kind: ClassifyFailKind): void => {
     if (!TRANSIENT_FAILURE_KINDS.has(kind)) return;
     consecutiveFailures += 1;
@@ -351,22 +423,46 @@ export function createJevClassifier(
     }
   };
 
-  const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
-    // 熔断短路：open 期直接返回，零 fetch 且不占并发名额（闸在本闭包）
-    if (openUntil !== 0) {
-      if (now() < openUntil) {
-        return {
-          status: 'failed',
-          kind: 'breaker_open',
-          detail: 'circuit open after consecutive transient failures',
-        };
-      }
-      // 到期直接闭合，不做半开探测（A7）；计数从 0 起
-      openUntil = 0;
-      consecutiveFailures = 0;
+  /** 熔断窗口检查：open 期返回短路结果；到期则闭合、计数清零并返回 undefined。 */
+  const breakerShortCircuit = (): ClassifyOutcome | undefined => {
+    if (openUntil === 0) return undefined;
+    if (now() < openUntil) {
+      return {
+        status: 'failed',
+        kind: 'breaker_open',
+        detail: 'circuit open after consecutive transient failures',
+      };
     }
+    openUntil = 0;
+    consecutiveFailures = 0;
+    return undefined;
+  };
+
+  /** 异常按名判超时：AbortSignal 触发的 AbortError / TimeoutError 都算。 */
+  const kindOfThrow = (error: unknown): ClassifyFailKind => {
+    const name = (error as { name?: string } | null)?.name;
+    return name !== undefined && ABORT_ERROR_NAMES.has(name) ? 'timeout' : 'network';
+  };
+
+  const throwFailure = (kind: ClassifyFailKind, error: unknown): ClassifyOutcome => ({
+    status: 'failed',
+    kind,
+    ...(error instanceof Error && error.message !== ''
+      ? { detail: error.message.slice(0, 200) }
+      : {}),
+  });
+
+  const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
+    // 熔断短路（进闸前）：open 期直接返回，零 fetch 且不占并发名额
+    const beforeQueue = breakerShortCircuit();
+    if (beforeQueue !== undefined) return beforeQueue;
+
     await acquire();
     try {
+      // 熔断复查（出闸后）：排队期间熔断可能已打开——醒来后照样发就失去了熔断意义
+      const afterQueue = breakerShortCircuit();
+      if (afterQueue !== undefined) return afterQueue;
+
       // 超限阶梯（JEV-05）：发送前降级；null = 不可再砍，不发请求
       const ladder: { value?: JevLadderLevel } = {};
       const prepared = applyOversizeLadder(state, questions, ladder);
@@ -381,8 +477,20 @@ export function createJevClassifier(
       const sendState = prepared.state;
       const sendQuestions = prepared.questions;
       const body = JSON.stringify(buildRequest(sendState, sendQuestions, model));
+      const ladderLifted = ladder.value !== undefined;
 
-      // 重试循环（SAFE-03）：白名单 429 / 529 / 网络异常，每次尝试独立超时信号
+      /** 非 200 状态的 kind 映射；`retryable` 决定是否进入退避重试。 */
+      const statusOutcome = (
+        status: number
+      ): { kind: ClassifyFailKind; retryable: boolean } | undefined => {
+        if (status === 401 || status === 403) return { kind: 'auth', retryable: false };
+        if (status === 408) return { kind: 'timeout', retryable: true };
+        if (status === 429 || status === 529) return { kind: 'rate_limited', retryable: true };
+        if (status >= 500 && status <= 599) return { kind: 'network', retryable: true };
+        return { kind: 'validation', retryable: false };
+      };
+
+      // 重试循环（SAFE-03）：每次尝试独立超时信号；超时不重试
       for (let attempt = 1; ; attempt += 1) {
         let response: Response;
         try {
@@ -396,58 +504,66 @@ export function createJevClassifier(
             signal: AbortSignal.timeout(timeoutMs),
           });
         } catch (error) {
-          const name = (error as { name?: string } | null)?.name;
-          const kind: ClassifyFailKind =
-            name !== undefined && ABORT_ERROR_NAMES.has(name) ? 'timeout' : 'network';
-          if (attempt >= RETRY_ATTEMPTS) {
+          const kind = kindOfThrow(error);
+          if (kind === 'timeout' || attempt >= RETRY_ATTEMPTS) {
             recordFailure(kind);
-            return {
-              status: 'failed',
-              kind,
-              ...(error instanceof Error && error.message !== ''
-                ? { detail: error.message.slice(0, 200) }
-                : {}),
-            };
+            return throwFailure(kind, error);
           }
-          await sleep(backoffDelayMs(attempt));
+          await sleep(backoffDelayMs(attempt, random));
+          continue;
+        }
+
+        // 读正文也纳入重试与熔断口径：此处断连/超时原先会裸抛，绕过两者
+        let bodyText: string;
+        try {
+          bodyText = await response.text();
+        } catch (error) {
+          const kind = kindOfThrow(error);
+          if (kind === 'timeout' || attempt >= RETRY_ATTEMPTS) {
+            recordFailure(kind);
+            return throwFailure(kind, error);
+          }
+          await sleep(backoffDelayMs(attempt, random));
           continue;
         }
 
         const status = response.status;
-        const bodyText = await response.text();
         const parsed = parseJevResponse(status, bodyText);
         if (parsed.ok) {
-          // 任一成功清零连续失败计数（A7）
+          // 任一成功清零连续失败计数（SAFE-02）
           consecutiveFailures = 0;
           return {
             status: 'answered',
             model: parsed.model,
             answers: parsed.answers,
             input_tokens: parsed.input_tokens,
-            ...(ladder.value !== undefined ? { ladder: ladder.value } : {}),
+            ...(ladderLifted ? { ladder: ladder.value } : {}),
+            // 降级后实际带 score 题发出的片段数（不含 snip 题即 0）；未降级可省略，
+            // 管道按"全部发送"理解（见 ClassifyOutcome.sent_snippets 注释）
+            ...(ladderLifted ? { sent_snippets: prepared.sentSnippets } : {}),
           };
         }
-        if (parsed.kind === 'shape') {
-          // 200 但形状坏：确定性，不重试（重试必然再坏）
-          return httpFailure('validation', status, bodyText);
+
+        // 200 但形状坏：确定性，不重试（重试必然再坏）
+        if (parsed.kind === 'shape') return httpFailure('validation', status, bodyText);
+
+        const mapped = statusOutcome(status);
+        if (mapped === undefined || !mapped.retryable) {
+          // auth / validation 不计熔断（确定性请求问题）
+          return httpFailure(mapped?.kind ?? 'validation', status, bodyText);
         }
-        if (status === 401) {
-          return httpFailure('auth', status, bodyText);
+
+        // Retry-After 优先于普通退避；要求等超上限就干脆不再重试
+        const retryAfterMs = parseRetryAfterMs(response, now);
+        if (retryAfterMs !== undefined && retryAfterMs > RETRY_BACKOFF_CAP_MS) {
+          recordFailure(mapped.kind);
+          return httpFailure(mapped.kind, status, bodyText);
         }
-        if (status === 422) {
-          return httpFailure('validation', status, bodyText);
+        if (attempt >= RETRY_ATTEMPTS) {
+          recordFailure(mapped.kind);
+          return httpFailure(mapped.kind, status, bodyText);
         }
-        if (status === 429 || status === 529) {
-          if (attempt >= RETRY_ATTEMPTS) {
-            recordFailure('rate_limited');
-            return httpFailure('rate_limited', status, bodyText);
-          }
-          await sleep(backoffDelayMs(attempt));
-          continue;
-        }
-        // 白名单外状态（500 等）：确定性失败，不烧限额；kind 'network' 计入熔断
-        recordFailure('network');
-        return httpFailure('network', status, bodyText);
+        await sleep(retryAfterMs !== undefined ? retryAfterMs : backoffDelayMs(attempt, random));
       }
     } finally {
       release();
