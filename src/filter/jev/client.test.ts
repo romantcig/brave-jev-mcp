@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { parseFilterConfig } from '../config.js';
+import { parseFilterConfigObject } from '../config.js';
 import { filterLlmContext } from '../pipeline.js';
 import type {
   BraveLlmContextResponse,
@@ -295,7 +295,7 @@ for (const [name, recording] of Object.entries({
   assert.equal(recording.intent, expected.intent, `${name} recording intent mismatch`);
 
   const data = loadBraveFixture(`${name}.json`);
-  const config: FilterConfig = { ...parseFilterConfig({}), mode: 'on' };
+  const config: FilterConfig = { ...parseFilterConfigObject({}), mode: 'on' };
   const request = {
     params: { ...expected.request, query: expected.query },
     intent: expected.intent,
@@ -375,7 +375,7 @@ for (const [name, recording] of Object.entries({
 describe('empty response with classify injected (VERDICT-06)', () => {
   it('returns empty output and makes zero requests without fabricating sources', async () => {
     const recording = defaultRecording;
-    const config: FilterConfig = { ...parseFilterConfig({}), mode: 'on' };
+    const config: FilterConfig = { ...parseFilterConfigObject({}), mode: 'on' };
     const { result, stats } = await filterLlmContext(
       { grounding: { generic: [], map: [] }, sources: {} },
       { params: { query: 'q' }, intent: 'i' },
@@ -397,7 +397,6 @@ describe('empty response with classify injected (VERDICT-06)', () => {
 /** createJevClassifier 的入参 config（02-02 config 解析的同形状字面量）。 */
 const jevConfig = {
   model: DEFAULT_JEV_MODEL,
-  backend: 'typesafe' as const,
   timeoutMs: 15000,
   concurrency: 12,
 };

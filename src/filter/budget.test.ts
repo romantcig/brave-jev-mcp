@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   BRAVE_MAX_TOKENS,
@@ -17,14 +19,16 @@ const unit: FilterConfig = {
   overfetchFactor: 1,
   blocklist: new Set(),
   thresholds: { ...DEFAULT_THRESHOLDS },
-  jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+  logDir: join(homedir(), '.brave-jev', 'logs'),
 };
 const doubled: FilterConfig = {
   mode: 'off',
   overfetchFactor: 2,
   blocklist: new Set(),
   thresholds: { ...DEFAULT_THRESHOLDS },
-  jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+  logDir: join(homedir(), '.brave-jev', 'logs'),
 };
 
 describe('applyOverfetch', () => {

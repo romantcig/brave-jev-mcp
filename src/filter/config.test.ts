@@ -1,145 +1,24 @@
+/**
+ * 配置解析单测（02-FIX 批 B）：单一 JSON 配置文件 → FilterConfig。
+ * - `parseFilterConfigObject` 是纯函数主力：逐键合法值、边界值、坏值回落与 stderr 行。
+ * - `loadFilterConfig` 覆盖文件读取、黑名单文件并集与 fail-open。
+ * 真实临时目录 + 真实文件，不 mock fs；stderr 捕获后必须恢复。
+ */
+
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_BLOCKLIST } from './blocklist.js';
-import { JEV_BLOCKLIST_FILE_ENV, parseFilterConfig } from './config.js';
+import { JEV_CONFIG_FILE_ENV, loadFilterConfig, parseFilterConfigObject } from './config.js';
 import {
+  DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
+  DEFAULT_JEV_TIMEOUT_MS,
   DEFAULT_THRESHOLDS,
-  JEV_CONFIG_FILE_ENV,
-  resolveThresholds,
 } from './jev/questions.js';
-
-describe('parseFilterConfig', () => {
-  it('defaults to off with factor 1 when nothing is set', () => {
-    assert.deepEqual(parseFilterConfig({}), {
-      mode: 'off',
-      overfetchFactor: 1,
-      blocklist: new Set(),
-      thresholds: { ...DEFAULT_THRESHOLDS },
-      jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
-    });
-  });
-
-  it('exposes the default blocklist, initially empty', () => {
-    assert.deepEqual(parseFilterConfig({}).blocklist, DEFAULT_BLOCKLIST);
-    assert.equal(DEFAULT_BLOCKLIST.size, 0);
-  });
-
-  it('carries the eleven DEFAULT_THRESHOLDS values verbatim when nothing overrides them (02-06 adds file overrides)', () => {
-    assert.deepEqual(parseFilterConfig({}).thresholds, {
-      offTopicDrop: 0.85,
-      listingDrop: 0.8,
-      selfDeprecated: 0.7,
-      staleDrop: 0.85,
-      fillerDrop: 0.8,
-      reasoningProtect: 0.7,
-      snippetMin: 1.0,
-      minFacts: 4,
-      noveltyMin: 2,
-      cjkBonus: 0.1,
-      cjkShare: 0.5,
-    });
-    assert.deepEqual(parseFilterConfig({}).thresholds, { ...DEFAULT_THRESHOLDS });
-  });
-
-  it('reads each valid mode', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: 'off' }).mode, 'off');
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: 'shadow' }).mode, 'shadow');
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: 'on' }).mode, 'on');
-  });
-
-  it('ignores case and surrounding whitespace in the mode', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: ' ON ' }).mode, 'on');
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: 'Shadow' }).mode, 'shadow');
-  });
-
-  it('falls back to off for unknown or empty modes', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: 'banana' }).mode, 'off');
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: '' }).mode, 'off');
-    assert.equal(parseFilterConfig({ JEV_FILTER_MODE: undefined }).mode, 'off');
-  });
-
-  it('accepts overfetch factors of at least 1', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '2' }).overfetchFactor, 2);
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '1.5' }).overfetchFactor, 1.5);
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '1' }).overfetchFactor, 1);
-  });
-
-  it('falls back to factor 1 for non-numeric or sub-1 values', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '0.5' }).overfetchFactor, 1);
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: 'abc' }).overfetchFactor, 1);
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '' }).overfetchFactor, 1);
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: '-3' }).overfetchFactor, 1);
-    assert.equal(parseFilterConfig({ JEV_FILTER_OVERFETCH_FACTOR: 'Infinity' }).overfetchFactor, 1);
-  });
-
-  it('falls back to the pinned model for an empty or whitespace model value', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_MODEL: '' }).jev.model, 'jev-1.13.0');
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_MODEL: '   ' }).jev.model, 'jev-1.13.0');
-    assert.equal(parseFilterConfig({}).jev.model, 'jev-1.13.0');
-  });
-
-  it('trims a custom model value', () => {
-    assert.equal(
-      parseFilterConfig({ JEV_FILTER_JEV_MODEL: ' jev-1.14.0 ' }).jev.model,
-      'jev-1.14.0'
-    );
-  });
-
-  it('falls back to the typesafe backend for values outside the backend set (JEV-01)', () => {
-    assert.equal(
-      parseFilterConfig({ JEV_FILTER_JEV_BACKEND: 'openrouter' }).jev.backend,
-      'typesafe'
-    );
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_BACKEND: '' }).jev.backend, 'typesafe');
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_BACKEND: 'typesafe' }).jev.backend, 'typesafe');
-  });
-
-  it('falls back to the 15000ms timeout for non-numeric or sub-1 values', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: 'abc' }).jev.timeoutMs, 15000);
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '-5' }).jev.timeoutMs, 15000);
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '0' }).jev.timeoutMs, 15000);
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '' }).jev.timeoutMs, 15000);
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_TIMEOUT_MS: '30000' }).jev.timeoutMs, 30000);
-  });
-
-  it('falls back to the concurrency gate value of 12 for non-numeric or sub-1 values', () => {
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: '0' }).jev.concurrency, 12);
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: 'abc' }).jev.concurrency, 12);
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: '-2' }).jev.concurrency, 12);
-    assert.equal(parseFilterConfig({ JEV_FILTER_JEV_CONCURRENCY: '6' }).jev.concurrency, 6);
-  });
-
-  it('is a pure function: the same env yields deep-equal results', () => {
-    const env = { JEV_FILTER_MODE: 'shadow', JEV_FILTER_OVERFETCH_FACTOR: '2' };
-
-    const first = parseFilterConfig(env);
-    const second = parseFilterConfig(env);
-
-    assert.deepEqual(first, second);
-    assert.notEqual(first, second);
-    assert.deepEqual(env, { JEV_FILTER_MODE: 'shadow', JEV_FILTER_OVERFETCH_FACTOR: '2' });
-  });
-
-  it('never reads process.env on its own', () => {
-    // 导入期与调用期都不读 process.env：只看传入的 env 对象
-    const original = process.env.JEV_FILTER_MODE;
-    process.env.JEV_FILTER_MODE = 'on';
-
-    try {
-      assert.equal(parseFilterConfig({}).mode, 'off');
-    } finally {
-      if (original === undefined) {
-        delete process.env.JEV_FILTER_MODE;
-      } else {
-        process.env.JEV_FILTER_MODE = original;
-      }
-    }
-  });
-});
+import type { FilterConfig } from './types.js';
 
 /**
  * stderr 捕获：[jev-filter] 告警走 console.error（stdout 是 stdio 协议通道，
@@ -160,10 +39,7 @@ const captureStderr = (run: () => void): string[] => {
 };
 
 /** 临时目录与文件工具：每个 describe 一个独立目录，测后统一清理。 */
-const makeTmpRoot = (): string => {
-  const dir = mkdtempSync(join(tmpdir(), 'jev-config-test-'));
-  return dir;
-};
+const makeTmpRoot = (): string => mkdtempSync(join(tmpdir(), 'jev-config-test-'));
 
 const writeFixture = (dir: string, name: string, content: unknown): string => {
   const filePath = join(dir, name);
@@ -171,242 +47,577 @@ const writeFixture = (dir: string, name: string, content: unknown): string => {
   return filePath;
 };
 
-describe('resolveThresholds via JEV_FILTER_CONFIG_FILE (02-06)', () => {
-  const tmpRoot = makeTmpRoot();
-  after(() => {
-    rmSync(tmpRoot, { recursive: true, force: true });
-  });
+const defaults = (): FilterConfig => ({
+  mode: 'off',
+  overfetchFactor: 1,
+  blocklist: DEFAULT_BLOCKLIST,
+  thresholds: { ...DEFAULT_THRESHOLDS },
+  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: DEFAULT_JEV_TIMEOUT_MS, concurrency: 12 },
+  logDir: join(homedir(), '.brave-jev', 'logs'),
+});
 
-  it('returns a frozen shallow copy of the defaults when the variable is unset', () => {
-    const thresholds = resolveThresholds({});
-    assert.deepEqual(thresholds, { ...DEFAULT_THRESHOLDS });
-    assert.notEqual(thresholds, DEFAULT_THRESHOLDS);
-    assert.ok(Object.isFrozen(thresholds));
-    // 未设时空串与纯空白同样按未设处理（description.ts 先例）
-    assert.deepEqual(resolveThresholds({ [JEV_CONFIG_FILE_ENV]: '' }), { ...DEFAULT_THRESHOLDS });
-    assert.deepEqual(resolveThresholds({ [JEV_CONFIG_FILE_ENV]: '   ' }), {
-      ...DEFAULT_THRESHOLDS,
-    });
-  });
-
-  it('falls back to every default when the file does not exist, with one stderr line', () => {
-    const missing = join(tmpRoot, 'no-such-config.json');
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
+describe('parseFilterConfigObject: shape and defaults', () => {
+  it('returns every default for an empty object without any warning', () => {
+    let config: FilterConfig | undefined;
     const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: missing });
+      config = parseFilterConfigObject({});
     });
-    assert.deepEqual(thresholds, { ...DEFAULT_THRESHOLDS });
-    assert.equal(stderr.length, 1);
-    assert.ok(stderr[0].startsWith('[jev-filter]'), stderr[0]);
-    assert.ok(stderr[0].includes(missing), stderr[0]);
+    assert.equal(stderr.length, 0, stderr.join('\n'));
+    assert.deepEqual(config, defaults());
   });
 
-  it('falls back to every default when the file is not valid JSON', () => {
-    const bad = writeFixture(tmpRoot, 'bad.json', '{not valid json');
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: bad });
-    });
-    assert.deepEqual(thresholds, { ...DEFAULT_THRESHOLDS });
-    assert.equal(stderr.length, 1);
-    assert.ok(stderr[0].startsWith('[jev-filter]'), stderr[0]);
+  it('falls back to all defaults for a non-object top level, with one warning', () => {
+    for (const raw of [5, 'text', [1, 2], true]) {
+      let config: FilterConfig | undefined;
+      const stderr = captureStderr(() => {
+        config = parseFilterConfigObject(raw);
+      });
+      assert.equal(stderr.length, 1, JSON.stringify(raw));
+      assert.ok(stderr[0].startsWith('[jev-filter]'), stderr[0]);
+      assert.deepEqual(config, defaults());
+    }
   });
 
-  it('falls back to every default when the file is not a JSON object', () => {
-    const array = writeFixture(tmpRoot, 'array.json', [1, 2]);
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
+  it('treats undefined / null top level as an empty config without warning', () => {
+    let fromUndefined: FilterConfig | undefined;
+    let fromNull: FilterConfig | undefined;
     const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: array });
-    });
-    assert.deepEqual(thresholds, { ...DEFAULT_THRESHOLDS });
-    assert.equal(stderr.length, 1);
-  });
-
-  it('applies the overridden values from a valid file and keeps the rest at defaults', () => {
-    const file = writeFixture(tmpRoot, 'valid.json', {
-      off_topic_drop: 0.9,
-      snippet_min: 1.2,
-      min_facts: 6,
-    });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: file });
+      fromUndefined = parseFilterConfigObject(undefined);
+      fromNull = parseFilterConfigObject(null);
     });
     assert.equal(stderr.length, 0);
-    assert.deepEqual(thresholds, {
+    assert.deepEqual(fromUndefined, defaults());
+    assert.deepEqual(fromNull, defaults());
+  });
+
+  it('exposes the default blocklist, initially empty', () => {
+    assert.deepEqual(parseFilterConfigObject({}).blocklist, DEFAULT_BLOCKLIST);
+    assert.equal(DEFAULT_BLOCKLIST.size, 0);
+  });
+
+  it('carries the eleven DEFAULT_THRESHOLDS values verbatim', () => {
+    assert.deepEqual(parseFilterConfigObject({}).thresholds, {
+      offTopicDrop: 0.85,
+      listingDrop: 0.8,
+      selfDeprecated: 0.7,
+      staleDrop: 0.85,
+      fillerDrop: 0.8,
+      reasoningProtect: 0.7,
+      snippetMin: 1.0,
+      minFacts: 4,
+      noveltyMin: 2,
+      cjkBonus: 0.1,
+      cjkShare: 0.5,
+    });
+  });
+
+  it('has no backend field any more (JEV-01 single backend)', () => {
+    assert.equal(Object.hasOwn(parseFilterConfigObject({}).jev, 'backend'), false);
+    assert.deepEqual(Object.keys(parseFilterConfigObject({}).jev), [
+      'model',
+      'timeoutMs',
+      'concurrency',
+    ]);
+  });
+
+  it('is a pure function: the same input yields deep-equal fresh objects', () => {
+    const raw = { mode: 'shadow', overfetch_factor: 2 };
+
+    const first = parseFilterConfigObject(raw);
+    const second = parseFilterConfigObject(raw);
+
+    assert.deepEqual(first, second);
+    assert.notEqual(first, second);
+    assert.notEqual(first.jev, second.jev);
+    assert.deepEqual(raw, { mode: 'shadow', overfetch_factor: 2 });
+  });
+
+  it('never reads process.env on its own', () => {
+    const original = process.env[JEV_CONFIG_FILE_ENV];
+    process.env[JEV_CONFIG_FILE_ENV] = 'C:/no/such/file.json';
+
+    try {
+      assert.equal(parseFilterConfigObject({}).mode, 'off');
+    } finally {
+      if (original === undefined) delete process.env[JEV_CONFIG_FILE_ENV];
+      else process.env[JEV_CONFIG_FILE_ENV] = original;
+    }
+  });
+});
+
+describe('parseFilterConfigObject: mode', () => {
+  it('reads each valid mode', () => {
+    assert.equal(parseFilterConfigObject({ mode: 'off' }).mode, 'off');
+    assert.equal(parseFilterConfigObject({ mode: 'shadow' }).mode, 'shadow');
+    assert.equal(parseFilterConfigObject({ mode: 'on' }).mode, 'on');
+  });
+
+  it('ignores case and surrounding whitespace', () => {
+    assert.equal(parseFilterConfigObject({ mode: ' ON ' }).mode, 'on');
+    assert.equal(parseFilterConfigObject({ mode: 'Shadow' }).mode, 'shadow');
+  });
+
+  it('falls back to off for unknown, empty or non-string modes, warning once each', () => {
+    for (const value of ['banana', '', '   ', 5, true, null]) {
+      const lines: string[] = [];
+      const config = parseFilterConfigObject({ mode: value }, (line) => lines.push(line));
+      assert.equal(config.mode, 'off', JSON.stringify(value));
+      assert.equal(lines.length, 1, JSON.stringify(value));
+      assert.match(lines[0], /^\[jev-filter\] config: ignoring mode=/);
+      assert.ok(lines[0].endsWith('using default "off"'), lines[0]);
+    }
+  });
+});
+
+describe('parseFilterConfigObject: overfetch_factor', () => {
+  it('accepts finite numbers of at least 1', () => {
+    assert.equal(parseFilterConfigObject({ overfetch_factor: 2 }).overfetchFactor, 2);
+    assert.equal(parseFilterConfigObject({ overfetch_factor: 1.5 }).overfetchFactor, 1.5);
+    assert.equal(parseFilterConfigObject({ overfetch_factor: 1 }).overfetchFactor, 1);
+  });
+
+  it('falls back to 1 for sub-1, non-finite, string or missing values', () => {
+    for (const value of [0.5, 0, -3, Number.POSITIVE_INFINITY, '2', null, true, {}]) {
+      const lines: string[] = [];
+      const config = parseFilterConfigObject({ overfetch_factor: value }, (line) =>
+        lines.push(line)
+      );
+      assert.equal(config.overfetchFactor, 1, JSON.stringify(value));
+      assert.equal(lines.length, 1, JSON.stringify(value));
+      assert.match(lines[0], /ignoring overfetch_factor=/);
+    }
+  });
+});
+
+describe('parseFilterConfigObject: jev group', () => {
+  it('trims a custom model and falls back for blank or non-string values', () => {
+    assert.equal(
+      parseFilterConfigObject({ jev: { model: ' jev-1.14.0 ' } }).jev.model,
+      'jev-1.14.0'
+    );
+    for (const value of ['', '   ', 5, null]) {
+      const lines: string[] = [];
+      const config = parseFilterConfigObject({ jev: { model: value } }, (line) => lines.push(line));
+      assert.equal(config.jev.model, DEFAULT_JEV_MODEL, JSON.stringify(value));
+      assert.equal(lines.length, 1, JSON.stringify(value));
+      assert.match(lines[0], /ignoring jev\.model=/);
+    }
+  });
+
+  it('accepts integer timeouts inside [1000, 60000] and rejects everything else', () => {
+    assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 1000 } }).jev.timeoutMs, 1000);
+    assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 60000 } }).jev.timeoutMs, 60000);
+    assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 30000 } }).jev.timeoutMs, 30000);
+
+    // 15000.5 能过旧校验，运行时会让 AbortSignal.timeout 抛 RangeError → Jev 静默失效
+    for (const value of [15000.5, 999, 60001, 0, -5, '15000', null, true]) {
+      const lines: string[] = [];
+      const config = parseFilterConfigObject({ jev: { timeout_ms: value } }, (line) =>
+        lines.push(line)
+      );
+      assert.equal(config.jev.timeoutMs, DEFAULT_JEV_TIMEOUT_MS, JSON.stringify(value));
+      assert.equal(lines.length, 1, JSON.stringify(value));
+      assert.match(lines[0], /ignoring jev\.timeout_ms=/);
+    }
+  });
+
+  it('accepts integer concurrency inside [1, 64] and rejects everything else', () => {
+    assert.equal(parseFilterConfigObject({ jev: { concurrency: 1 } }).jev.concurrency, 1);
+    assert.equal(parseFilterConfigObject({ jev: { concurrency: 64 } }).jev.concurrency, 64);
+    assert.equal(parseFilterConfigObject({ jev: { concurrency: 6 } }).jev.concurrency, 6);
+
+    for (const value of [0, -2, 65, 12.5, '12', null, true]) {
+      const lines: string[] = [];
+      const config = parseFilterConfigObject({ jev: { concurrency: value } }, (line) =>
+        lines.push(line)
+      );
+      assert.equal(config.jev.concurrency, DEFAULT_JEV_CONCURRENCY, JSON.stringify(value));
+      assert.equal(lines.length, 1, JSON.stringify(value));
+      assert.match(lines[0], /ignoring jev\.concurrency=/);
+    }
+  });
+
+  it('falls back for the whole group when jev is not an object, with one warning', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject({ jev: 5 }, (line) => lines.push(line));
+    assert.deepEqual(config.jev, {
+      model: DEFAULT_JEV_MODEL,
+      timeoutMs: DEFAULT_JEV_TIMEOUT_MS,
+      concurrency: DEFAULT_JEV_CONCURRENCY,
+    });
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /config: jev=5 is not an object/);
+  });
+});
+
+describe('parseFilterConfigObject: thresholds group', () => {
+  it('applies valid overrides and keeps the rest at defaults', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject(
+      {
+        thresholds: {
+          off_topic_drop: 0.9,
+          snippet_min: 1.2,
+          min_facts: 6,
+          novelty_min: 3,
+          cjk_share: 0,
+        },
+      },
+      (line) => lines.push(line)
+    );
+    assert.equal(lines.length, 0, lines.join('\n'));
+    assert.deepEqual(config.thresholds, {
       ...DEFAULT_THRESHOLDS,
       offTopicDrop: 0.9,
       snippetMin: 1.2,
       minFacts: 6,
+      noveltyMin: 3,
+      cjkShare: 0,
+    });
+    assert.ok(Object.isFrozen(config.thresholds));
+  });
+
+  it('accepts the boundary values of every range', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject(
+      {
+        thresholds: {
+          off_topic_drop: 0,
+          listing_drop: 1,
+          self_deprecated: 0,
+          stale_drop: 1,
+          filler_drop: 0,
+          reasoning_protect: 1,
+          snippet_min: 2,
+          min_facts: 1,
+          novelty_min: 1,
+          cjk_bonus: 0,
+          cjk_share: 1,
+        },
+      },
+      (line) => lines.push(line)
+    );
+    assert.equal(lines.length, 0, lines.join('\n'));
+    assert.deepEqual(config.thresholds, {
+      offTopicDrop: 0,
+      listingDrop: 1,
+      selfDeprecated: 0,
+      staleDrop: 1,
+      fillerDrop: 0,
+      reasoningProtect: 1,
+      snippetMin: 2,
+      minFacts: 1,
+      noveltyMin: 1,
+      cjkBonus: 0,
+      cjkShare: 1,
     });
   });
 
-  it('keeps the default for keys missing from the config file', () => {
-    const partial = writeFixture(tmpRoot, 'partial.json', { off_topic_drop: 0.9 });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: partial });
-    });
-    assert.equal(stderr.length, 0);
-    assert.equal(thresholds?.offTopicDrop, 0.9);
+  it('falls back per key for out-of-range values while other file keys still apply', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject(
+      {
+        thresholds: {
+          off_topic_drop: 1.5,
+          stale_drop: -0.1,
+          snippet_min: 1.2,
+          min_facts: 6,
+        },
+      },
+      (line) => lines.push(line)
+    );
+    assert.equal(lines.length, 2, lines.join('\n'));
+    assert.equal(config.thresholds.offTopicDrop, DEFAULT_THRESHOLDS.offTopicDrop);
+    assert.equal(config.thresholds.staleDrop, DEFAULT_THRESHOLDS.staleDrop);
+    assert.equal(config.thresholds.snippetMin, 1.2);
+    assert.equal(config.thresholds.minFacts, 6);
+    assert.ok(lines.some((line) => line.includes('thresholds.off_topic_drop=1.5')));
+    assert.ok(lines.some((line) => line.includes('thresholds.stale_drop=-0.1')));
+  });
+
+  it('caps snippet_min at 2 (score tops out at 2.0), falling back above it', () => {
+    assert.equal(
+      parseFilterConfigObject({ thresholds: { snippet_min: 2 } }).thresholds.snippetMin,
+      2
+    );
+
+    const lines: string[] = [];
+    const config = parseFilterConfigObject({ thresholds: { snippet_min: 2.01 } }, (line) =>
+      lines.push(line)
+    );
+    assert.equal(config.thresholds.snippetMin, DEFAULT_THRESHOLDS.snippetMin);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /ignoring thresholds\.snippet_min=2\.01; using default 1/);
+
+    // 旧口径 [0,3] 放行的 3 现在也回落
+    const three = parseFilterConfigObject({ thresholds: { snippet_min: 3 } }, () => {});
+    assert.equal(three.thresholds.snippetMin, DEFAULT_THRESHOLDS.snippetMin);
+  });
+
+  it('falls back for non-numeric and string values, warning once per key', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject(
+      { thresholds: { reasoning_protect: 'high', cjk_bonus: 0.2, min_facts: 4.5 } },
+      (line) => lines.push(line)
+    );
+    assert.equal(config.thresholds.reasoningProtect, DEFAULT_THRESHOLDS.reasoningProtect);
+    assert.equal(config.thresholds.cjkBonus, 0.2);
+    assert.equal(config.thresholds.minFacts, DEFAULT_THRESHOLDS.minFacts);
+    assert.equal(lines.length, 2, lines.join('\n'));
+  });
+
+  it('requires integers for min_facts and novelty_min', () => {
+    for (const value of [4.5, 2.0000001, '4', null]) {
+      const lines: string[] = [];
+      const config = parseFilterConfigObject({ thresholds: { min_facts: value } }, (line) =>
+        lines.push(line)
+      );
+      assert.equal(config.thresholds.minFacts, DEFAULT_THRESHOLDS.minFacts, JSON.stringify(value));
+      assert.equal(lines.length, 1, JSON.stringify(value));
+    }
+    const zero = parseFilterConfigObject({ thresholds: { novelty_min: 0 } }, () => {});
+    assert.equal(zero.thresholds.noveltyMin, DEFAULT_THRESHOLDS.noveltyMin);
+    const negative = parseFilterConfigObject({ thresholds: { novelty_min: -1 } }, () => {});
+    assert.equal(negative.thresholds.noveltyMin, DEFAULT_THRESHOLDS.noveltyMin);
+  });
+
+  it('ignores unknown keys inside thresholds (fail-open direction)', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject(
+      { thresholds: { unknown_key: 123, off_topic_drop: 0.9 } },
+      (line) => lines.push(line)
+    );
+    assert.equal(lines.length, 0);
+    assert.equal(config.thresholds.offTopicDrop, 0.9);
     assert.deepEqual(
-      { ...thresholds, offTopicDrop: DEFAULT_THRESHOLDS.offTopicDrop },
+      { ...config.thresholds, offTopicDrop: DEFAULT_THRESHOLDS.offTopicDrop },
       { ...DEFAULT_THRESHOLDS }
     );
   });
 
-  it('falls back per-key for an out-of-range upper bound while other file keys still apply', () => {
-    const mixed = writeFixture(tmpRoot, 'mixed.json', {
-      off_topic_drop: 1.5,
-      snippet_min: 1.2,
-      min_facts: 6,
-    });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: mixed });
-    });
-    assert.equal(stderr.length, 0);
-    // 坏值只回落该项；其余文件项仍生效（T-02-06-1：坏值绝不拖垮整层）
-    assert.equal(thresholds?.offTopicDrop, DEFAULT_THRESHOLDS.offTopicDrop);
-    assert.equal(thresholds?.snippetMin, 1.2);
-    assert.equal(thresholds?.minFacts, 6);
-  });
-
-  it("falls back per-key for a non-numeric value (reasoning_protect 'high')", () => {
-    const nonNumeric = writeFixture(tmpRoot, 'non-numeric.json', {
-      reasoning_protect: 'high',
-      cjk_bonus: 0.2,
-    });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: nonNumeric });
-    });
-    assert.equal(stderr.length, 0);
-    assert.equal(thresholds?.reasoningProtect, DEFAULT_THRESHOLDS.reasoningProtect);
-    assert.equal(thresholds?.cjkBonus, 0.2);
-  });
-
-  it('falls back per-key for an out-of-range snippet_min 5', () => {
-    const file = writeFixture(tmpRoot, 'snippet-max.json', { snippet_min: 5 });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: file });
-    });
-    assert.equal(stderr.length, 0);
-    assert.equal(thresholds?.snippetMin, DEFAULT_THRESHOLDS.snippetMin);
-  });
-
-  it('falls back per-key for min_facts below one (0)', () => {
-    const file = writeFixture(tmpRoot, 'min-facts.json', { min_facts: 0 });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: file });
-    });
-    assert.equal(stderr.length, 0);
-    assert.equal(thresholds?.minFacts, DEFAULT_THRESHOLDS.minFacts);
-  });
-
-  it('falls back per-key for negative novelty_min (-1)', () => {
-    const file = writeFixture(tmpRoot, 'novelty-min.json', { novelty_min: -1 });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: file });
-    });
-    assert.equal(stderr.length, 0);
-    assert.equal(thresholds?.noveltyMin, DEFAULT_THRESHOLDS.noveltyMin);
-  });
-
-  it('accepts boundary values of 0 and 1 for cjk_share', () => {
-    const zero = writeFixture(tmpRoot, 'cjk-share-zero.json', { cjk_share: 0 });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: zero });
-    });
-    assert.equal(stderr.length, 0);
-    assert.equal(thresholds?.cjkShare, 0);
-
-    const one = writeFixture(tmpRoot, 'cjk-share-one.json', { cjk_share: 1 });
-    const stderrOne = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: one });
-    });
-    assert.equal(stderrOne.length, 0);
-    assert.equal(thresholds?.cjkShare, 1);
-  });
-
-  it('ignores unknown keys in the config file (fail-open direction)', () => {
-    const unknown = writeFixture(tmpRoot, 'unknown-keys.json', {
-      unknown_key: 123,
-      off_topic_drop: 0.9,
-    });
-    let thresholds: ReturnType<typeof resolveThresholds> | undefined;
-    const stderr = captureStderr(() => {
-      thresholds = resolveThresholds({ [JEV_CONFIG_FILE_ENV]: unknown });
-    });
-    assert.equal(stderr.length, 0);
-    assert.equal(thresholds?.offTopicDrop, 0.9);
-    assert.deepEqual(
-      { ...thresholds, offTopicDrop: DEFAULT_THRESHOLDS.offTopicDrop },
-      { ...DEFAULT_THRESHOLDS }
-    );
-  });
-
-  it('wires the config file through parseFilterConfig (thresholds override merged)', () => {
-    const file = writeFixture(tmpRoot, 'wired.json', { off_topic_drop: 0.9, snippet_min: 1.2 });
-    let config: ReturnType<typeof parseFilterConfig> | undefined;
-    const stderr = captureStderr(() => {
-      config = parseFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
-    });
-    assert.equal(stderr.length, 0);
-    assert.deepEqual(config?.thresholds, {
-      ...DEFAULT_THRESHOLDS,
-      offTopicDrop: 0.9,
-      snippetMin: 1.2,
-    });
+  it('falls back for the whole group when thresholds is not an object, with one warning', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject({ thresholds: [1, 2] }, (line) => lines.push(line));
+    assert.deepEqual(config.thresholds, { ...DEFAULT_THRESHOLDS });
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /config: thresholds=\[1,2\] is not an object/);
   });
 });
 
-describe('blocklist file via JEV_FILTER_BLOCKLIST_FILE (02-06)', () => {
+describe('parseFilterConfigObject: file paths and log_dir', () => {
+  it('keeps non-empty string paths and drops blank or non-string ones', () => {
+    const config = parseFilterConfigObject({
+      blocklist_file: '  C:/farms.txt  ',
+      tool_description_file: ' C:/desc.txt ',
+    });
+    assert.equal(config.toolDescriptionFile, 'C:/desc.txt');
+
+    const lines: string[] = [];
+    const bad = parseFilterConfigObject({ blocklist_file: '', tool_description_file: 5 }, (line) =>
+      lines.push(line)
+    );
+    assert.equal(bad.toolDescriptionFile, undefined);
+    assert.equal(lines.length, 2, lines.join('\n'));
+    assert.ok(lines.some((line) => line.includes('ignoring blocklist_file=')));
+    assert.ok(lines.some((line) => line.includes('ignoring tool_description_file=5')));
+  });
+
+  it('defaults log_dir to ~/.brave-jev/logs with the home expanded', () => {
+    assert.equal(parseFilterConfigObject({}).logDir, join(homedir(), '.brave-jev', 'logs'));
+  });
+
+  it('expands a leading ~ in log_dir and trims it', () => {
+    assert.equal(
+      parseFilterConfigObject({ log_dir: ' ~/logs/jev ' }).logDir,
+      join(homedir(), 'logs', 'jev')
+    );
+    assert.equal(
+      parseFilterConfigObject({ log_dir: '~\\jev-logs' }).logDir,
+      join(homedir(), 'jev-logs')
+    );
+    assert.equal(parseFilterConfigObject({ log_dir: '~' }).logDir, homedir());
+    assert.equal(parseFilterConfigObject({ log_dir: 'C:/logs' }).logDir, 'C:/logs');
+  });
+
+  it('falls back to the default log_dir for blank or non-string values', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject({ log_dir: '   ' }, (line) => lines.push(line));
+    assert.equal(config.logDir, join(homedir(), '.brave-jev', 'logs'));
+    assert.equal(lines.length, 1);
+    const bad = parseFilterConfigObject({ log_dir: 5 }, () => {});
+    assert.equal(bad.logDir, join(homedir(), '.brave-jev', 'logs'));
+  });
+});
+
+describe('parseFilterConfigObject: warning format', () => {
+  it('names the key path, the offending value and the default on every bad value', () => {
+    const lines: string[] = [];
+    parseFilterConfigObject(
+      {
+        mode: 'banana',
+        overfetch_factor: '2',
+        jev: { model: '', timeout_ms: 15000.5, concurrency: 65 },
+        thresholds: { snippet_min: 2.01, min_facts: 4.5, cjk_bonus: 7 },
+        log_dir: '',
+      },
+      (line) => lines.push(line)
+    );
+
+    assert.equal(lines.length, 9, lines.join('\n'));
+    for (const line of lines) {
+      assert.ok(line.startsWith('[jev-filter] config: '), line);
+      assert.ok(line.includes('; using default '), line);
+    }
+    assert.ok(lines.some((line) => line.includes('ignoring mode="banana"; using default "off"')));
+    assert.ok(lines.some((line) => line.includes('ignoring thresholds.min_facts=4.5')));
+  });
+
+  it('truncates very long offending values', () => {
+    const lines: string[] = [];
+    parseFilterConfigObject({ mode: 'x'.repeat(500) }, (line) => lines.push(line));
+    assert.equal(lines.length, 1);
+    assert.ok(lines[0].length < 200, `warning too long: ${lines[0].length}`);
+    assert.ok(lines[0].includes('...'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadFilterConfig：文件读取、fail-open 与黑名单文件并集
+// ---------------------------------------------------------------------------
+
+describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
   const tmpRoot = makeTmpRoot();
   after(() => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it('merges the blocklist file hosts with the built-in blocklist', () => {
-    const file = writeFixture(
+  it('returns all defaults when the variable is unset, blank or whitespace', () => {
+    const stderr = captureStderr(() => {
+      assert.deepEqual(loadFilterConfig({}), defaults());
+      assert.deepEqual(loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: '' }), defaults());
+      assert.deepEqual(loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: '   ' }), defaults());
+    });
+    assert.equal(stderr.length, 0, stderr.join('\n'));
+  });
+
+  it('falls back to all defaults when the file does not exist, with one stderr line', () => {
+    const missing = join(tmpRoot, 'no-such-config.json');
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: missing });
+    });
+    assert.deepEqual(config, defaults());
+    assert.equal(stderr.length, 1, stderr.join('\n'));
+    assert.ok(stderr[0].startsWith('[jev-filter]'), stderr[0]);
+    assert.ok(stderr[0].includes(missing), stderr[0]);
+  });
+
+  it('falls back to all defaults when the file is not valid JSON', () => {
+    const bad = writeFixture(tmpRoot, 'bad.json', '{not valid json');
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: bad });
+    });
+    assert.deepEqual(config, defaults());
+    assert.equal(stderr.length, 1, stderr.join('\n'));
+  });
+
+  it('falls back to all defaults when the top level is not a JSON object', () => {
+    const array = writeFixture(tmpRoot, 'array.json', [1, 2]);
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: array });
+    });
+    assert.deepEqual(config, defaults());
+    assert.equal(stderr.length, 1, stderr.join('\n'));
+  });
+
+  it('parses a full config file into the documented shape', () => {
+    const file = writeFixture(tmpRoot, 'full.json', {
+      mode: 'shadow',
+      overfetch_factor: 2,
+      jev: { model: 'jev-1.14.0', timeout_ms: 20000, concurrency: 6 },
+      thresholds: { off_topic_drop: 0.9, snippet_min: 1.2, min_facts: 6, novelty_min: 3 },
+      log_dir: 'C:/logs/jev',
+    });
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    });
+    assert.equal(stderr.length, 0, stderr.join('\n'));
+    assert.deepEqual(config, {
+      mode: 'shadow',
+      overfetchFactor: 2,
+      blocklist: DEFAULT_BLOCKLIST,
+      thresholds: {
+        ...DEFAULT_THRESHOLDS,
+        offTopicDrop: 0.9,
+        snippetMin: 1.2,
+        minFacts: 6,
+        noveltyMin: 3,
+      },
+      jev: { model: 'jev-1.14.0', timeoutMs: 20000, concurrency: 6 },
+      logDir: 'C:/logs/jev',
+    });
+  });
+
+  it('ignores unknown top-level keys', () => {
+    const file = writeFixture(tmpRoot, 'unknown.json', { unknown_key: 123, mode: 'on' });
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    });
+    assert.equal(stderr.length, 0);
+    assert.equal(config?.mode, 'on');
+  });
+
+  it('merges the blocklist file named by the config with the built-in blocklist', () => {
+    const blocklistFile = writeFixture(
       tmpRoot,
       'blocklist.txt',
       '# farm candidates\nfarm-a.example\nWWW.Farm-B.EXAMPLE\n\n'
     );
-    let blocklist: ReadonlySet<string> | undefined;
+    const file = writeFixture(tmpRoot, 'with-blocklist.json', { blocklist_file: blocklistFile });
+    let config: FilterConfig | undefined;
     const stderr = captureStderr(() => {
-      blocklist = parseFilterConfig({ [JEV_BLOCKLIST_FILE_ENV]: file }).blocklist;
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
     });
-    assert.equal(stderr.length, 0);
+    assert.equal(stderr.length, 0, stderr.join('\n'));
     // parseBlocklist 复用（不写第二份解析器）：去 www、小写、跳注释与空行
-    assert.ok(blocklist?.has('farm-a.example'));
-    assert.ok(blocklist?.has('farm-b.example'));
+    assert.ok(config?.blocklist.has('farm-a.example'));
+    assert.ok(config?.blocklist.has('farm-b.example'));
     // 与内置求并集：内置成员全部仍在；每次调用新建 Set，内置常量不被改写
-    for (const host of DEFAULT_BLOCKLIST) {
-      assert.ok(blocklist?.has(host));
-    }
-    assert.notEqual(blocklist, DEFAULT_BLOCKLIST);
+    for (const host of DEFAULT_BLOCKLIST) assert.ok(config?.blocklist.has(host));
+    assert.notEqual(config?.blocklist, DEFAULT_BLOCKLIST);
     assert.equal(DEFAULT_BLOCKLIST.size, 0);
 
     const second = captureStderr(() => {
-      assert.notEqual(parseFilterConfig({ [JEV_BLOCKLIST_FILE_ENV]: file }).blocklist, blocklist);
+      assert.notEqual(
+        loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file }).blocklist,
+        config?.blocklist
+      );
     });
     assert.equal(second.length, 0);
   });
 
-  it('falls back to the built-in blocklist only when the file is missing', () => {
-    const missing = join(tmpRoot, 'no-such-blocklist.txt');
-    let blocklist: ReadonlySet<string> | undefined;
-    const stderr = captureStderr(() => {
-      blocklist = parseFilterConfig({ [JEV_BLOCKLIST_FILE_ENV]: missing }).blocklist;
+  it('falls back to the built-in blocklist when the named file is missing', () => {
+    const file = writeFixture(tmpRoot, 'missing-blocklist.json', {
+      blocklist_file: join(tmpRoot, 'no-such-blocklist.txt'),
     });
-    assert.deepEqual(blocklist, DEFAULT_BLOCKLIST);
-    assert.equal(stderr.length, 1);
-    assert.ok(stderr[0].startsWith('[jev-filter]'), stderr[0]);
-    assert.ok(stderr[0].includes(missing), stderr[0]);
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    });
+    assert.deepEqual(config?.blocklist, DEFAULT_BLOCKLIST);
+    assert.equal(stderr.length, 1, stderr.join('\n'));
+    assert.ok(stderr[0].includes('no-such-blocklist.txt'), stderr[0]);
+  });
+
+  it('passes a configured tool_description_file through to the config', () => {
+    const file = writeFixture(tmpRoot, 'with-description.json', {
+      tool_description_file: ' C:/desc.txt ',
+    });
+    const config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    assert.equal(config.toolDescriptionFile, 'C:/desc.txt');
   });
 });

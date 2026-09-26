@@ -1,21 +1,56 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { useTestClient } from '../../testUtils/mcpTestHarness.js';
-import { name } from './index.js';
+import { JEV_CONFIG_FILE_ENV } from '../../filter/config.js';
+import { name, resetFilterStateForTest } from './index.js';
 import { LlmContextInputSchema, RequestParamsSchema } from './schemas/input.js';
 
-// 过滤层读取的环境变量：经过 execute() 的用例都要先删掉，避免开发机 .env 泄漏进测试
-const FILTER_ENV_VARS = [
-  'JEV_FILTER_MODE',
-  'JEV_FILTER_OVERFETCH_FACTOR',
-  'JEV_FILTER_TOOL_DESCRIPTION_FILE',
-  'JEV_FILTER_JEV_MODEL',
-  'JEV_FILTER_JEV_BACKEND',
-  'JEV_FILTER_JEV_TIMEOUT_MS',
-  'JEV_FILTER_JEV_CONCURRENCY',
-  'JEV_FILTER_CONFIG_FILE',
-  'JEV_FILTER_BLOCKLIST_FILE',
-] as const;
+// 过滤层配置自 02-FIX 批 B 起只有一个载体：JEV_FILTER_CONFIG_FILE 指向的 JSON 文件。
+// 适配行持进程级惰性单例（启动时读一次），所以每个用例前后都要清单例并隔离该变量。
+const FILTER_ENV_VARS = [JEV_CONFIG_FILE_ENV] as const;
+
+/** 临时配置目录：整个文件一个，测后统一清理。 */
+const configDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-test-'));
+
+after(() => {
+  rmSync(configDir, { recursive: true, force: true });
+});
+
+/**
+ * 写入配置 JSON 并让适配行重新读一次：设 `JEV_FILTER_CONFIG_FILE` 指向新文件、
+ * 清掉惰性单例。返回文件路径，供"改内容后再搜索"的用例复用同一路径。
+ */
+const useFilterConfig = (
+  value: unknown,
+  filename = `config-${Date.now()}-${Math.random()}.json`
+) => {
+  const filePath = join(configDir, filename);
+  writeFileSync(filePath, JSON.stringify(value), 'utf8');
+  process.env[JEV_CONFIG_FILE_ENV] = filePath;
+  resetFilterStateForTest();
+  return filePath;
+};
+
+// 在 describe 体内注册一对 before/after，删掉并恢复配置文件变量、清单例
+const useIsolatedFilterEnv = () => {
+  const originalEnv = Object.fromEntries(FILTER_ENV_VARS.map((key) => [key, process.env[key]]));
+
+  before(() => {
+    for (const key of FILTER_ENV_VARS) delete process.env[key];
+    resetFilterStateForTest();
+  });
+
+  after(() => {
+    for (const key of FILTER_ENV_VARS) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+    resetFilterStateForTest();
+  });
+};
 
 // 声明白名单：补丁脚本 KEEP_PARAMS 逐字；再加必填 intent
 const WHITELIST = [
@@ -29,27 +64,6 @@ const WHITELIST = [
   'freshness',
   'goggles',
 ];
-
-// 在 describe 体内注册一对 before/after，删掉并恢复过滤层环境变量
-const useIsolatedFilterEnv = () => {
-  const originalEnv = Object.fromEntries(FILTER_ENV_VARS.map((key) => [key, process.env[key]]));
-
-  before(() => {
-    for (const key of FILTER_ENV_VARS) {
-      delete process.env[key];
-    }
-  });
-
-  after(() => {
-    for (const key of FILTER_ENV_VARS) {
-      if (originalEnv[key] === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = originalEnv[key];
-      }
-    }
-  });
-};
 
 // 最小合法上游载荷：两个来源；第一个带完整元数据（age 四元数组），第二个 age 为空数组
 const braveResponse = {
@@ -210,7 +224,8 @@ describe(`${name} (no jev key, mode on)`, () => {
       (key) => [key, process.env[key]]
     );
     for (const [key] of savedKeys) delete process.env[key];
-    process.env.JEV_FILTER_MODE = 'on';
+    // mode 来自配置文件（旧 JEV_FILTER_MODE 变量已不再被读）
+    useFilterConfig({ mode: 'on' });
 
     const errors: unknown[][] = [];
     const originalError = console.error;
@@ -244,11 +259,63 @@ describe(`${name} (no jev key, mode on)`, () => {
       assert.equal(calls, 1);
     } finally {
       console.error = originalError;
-      delete process.env.JEV_FILTER_MODE;
       for (const [key, value] of savedKeys) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+    }
+  });
+});
+
+describe(`${name} (config file lifecycle)`, () => {
+  useIsolatedFilterEnv();
+
+  let calls = 0;
+  const forwarded: URL[] = [];
+
+  const getClient = useTestClient((url) => {
+    if (url.pathname === '/res/v1/llm/context') {
+      calls++;
+      forwarded.push(url);
+      return braveResponse;
+    }
+  });
+
+  const call = () =>
+    getClient().callTool({
+      name,
+      arguments: {
+        query: 'brave browser',
+        intent: 'What Brave Search is',
+        maximum_number_of_urls: 5,
+      },
+    });
+
+  it('reads the config file once: rewriting it does not change the running behaviour', async () => {
+    // 第一次搜索：factor 2 → 发给 Brave 的 maximum_number_of_urls 被放大成 10
+    const filePath = useFilterConfig({ overfetch_factor: 2 });
+    assert.equal((await call()).isError ?? false, false);
+    assert.equal(forwarded[0].searchParams.get('maximum_number_of_urls'), '10');
+
+    // 改写同一个文件（factor 1 / mode on），不重启：进程级单例仍在，行为不变
+    writeFileSync(filePath, JSON.stringify({ mode: 'on', overfetch_factor: 1 }), 'utf8');
+    assert.equal((await call()).isError ?? false, false);
+    assert.equal(calls, 2);
+    assert.equal(forwarded[1].searchParams.get('maximum_number_of_urls'), '10');
+  });
+
+  it('ignores the removed JEV_FILTER_MODE variable entirely', async () => {
+    // 旧变量设成 on 但配置文件未设 mode → 仍是 off（配置载体只剩文件一个）
+    process.env.JEV_FILTER_MODE = 'on';
+    resetFilterStateForTest();
+    try {
+      const result = await call();
+      assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+      // off 模式下 factor 1 不放大：Brave 收到原样 5
+      assert.equal(forwarded[forwarded.length - 1].searchParams.get('maximum_number_of_urls'), '5');
+    } finally {
+      delete process.env.JEV_FILTER_MODE;
+      resetFilterStateForTest();
     }
   });
 });

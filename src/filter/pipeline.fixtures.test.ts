@@ -16,10 +16,11 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { parseFilterConfig } from './config.js';
+import { parseFilterConfigObject } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
 import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
@@ -133,7 +134,7 @@ const loadBraveFixture = (rel: string): BraveLlmContextResponse => {
   };
 };
 
-const offConfig = parseFilterConfig({});
+const offConfig = parseFilterConfigObject({});
 
 const hostOf = (url: string): string => {
   try {
@@ -418,7 +419,8 @@ describe('budget trimming on a real fixture', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+        logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
 

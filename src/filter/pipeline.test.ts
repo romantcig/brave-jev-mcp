@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJevResponse } from './jev/client.js';
@@ -21,7 +22,8 @@ const offConfig: FilterConfig = {
   overfetchFactor: 1,
   blocklist: new Set(),
   thresholds: { ...DEFAULT_THRESHOLDS },
-  jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+  logDir: join(homedir(), '.brave-jev', 'logs'),
 };
 
 const request: { params: FilterRequest; intent: string } = {
@@ -368,7 +370,8 @@ describe('filterLlmContext', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+        logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
     const second = await filterLlmContext(
@@ -379,7 +382,8 @@ describe('filterLlmContext', () => {
         overfetchFactor: 1,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+        logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
     const third = await filterLlmContext(
@@ -390,7 +394,8 @@ describe('filterLlmContext', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+        logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
 
@@ -404,20 +409,21 @@ describe('filterLlmContext', () => {
     assert.deepEqual(first.stats, third.stats);
   });
 
-  it('reads process.env at call time when config is omitted', async () => {
-    const original = process.env.JEV_FILTER_MODE;
-    process.env.JEV_FILTER_MODE = 'shadow';
+  it('uses the all-default config when config is omitted, ignoring filter env vars', async () => {
+    // 02-FIX 批 B：环境变量只剩 Jev key 与 JEV_FILTER_CONFIG_FILE 两个，库不再读
+    // 任何 JEV_FILTER_* 开关；省略 config 就是全默认（mode off）
+    const savedMode = process.env.JEV_FILTER_MODE;
+    const savedFile = process.env.JEV_FILTER_CONFIG_FILE;
+    process.env.JEV_FILTER_MODE = 'on';
+    process.env.JEV_FILTER_CONFIG_FILE = 'C:/no/such/file.json';
 
     try {
-      assert.equal((await filterLlmContext(payload(), request)).stats.mode, 'shadow');
-      process.env.JEV_FILTER_MODE = 'banana';
       assert.equal((await filterLlmContext(payload(), request)).stats.mode, 'off');
     } finally {
-      if (original === undefined) {
-        delete process.env.JEV_FILTER_MODE;
-      } else {
-        process.env.JEV_FILTER_MODE = original;
-      }
+      if (savedMode === undefined) delete process.env.JEV_FILTER_MODE;
+      else process.env.JEV_FILTER_MODE = savedMode;
+      if (savedFile === undefined) delete process.env.JEV_FILTER_CONFIG_FILE;
+      else process.env.JEV_FILTER_CONFIG_FILE = savedFile;
     }
   });
 
@@ -464,7 +470,8 @@ describe('filterLlmContext', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, backend: 'typesafe', timeoutMs: 15000, concurrency: 12 },
+        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+        logDir: join(homedir(), '.brave-jev', 'logs'),
       };
       const { result, stats } = await filterLlmContext(payload(), tightRequest, config);
 
