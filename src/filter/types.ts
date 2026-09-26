@@ -122,6 +122,12 @@ export type ClassifyOutcome =
       answers: Record<string, JevAnswer>;
       input_tokens: number;
       ladder?: JevLadderLevel;
+      /**
+       * 升降级后实际发给 Jev 的片段数（`cut_tail` 砍尾后比 state 少，
+       * `source_only_questions` 不发片段题为 0）；未降级时省略，视为"全部发送"。
+       * 管道据此只收 `snip0..snip{n-1}` 的分数并按位置对齐（JEV-05）。
+       */
+      sent_snippets?: number;
     }
   | {
       status: 'failed';

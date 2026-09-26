@@ -159,10 +159,15 @@ export function applySourceVerdicts(
  * 步 7 前半：片段 score 删除。state 构建时的幸存片段序（runJevStage 按 kept
  * 过滤后的顺序）与 per_source.snippet_scores 按位置对齐，score < snippetMin
  * （严格小于，连续值比较——夹具实证 1.62/1.77，不是整数档位，Pitfall 3）的
- * 片段置 kept = false、reason = 'score'；等于保留。长度不一致（防御）时整
- * 来源跳过 score 删除、全部保留（保守）；异常 score（负值/非有限数，同
- * T-02-03-1 防御）保守保留该片段。CJK 加成只抬来源级五道门槛，不抬本门槛
- * （A4 落定：抬 SNIPPET_MIN 是更激进的方向，与保守原则相反）。
+ * 片段置 kept = false、reason = 'score'；等于保留。
+ *
+ * 长度口径（JEV-05）：`scores.length > survivors.length` 整源跳过（防御——
+ * 分数比实际片段多，说明对齐依据不成立）；`≤` 时按位置对齐**前 scores.length
+ * 个**幸存片段，其后未发送给 Jev 的片段保留（32k 砍尾降级后回来的分数就比
+ * 幸存片段少，被砍掉的片段本来也不该有分数，没砍的片段分数照常生效）。
+ * 等长时行为与逐条对齐完全一致。异常 score（负值/非有限数，同 T-02-03-1
+ * 防御）保守保留该片段。CJK 加成只抬来源级五道门槛，不抬本门槛（A4 落定：
+ * 抬 SNIPPET_MIN 是更激进的方向，与保守原则相反）。
  */
 export function applySnippetScores(
   table: VerdictSourceRow[],
@@ -181,9 +186,9 @@ export function applySnippetScores(
 
     // state 构建时的幸存片段序；runJevStage 构造 state 与本步之间无片段变更，位置对齐
     const survivors = source.snippets.filter((snippet) => snippet.kept);
-    if (scores.length !== survivors.length) continue;
+    if (scores.length > survivors.length) continue;
 
-    for (let i = 0; i < survivors.length; i += 1) {
+    for (let i = 0; i < scores.length; i += 1) {
       const score = scores[i];
       if (!Number.isFinite(score) || score < 0) continue;
       if (score < thresholds.snippetMin) {

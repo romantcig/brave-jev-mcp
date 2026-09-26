@@ -483,7 +483,7 @@ export async function filterLlmContext(
   } else {
     // 步 5 Jev 每源一次请求：全候选一波并发派发（进程级并发闸住 02-05 的
     // createJevClassifier，管道编排层不持状态与限流）
-    const judged = await runJevStage(table, request, config, deps.classify, stats);
+    const judged = await runJevStage(table, request, deps.classify, stats);
     if (config.mode === 'on') {
       runOnChain(table, judged, config.thresholds, stats, queryTerms);
     } else {
@@ -559,16 +559,12 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidate[] => {
  * - 聚合：input_tokens / latency_ms_total 求和；status 任一 per_source
  *   `'breaker_open'` → `'breaker_open'`，否则任一 failed → `'degraded'`，否则 `'ok'`。
  *
- * `config` 在本计划只随签名占位（模型 / 超时 / 并发都由注入的 classify 实现自持，
- * 02-05 落地后其消费点在 createJevClassifier 入口），保留参数避免 02-05 再改签名。
- *
  * @returns 逐源 judged 结果映射（键 = src id `s{index}`，值 = per_source 行对象
  * 引用）——步 6/7 的裁决消费入口；shadow 的 would 层共用同一映射。
  */
 const runJevStage = async (
   table: WorkSource[],
   request: { params: FilterRequest; intent: string },
-  config: FilterConfig,
   classify: ClassifyDeps['classify'],
   stats: FilterStats
 ): Promise<Map<string, JevPerSourceStats>> => {
@@ -621,10 +617,19 @@ const runJevStage = async (
         const answer = outcome.answers[key];
         if (answer?.kind === 'noul') answers[key] = answer.probability;
       }
+      // 只收实际发送的片段范围的分数（cut_tail 降级时 out 来的 snip 题更少）：
+      // `snip0..snip{n-1}` 必须齐全且都是 score，否则整源不写 snippet_scores
+      // （保守——"有几个收几个"会让中间缺一个就整体错位，后续片段分数张冠李戴）
+      const sentSnippets = outcome.sent_snippets ?? candidate.snippets.length;
       const snippetScores: number[] = [];
-      for (let i = 0; i < candidate.snippets.length; i += 1) {
+      let scoresComplete = true;
+      for (let i = 0; i < sentSnippets; i += 1) {
         const answer = outcome.answers[`snip${i}`];
-        if (answer?.kind === 'score') snippetScores.push(answer.score);
+        if (answer?.kind !== 'score') {
+          scoresComplete = false;
+          break;
+        }
+        snippetScores.push(answer.score);
       }
 
       rows.set(candidate.id, {
@@ -632,7 +637,7 @@ const runJevStage = async (
         url: candidate.url,
         status: 'answered',
         answers,
-        snippet_scores: snippetScores,
+        ...(scoresComplete ? { snippet_scores: snippetScores } : {}),
         model: outcome.model,
         input_tokens: outcome.input_tokens,
         latency_ms: latencyMs,
