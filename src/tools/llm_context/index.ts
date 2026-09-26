@@ -15,8 +15,8 @@ import {
   createJevClassifier,
   filterLlmContext,
   hasJevKey,
+  loadFilterConfig,
   logRaisedToStderr,
-  parseFilterConfig,
   resolveToolDescription,
   withAdjustments,
 } from '../../filter/index.js';
@@ -58,6 +58,16 @@ export const description = `
     When relaying results, cite the source URLs from the "sources" map.
 `.trim();
 
+// 进程级配置惰性单例（EMBED-05）：第一次需要时解析 `JEV_FILTER_CONFIG_FILE`，之后
+// 复用——启动时读一次，改配置要重启 MCP。惰性而不是模块求值时读：`src/server.ts`
+// 先求值工具模块、`dotenv.config()` 在其后（config.ts 头注释）。
+let filterConfig: FilterConfig | undefined;
+
+const configFor = (): FilterConfig => {
+  filterConfig ??= loadFilterConfig(process.env);
+  return filterConfig;
+};
+
 // 进程级 Jev 分类器惰性单例（A13）：熔断计数与并发闸住 createJevClassifier 闭包，
 // 跨请求复用——库自身无模块级可变状态（stats.ts 不变式）。mode 为 off 时不创建、
 // 不读 key；mode 非 off 且 key 缺失时按等价 off 处理（EMBED-05：stderr 一行、
@@ -76,12 +86,21 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
   return { classify: jevClassifier.classify };
 };
 
+/**
+ * 仅供测试：清掉配置与分类器的进程级惰性单例，让下一次调用重新读环境 / 配置。
+ * 生产代码不得调用（"读一次"语义靠不清除保证）。
+ */
+export const resetFilterStateForTest = (): void => {
+  filterConfig = undefined;
+  jevClassifier = undefined;
+};
+
 export const execute = async (params: QueryParams) => {
   const { adjusted, raised } = applyMinimumValues(params);
   const parsedParams = RequestParamsSchema.parse(adjusted);
   const parsedHeaders = RequestHeadersSchema.parse(params);
-  const filterConfig = parseFilterConfig(process.env);
-  const braveParams = applyOverfetch(parsedParams, filterConfig);
+  const config = configFor();
+  const braveParams = applyOverfetch(parsedParams, config);
 
   const response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
@@ -91,8 +110,8 @@ export const execute = async (params: QueryParams) => {
           await filterLlmContext(
             data,
             { params: parsedParams, intent: params.intent },
-            filterConfig,
-            jevDepsFor(filterConfig)
+            config,
+            jevDepsFor(config)
           )
         ).result,
         raised
@@ -112,7 +131,7 @@ export const register = (mcpServer: McpServer) => {
     name,
     {
       title: name,
-      description: resolveToolDescription(description),
+      description: resolveToolDescription(description, configFor().toolDescriptionFile),
       inputSchema: LlmContextInputSchema,
       annotations: annotations,
     },

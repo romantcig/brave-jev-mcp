@@ -1,8 +1,8 @@
 /**
  * Jev 题库 v3 与全部 Jev 常量（JEV-03"集中在一个文件"）：十道来源级题、片段级
- * score 题的三档 legend、总指令、十一项阈值默认值、钉版模型 ID、兜底常数与
- * 环境变量名。审阅改常量只看这里；影子期调参走环境变量 / 配置文件（EMBED-05），
- * 解析在 `src/filter/config.ts`，坏值回落本文件的默认值。
+ * score 题的三档 legend、总指令、十一项阈值默认值、钉版模型 ID 与兜底常数。
+ * 审阅改常量只看这里；影子期调参走单一配置文件（EMBED-05），解析在
+ * `src/filter/config.ts`，坏值回落本文件的默认值。
  *
  * 题干预告逐字取 `dev/jev_probe.py` v3 定稿（前六道旧题干逐字保留，四道新题按
  * `notes/jev-question-writing.md` 写题规则起草）——该笔记是题库权威，probe 与
@@ -13,7 +13,6 @@
  * （阈值与兜底初值）、02-RESEARCH.md「题库 v3」。
  */
 
-import { readFileSync } from 'node:fs';
 import type { JevQuestion, JevState, JevThresholds } from '../types.js';
 
 /**
@@ -90,94 +89,6 @@ export const DEFAULT_JEV_TIMEOUT_MS = 15000;
 
 /** 进程级并发闸初值（JEV-04；02-05 的 createJevClassifier 闭包消费，一波全发）。 */
 export const DEFAULT_JEV_CONCURRENCY = 12;
-
-/** 环境变量名（EMBED-05）：默认值与变量名同处可见。 */
-export const JEV_MODEL_ENV = 'JEV_FILTER_JEV_MODEL';
-export const JEV_BACKEND_ENV = 'JEV_FILTER_JEV_BACKEND';
-export const JEV_TIMEOUT_MS_ENV = 'JEV_FILTER_JEV_TIMEOUT_MS';
-export const JEV_CONCURRENCY_ENV = 'JEV_FILTER_JEV_CONCURRENCY';
-
-/**
- * 十一项阈值配置文件的环境变量（EMBED-05 / 用户已定决策 4）：阈值不走散装
- * `JEV_FILTER_THRESHOLD_*` 变量，经单一 `JEV_FILTER_CONFIG_FILE` 指向的本地
- * JSON 文件提供，影子期调参只改一个文件、不用改代码。
- */
-export const JEV_CONFIG_FILE_ENV = 'JEV_FILTER_CONFIG_FILE';
-
-/**
- * 配置文件键 → JevThresholds 键与合法范围（键名用十一项 snake_case，与 probe
- * 的 THRESHOLDS 键名一致；未知键忽略为 fail-open 方向）。范围语义：六个概率
- * 门槛（五道丢弃 + reasoning 保护）与 cjk_bonus、cjk_share 取 [0,1] 的有限数；
- * snippet_min 取 [0,3]（score 是三档 legend 上的连续加权位置）；min_facts 与
- * novelty_min 取 >= 1 的有限数。max 为 Infinity 表示只有下限。
- */
-const THRESHOLD_FILE_KEYS: ReadonlyArray<{
-  readonly fileKey: string;
-  readonly configKey: keyof JevThresholds;
-  readonly min: number;
-  readonly max: number;
-}> = Object.freeze([
-  { fileKey: 'off_topic_drop', configKey: 'offTopicDrop', min: 0, max: 1 },
-  { fileKey: 'listing_drop', configKey: 'listingDrop', min: 0, max: 1 },
-  { fileKey: 'self_deprecated', configKey: 'selfDeprecated', min: 0, max: 1 },
-  { fileKey: 'stale_drop', configKey: 'staleDrop', min: 0, max: 1 },
-  { fileKey: 'filler_drop', configKey: 'fillerDrop', min: 0, max: 1 },
-  { fileKey: 'reasoning_protect', configKey: 'reasoningProtect', min: 0, max: 1 },
-  { fileKey: 'snippet_min', configKey: 'snippetMin', min: 0, max: 3 },
-  { fileKey: 'min_facts', configKey: 'minFacts', min: 1, max: Number.POSITIVE_INFINITY },
-  { fileKey: 'novelty_min', configKey: 'noveltyMin', min: 1, max: Number.POSITIVE_INFINITY },
-  { fileKey: 'cjk_bonus', configKey: 'cjkBonus', min: 0, max: 1 },
-  { fileKey: 'cjk_share', configKey: 'cjkShare', min: 0, max: 1 },
-]);
-
-// 只能用 console.error：stdout 是 stdio 传输的协议通道，绝不能写（description.ts 先例）。
-const reportFileError = (filePath: string, reason: string): void => {
-  console.error(
-    `[jev-filter] Unable to read Jev thresholds config file '${filePath}': ${reason}; using the built-in defaults.`
-  );
-};
-
-/**
- * 解析十一项阈值：变量未设 → `DEFAULT_THRESHOLDS` 的浅拷贝；文件读不到或
- * JSON.parse 失败（或顶层不是 JSON 对象）→ console.error 一行（[jev-filter]
- * 前缀、含路径与原因）并整体回落默认（fail-open，description.ts 先例）；解析
- * 成功后逐项合并——未知键忽略、缺项保持默认、坏值（非有限数或越界）仅该项
- * 回落默认、其余文件项照常生效（T-02-06-1：坏值绝不让整层静默失效）。字符串
- * 等非数值一律回落默认（T-02-06-3：key 即使误写进配置文件也不会被读成任何
- * 行为开关——阈值解析只接受数值键）。
- * @param env 环境变量映射（传 `process.env` 或测试用的显式对象）
- * @returns 冻结的 JevThresholds（形态照 `DEFAULT_THRESHOLDS`）
- * @example resolveThresholds({}) 与 { ...DEFAULT_THRESHOLDS } deepEqual
- * @example resolveThresholds({ JEV_FILTER_CONFIG_FILE: '/no/such/file' }) → 默认 + stderr 一行
- */
-export function resolveThresholds(env: Record<string, string | undefined>): JevThresholds {
-  const merged: JevThresholds = { ...DEFAULT_THRESHOLDS };
-
-  const filePath = env[JEV_CONFIG_FILE_ENV]?.trim();
-  if (!filePath) return Object.freeze(merged);
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(filePath, 'utf8'));
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    reportFileError(filePath, reason);
-    return Object.freeze(merged);
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    reportFileError(filePath, 'content is not a JSON object');
-    return Object.freeze(merged);
-  }
-
-  const file = parsed as Record<string, unknown>;
-  for (const { fileKey, configKey, min, max } of THRESHOLD_FILE_KEYS) {
-    const value = file[fileKey];
-    if (typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max) {
-      merged[configKey] = value;
-    }
-  }
-  return Object.freeze(merged);
-}
 
 /**
  * 构造单来源 state：官方"context rot"规则——state 里只放问题需要的东西

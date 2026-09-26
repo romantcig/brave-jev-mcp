@@ -26,22 +26,29 @@ export type FilterRequest = {
   maximum_number_of_tokens_per_url?: number;
 };
 
-/** 环境变量解析出的配置；`blocklist` 是黑名单文本解析出的规范 host 集合（01-03 追加）。 */
+/**
+ * 单个 JSON 配置文件解析出的配置（EMBED-05；字段与校验见 config.ts）。
+ * `blocklist` 是黑名单文本解析出的规范 host 集合；`logDir` 是 JSONL 日志目录
+ * （Phase 3 消费，本批只解析）；`toolDescriptionFile` 是工具描述的仓库外覆盖文件。
+ */
 export type FilterConfig = {
   mode: FilterMode;
   /** 超量倍数，默认 1；>1 时只放大来源数与总 token */
   overfetchFactor: number;
-  /** 步 4 的结构性农场黑名单；条目命中自身与全部子域 */
+  /** 步 4 的结构性农场黑名单；条目命中自身与全部子域（内置表与配置文件的并集） */
   blocklist: ReadonlySet<string>;
-  /** 十一项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05），文件覆盖经 `resolveThresholds` */
+  /** 十一项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05） */
   thresholds: JevThresholds;
-  /** Jev 客户端配置：钉版模型、单后端（JEV-01）、超时纯兜底与进程级并发闸初值（02-05 消费） */
+  /** Jev 客户端配置：钉版模型、超时纯兜底与进程级并发闸初值（02-05 消费） */
   jev: {
     model: string;
-    backend: 'typesafe';
     timeoutMs: number;
     concurrency: number;
   };
+  /** JSONL 日志目录；开头的 `~` 已在解析时展开为本机 home */
+  logDir: string;
+  /** 工具描述覆盖文件路径；未配置时缺省（用仓库内英文描述） */
+  toolDescriptionFile?: string;
 };
 
 /** Phase 2 注入 Jev 客户端的位置；`classify` 缺省时 on/shadow 记 no_key 零值对象（SAFE-01 前置）。 */

@@ -15,7 +15,12 @@ export {
   type RaisedParameter,
   type WithAdjustments,
 } from './clamp.js';
-export { parseFilterConfig } from './config.js';
+export {
+  JEV_CONFIG_FILE_ENV,
+  loadFilterConfig,
+  parseFilterConfigObject,
+  type ConfigWarn,
+} from './config.js';
 export { createJevClassifier, hasJevKey } from './jev/client.js';
 export { resolveToolDescription } from './description.js';
 export { filterLlmContext, trimSourceMeta } from './pipeline.js';

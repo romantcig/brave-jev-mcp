@@ -15,7 +15,7 @@
  * 依据：PLAN.md §3.2、notes/local-rules-design.md、01-RESEARCH.md「纯库布局」一节。
  */
 
-import { parseFilterConfig } from './config.js';
+import { parseFilterConfigObject } from './config.js';
 import {
   BRAVE_DEFAULT_MAX_TOKENS,
   BRAVE_DEFAULT_MAX_URLS,
@@ -444,7 +444,8 @@ const toStatsRequest = (
  * 过滤层入口：Brave 响应 + 请求 → 过滤后的响应 + 统计对象。
  *
  * 自 02-02 起异步（步 5 要 `await` 注入的 classify），仍不发任何网络请求——
- * 网络只发生在注入的 classify 实现里。`config` 省略时在**调用时**读 `process.env`。
+ * 网络只发生在注入的 classify 实现里。`config` 省略时取全默认（不读文件、不看
+ * 环境——配置载体是单一 JSON 文件，读一次的责任在适配行）。
  * 模式分叉：off 整段跳过 Jev（`stats.jev` 保持 null）；on/shadow 注入 classify 后
  * 对全部候选来源并发派发（步 5），未注入时记 no_key 零值对象且零请求（SAFE-01
  * 语义前置）；on 在正本上跑 on 链（步 6 → 步 7 → 步 8）；shadow 的**正本走与 off
@@ -454,14 +455,14 @@ const toStatsRequest = (
  *
  * @param data Brave LLM Context 响应（已过上游 zod 校验）
  * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带
- * @param config 过滤配置；省略时 `parseFilterConfig(process.env)`
+ * @param config 过滤配置；省略时为全默认配置（mode off）
  * @param deps Phase 2 注入点：`classify` 缺省时 on/shadow 记 no_key
  * @returns `{ result, stats }` 的 Promise；`result` 与输入同形，`stats` 是本次调用新建的对象
  */
 export async function filterLlmContext(
   data: BraveLlmContextResponse,
   request: { params: FilterRequest; intent: string },
-  config: FilterConfig = parseFilterConfig(process.env),
+  config: FilterConfig = parseFilterConfigObject({}),
   deps?: FilterDeps
 ): Promise<FilterResult> {
   const table = buildWorkTable(data);

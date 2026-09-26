@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
-import { parseFilterConfig } from '../src/filter/config.js';
+import { parseFilterConfigObject } from '../src/filter/config.js';
 import { collectJevCandidates } from '../src/filter/pipeline.js';
 import type { BraveLlmContextResponse, FilterRequest } from '../src/filter/types.js';
 
@@ -65,7 +65,7 @@ if (typeof query !== 'string' || typeof intent !== 'string' || !isRecord(request
 }
 
 const params: FilterRequest = { query, ...request };
-const config = parseFilterConfig({});
+const config = parseFilterConfigObject({});
 
 console.log(
   JSON.stringify({

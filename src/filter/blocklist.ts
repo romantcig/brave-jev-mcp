@@ -7,8 +7,8 @@
  * 测试；影子期由 EXT-03 的候选脚本提示、老大手工加入。条目匹配自身与全部子域。
  *
  * 数据表必须是 `.ts` 常量：`tsc` 不拷贝非 `.ts` 资产进 `dist/`；模板字符串满足
- * "文件一行一个 host、`#` 注释"的形式。仓库外黑名单文件合并（`JEV_FILTER_BLOCKLIST_FILE`）
- * 留给 Phase 2 的 EMBED-05。
+ * "文件一行一个 host、`#` 注释"的形式。仓库外黑名单文件的路径由配置文件的
+ * `blocklist_file` 给出（EMBED-05；02-FIX 批 B 起环境变量只剩 key 与配置路径两个）。
  * 依据：notes/local-rules-design.md §5、01-RESEARCH.md「规则 4（步 4）」。
  */
 

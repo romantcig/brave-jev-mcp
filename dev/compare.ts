@@ -26,7 +26,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
-import { parseFilterConfig } from '../src/filter/config.js';
+import { parseFilterConfigObject } from '../src/filter/config.js';
 import { parseJevResponse } from '../src/filter/jev/client.js';
 import { collectJevCandidates, filterLlmContext } from '../src/filter/pipeline.js';
 import type {
@@ -188,7 +188,7 @@ const replayClassifier =
 // ---------------------------------------------------------------------------
 
 const config =
-  mode === 'off' ? parseFilterConfig({}) : parseFilterConfig({ JEV_FILTER_MODE: mode });
+  parseFilterConfigObject(mode === 'off' ? {} : { mode });
 const results = mode === 'off' ? undefined : loadRecording();
 
 // 候选覆盖核对（与管道步 5 同源 collectJevCandidates）：录制里缺的候选 id 打一行
@@ -203,7 +203,7 @@ if (results !== undefined) {
 
 const offRun: FilterResult | undefined =
   mode === 'shadow'
-    ? await filterLlmContext(data, request, parseFilterConfig({}))
+    ? await filterLlmContext(data, request, parseFilterConfigObject({}))
     : undefined;
 
 const { result, stats }: FilterResult = await filterLlmContext(
