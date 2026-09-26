@@ -1,12 +1,15 @@
 /**
- * 过滤前后对比工具（TOOLS-01）：对一份 Brave 夹具跑 off 或 on 模式过滤，打印
- * 来源数、片段数、字符数的过滤前后对比与逐来源裁决表——人工抽查过滤行为的
+ * 过滤前后对比工具（TOOLS-01）：对一份 Brave 夹具跑 off / shadow / on 模式过滤，
+ * 打印来源数、片段数、字符数的过滤前后对比与逐来源裁决表——人工抽查过滤行为的
  * 日常工具，也是"on 模式裁决可见"的最直接证明。
  *
- * 用法：node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|on]
+ * 用法：node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|shadow|on]
  * mode 缺省 off；其他值 stderr 一行并以退出码 1 结束。
  *
- * on 模式是回放：读夹具同目录的 <stem>.jev.json 录制，内联 replayClassifier
+ * shadow 模式额外打印 off 与 shadow 是否逐字段一致（VERDICT-05：shadow 正本走
+ * off 链，输出必须等于同输入的 off）与 `shadow_diff`；它同时跑一遍 off 作对照。
+ *
+ * shadow / on 模式是回放：读夹具同目录的 <stem>.jev.json 录制，内联 replayClassifier
  * （与 02-02 回放测试同形：按 state.source.id 取 results 条目，http 200 走生产
  * 同一条 parseJevResponse 路径，否则 failed kind network——单来源失败按"留"）。
  * 候选集经 collectJevCandidates 与管道步 5 同源核对，录制里缺的候选 id 打一行
@@ -35,22 +38,24 @@ import type {
 } from '../src/filter/types.js';
 
 // ---------------------------------------------------------------------------
-// argv：夹具路径必填；--mode 只认 off|on（缺省 off）
+// argv：夹具路径必填；--mode 只认 off|shadow|on（缺省 off）
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
 const fxPath = args[0];
 if (!fxPath) {
-  console.error('usage: node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|on]');
+  console.error(
+    'usage: node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|shadow|on]'
+  );
   process.exit(2);
 }
 
-let mode: 'off' | 'on' = 'off';
+let mode: 'off' | 'shadow' | 'on' = 'off';
 const modeIndex = args.indexOf('--mode');
 if (modeIndex !== -1) {
   const value = args[modeIndex + 1];
-  if (value !== 'off' && value !== 'on') {
-    console.error(`--mode 只认 off|on，收到：${value ?? '(缺值)'}`);
+  if (value !== 'off' && value !== 'shadow' && value !== 'on') {
+    console.error(`--mode 只认 off|shadow|on，收到：${value ?? '(缺值)'}`);
     process.exit(1);
   }
   mode = value;
@@ -179,11 +184,12 @@ const replayClassifier =
   };
 
 // ---------------------------------------------------------------------------
-// 跑过滤：off 直接跑；on 回放（先核对候选覆盖）
+// 跑过滤：off 直接跑；shadow / on 回放（先核对候选覆盖）；shadow 另跑一遍 off 作对照
 // ---------------------------------------------------------------------------
 
-const config = mode === 'on' ? parseFilterConfig({ JEV_FILTER_MODE: 'on' }) : parseFilterConfig({});
-const results = mode === 'on' ? loadRecording() : undefined;
+const config =
+  mode === 'off' ? parseFilterConfig({}) : parseFilterConfig({ JEV_FILTER_MODE: mode });
+const results = mode === 'off' ? undefined : loadRecording();
 
 // 候选覆盖核对（与管道步 5 同源 collectJevCandidates）：录制里缺的候选 id 打一行
 // WARN（源 id 加 url）后照跑——replayClassifier 对缺失按 failed network → "留"
@@ -194,6 +200,11 @@ if (results !== undefined) {
     }
   }
 }
+
+const offRun: FilterResult | undefined =
+  mode === 'shadow'
+    ? await filterLlmContext(data, request, parseFilterConfig({}))
+    : undefined;
 
 const { result, stats }: FilterResult = await filterLlmContext(
   data,
@@ -259,5 +270,18 @@ console.log(
 if (stats.jev !== null) {
   console.log(
     `jev: n_requests=${stats.jev.n_requests} input_tokens=${stats.jev.input_tokens} status=${stats.jev.status}`
+  );
+}
+if (mode === 'shadow' && offRun !== undefined) {
+  // VERDICT-05：shadow 正本走 off 链——result / stats.local / stats.sources 必须等于
+  // 同输入的 off（stats.mode / stats.jev / stats.shadow_diff 三项除外）
+  const resultSame = JSON.stringify(result) === JSON.stringify(offRun.result);
+  const localSame = JSON.stringify(stats.local) === JSON.stringify(offRun.stats.local);
+  const sourcesSame = JSON.stringify(stats.sources) === JSON.stringify(offRun.stats.sources);
+  console.log(
+    `shadow vs off: result ${resultSame ? 'identical' : 'DIFFERENT'} | local ${localSame ? 'identical' : 'DIFFERENT'} | sources ${sourcesSame ? 'identical' : 'DIFFERENT'}`
+  );
+  console.log(
+    `shadow_diff: would_drop=[${(stats.shadow_diff?.would_drop ?? []).join(', ')}] would_remove_snippets=${stats.shadow_diff?.would_remove_snippets ?? 0}`
   );
 }
