@@ -21,10 +21,18 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseFilterConfig } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
+import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { filterLlmContext } from './pipeline.js';
 import { zeroLocal } from './stats.js';
-import type { BraveLlmContextResponse, LocalStats, SnippetStats, SourceStats } from './types.js';
+import type {
+  BraveLlmContextResponse,
+  ClassifyDeps,
+  FilterRequest,
+  LocalStats,
+  SnippetStats,
+  SourceStats,
+} from './types.js';
 
 const fixtureRoot = fileURLToPath(new URL('../../fixtures/', import.meta.url));
 const expectedRoot = join(fixtureRoot, 'expected');
@@ -467,3 +475,136 @@ describe('no fixture is dropped as empty', () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// shadow 输出必须与同输入的 off 逐字段相同（VERDICT-05，02-FIX 批 A）：真实夹具上
+// off 与 shadow 的 result / stats.local / stats.sources 必须 deepEqual；shadow_diff
+// 由测试独立地从 off 与 on 两次运行的 stats.sources 推导（不复制实现）。
+// ---------------------------------------------------------------------------
+
+const shadowIsRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** 录制装载（与 client.test.ts / dev/compare.ts 同形）。 */
+const loadShadowRecording = (rel: string): Record<string, { http: number; response: unknown }> => {
+  const parsed: unknown = JSON.parse(readFileSync(join(fixtureRoot, rel), 'utf8'));
+  assert.ok(
+    shadowIsRecord(parsed) && shadowIsRecord(parsed.results),
+    `${rel} has no results table`
+  );
+  return parsed.results as Record<string, { http: number; response: unknown }>;
+};
+
+/** 回放传输：按 state.source.id 取录制条目，200 走生产同一条 parseJevResponse。 */
+const shadowReplayClassifier =
+  (results: Record<string, { http: number; response: unknown }>): ClassifyDeps['classify'] =>
+  async ({ state }) => {
+    const entry = results[state.source.id];
+    if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
+    const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
+    return parsed.ok
+      ? {
+          status: 'answered',
+          model: parsed.model,
+          answers: parsed.answers,
+          input_tokens: parsed.input_tokens,
+        }
+      : { status: 'failed', kind: 'validation' };
+  };
+
+/** 期望文件头三件套（回放与 off 期望同参数，管道夹具测试同口径）。 */
+const loadShadowExpectedHeader = (
+  rel: string
+): { query: string; intent: string; request: Omit<FilterRequest, 'query'> } => {
+  const parsed: unknown = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8'));
+  assert.ok(shadowIsRecord(parsed), `${rel} is not an object`);
+  return {
+    query: parsed.query as string,
+    intent: parsed.intent as string,
+    request: parsed.request as Omit<FilterRequest, 'query'>,
+  };
+};
+
+/** 由两次运行的 stats.sources 独立推导 shadow_diff（不复制实现）。 */
+const deriveShadowDiff = (
+  offSources: SourceStats[],
+  onSources: SourceStats[]
+): { would_drop: string[]; would_remove_snippets: number } => {
+  const offByIndex = new Map(offSources.map((source) => [source.index, source]));
+  const wouldDrop: string[] = [];
+  let wouldRemoveSnippets = 0;
+  for (const onSource of onSources) {
+    const offSource = offByIndex.get(onSource.index);
+    assert.ok(offSource, `source ${onSource.index} missing from the off run`);
+    if (offSource.verdict === 'keep' && onSource.verdict === 'drop') {
+      wouldDrop.push(`s${onSource.index}`);
+      continue;
+    }
+    if (offSource.verdict !== 'keep' || onSource.verdict !== 'keep') continue;
+    const offKept = new Map(
+      offSource.snippets.map((row) => [
+        row.part === undefined ? String(row.index) : `${row.index}.${row.part}`,
+        row.kept,
+      ])
+    );
+    for (const onRow of onSource.snippets) {
+      const key = onRow.part === undefined ? String(onRow.index) : `${onRow.index}.${onRow.part}`;
+      if (!onRow.kept && offKept.get(key) === true) wouldRemoveSnippets += 1;
+    }
+  }
+  return { would_drop: wouldDrop, would_remove_snippets: wouldRemoveSnippets };
+};
+
+for (const stem of ['jev_release_default', 'jev_release_strict']) {
+  const recording = loadShadowRecording(`${stem}.jev.json`);
+  const expected = loadShadowExpectedHeader(`${stem}.off.json`);
+  const fixtureRequest = {
+    params: { ...expected.request, query: expected.query },
+    intent: expected.intent,
+  };
+
+  // 顶层 await：三模式各跑一次，describe 闭包共享（node:test 等模块求值完成后开跑）
+  const offRun = await filterLlmContext(
+    loadBraveFixture(`${stem}.json`),
+    fixtureRequest,
+    offConfig
+  );
+  const shadowRun = await filterLlmContext(
+    loadBraveFixture(`${stem}.json`),
+    fixtureRequest,
+    { ...offConfig, mode: 'shadow' },
+    { classify: shadowReplayClassifier(recording) }
+  );
+  const onRun = await filterLlmContext(
+    loadBraveFixture(`${stem}.json`),
+    fixtureRequest,
+    { ...offConfig, mode: 'on' },
+    { classify: shadowReplayClassifier(recording) }
+  );
+
+  describe(`shadow equals off · ${stem}`, () => {
+    it('returns a result identical to the off run field by field', () => {
+      assert.deepEqual(shadowRun.result, offRun.result);
+    });
+
+    it('records stats.local identical to the off run', () => {
+      assert.deepEqual(shadowRun.stats.local, offRun.stats.local);
+    });
+
+    it('records stats.sources identical to the off run', () => {
+      assert.deepEqual(shadowRun.stats.sources, offRun.stats.sources);
+    });
+
+    it('still calls Jev for every candidate and books it in per_source', () => {
+      assert.equal(shadowRun.stats.jev?.n_requests, Object.keys(recording).length);
+      assert.equal(shadowRun.stats.jev?.per_source.length, Object.keys(recording).length);
+    });
+
+    it('derives shadow_diff from the off and on tables', () => {
+      assert.deepEqual(
+        shadowRun.stats.shadow_diff,
+        deriveShadowDiff(offRun.stats.sources, onRun.stats.sources)
+      );
+    });
+  });
+}

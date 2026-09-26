@@ -811,7 +811,10 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
 
 // ---------------------------------------------------------------------------
 // 三模式语义矩阵（02-03 Task 2）：同一内联夹具 × off/shadow/on，on/shadow 注入
-// 同一合成 classify——off 直通、shadow 记账不动正本、on 全链生效（VERDICT-05）
+// 同一合成 classify——off 直通、shadow 正本走 off 链（输出与 off 同）、on 全链生效
+// （VERDICT-05）。注意：本例人造片段的数字/日期等事实指纹少于 minFacts，步 7 的
+// 指纹新颖度不触发，因此它**测不到**"shadow 正本漏跑新颖度"这类回归——那条由
+// novelty/cross-source 组与两份真实夹具的 shadow-equals-off 测试锁住。
 // ---------------------------------------------------------------------------
 
 describe('three-mode semantic matrix (off / shadow / on)', () => {
@@ -930,20 +933,20 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     // Jev 照常调用（4 候选源各一次）并记账
     assert.equal(counter.calls, 4);
     assert.equal(shadowRun.stats.jev?.n_requests, 4);
-    // 正本不动：输出与 off 模式 deepEqual
+    // 正本走 off 链：输出与 off 模式 deepEqual（VERDICT-05，02-FIX 批 A）
     assert.deepEqual(shadowRun.result, offRun.result);
-    // would_drop 与夹具答案推导一致：s1（off_topic）+ s3（score 删光间接清空）
+    // would_drop 直接由"off keep 且 on drop"得出：s1（off_topic）+ s3（score 删光）
     assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s1', 's3']);
-    // would_remove_snippets 与 score 推导一致：s2 删 2 + s3 删 2 = 4
-    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 4);
+    // would_remove_snippets 只数 off 与 on 都保留的来源里被 on 删掉的片段：s2 删 2；
+    // s3 整源进 would_drop，其片段不重复计
+    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 2);
     // would 层裁决记账进 per_source，但正本输出不受影响
     const s1Row = shadowRun.stats.jev?.per_source.find((row) => row.src === 's1');
     assert.equal(s1Row?.verdict, 'drop');
     assert.equal(s1Row?.reason, 'off_topic');
     const s0Row = shadowRun.stats.jev?.per_source.find((row) => row.src === 's0');
     assert.equal(s0Row?.verdict, 'keep');
-    // 本地 empty 计数不被 would 链的拷贝步 8 污染（正本 4 源无一为空）
-    assert.equal(shadowRun.stats.local.empty_dropped, 0);
+    // 本地 empty 计数不被 would 链的拷贝步 8 污染（正本 4 源无一为空）    assert.equal(shadowRun.stats.local.empty_dropped, 0);
   });
 
   it('on: output equals the would view applied, dropped sources absent, Brave order kept, shadow_diff null', async () => {
@@ -1208,14 +1211,12 @@ describe('novelty and cross-source dup (02-04)', () => {
       offRun.result.grounding.generic.map((item) => item.url),
       ['https://origin.example/', 'https://unique.example/']
     );
-    // shadow：正本不动（三源全留）；novelty 只进 would 层——is_primary 播种下
-    // s1（0.9）先播种幸存、s0（0.5）被判删 → would_drop ['s0']、计数 1
-    assert.deepEqual(
-      shadowRun.result.grounding.generic.map((item) => item.url),
-      ['https://origin.example/', 'https://rewrite.example/', 'https://unique.example/']
-    );
+    // shadow：正本走与 off 完全相同的 off 链（输出与 off deepEqual，VERDICT-05）；
+    // would 层另在拷贝上按 is_primary 播种——s1（0.9）先播种幸存、s0（0.5）被判删，
+    // 两张表对比得 would_drop ['s0']；s0 整源进 would_drop，其片段不重复计
+    assert.deepEqual(shadowRun.result, offRun.result);
     assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s0']);
-    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 1);
+    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 0);
     // on：is_primary 播种 → s1 先播种幸存、s0 被新颖度删除
     assert.deepEqual(
       onRun.result.grounding.generic.map((item) => item.url),
