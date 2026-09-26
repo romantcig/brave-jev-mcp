@@ -293,7 +293,8 @@ describe('applySourceVerdicts', () => {
 
 // ---------------------------------------------------------------------------
 // applySnippetScores：score < snippetMin 严格小于才删（连续值）、
-// 长度不一致整来源跳过、CJK 加成不抬 score 门槛
+// 分数比幸存片段少时按前缀对齐（cut_tail 降级）、多时整来源跳过、
+// CJK 加成不抬 score 门槛
 // ---------------------------------------------------------------------------
 
 describe('applySnippetScores', () => {
@@ -330,9 +331,29 @@ describe('applySnippetScores', () => {
     assert.equal(table[0].snippets[2].kept, true);
   });
 
-  it('skips the whole source when snippet_scores length mismatches the surviving snippets', () => {
+  it('aligns a shorter score list to the prefix and keeps the unsent tail (cut_tail)', () => {
+    // 32k 砍尾降级后回来的分数比幸存片段少：前 scores.length 个按位置对齐，
+    // 其后未发给 Jev 的片段保留（JEV-05 / 02-FIX 批 D1）
+    const table = buildTable([{ texts: ['first', 'second', 'third', 'fourth'] }]);
+    const row = answeredRow('s0', answersWith({}), [2, 0.2]); // 前两段发了，后两段被砍
+    const stats = buildStats([row]);
+
+    applySnippetScores(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
+
+    assert.deepEqual(
+      table[0].snippets.map((snippet) => [snippet.kept, snippet.reason ?? null]),
+      [
+        [true, null],
+        [false, 'score'],
+        [true, null],
+        [true, null],
+      ]
+    );
+  });
+
+  it('skips the whole source when the score list is longer than the surviving snippets', () => {
     const table = buildTable([{ texts: ['first', 'second', 'third'] }]);
-    const row = answeredRow('s0', answersWith({}), [0.2]); // 长度不一致（防御）
+    const row = answeredRow('s0', answersWith({}), [0.2, 0.2, 0.2, 0.2]); // 分数比片段还多：对齐依据不成立
     const stats = buildStats([row]);
 
     applySnippetScores(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
@@ -341,6 +362,23 @@ describe('applySnippetScores', () => {
     assert.deepEqual(
       table[0].snippets.map((snippet) => snippet.kept),
       [true, true, true]
+    );
+  });
+
+  it('behaves exactly as before when the score list has the same length', () => {
+    const table = buildTable([{ texts: ['first', 'second', 'third'] }]);
+    const row = answeredRow('s0', answersWith({}), [1.5, 0.4, 2]);
+    const stats = buildStats([row]);
+
+    applySnippetScores(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
+
+    assert.deepEqual(
+      table[0].snippets.map((snippet) => [snippet.kept, snippet.reason ?? null]),
+      [
+        [true, null],
+        [false, 'score'],
+        [true, null],
+      ]
     );
   });
 

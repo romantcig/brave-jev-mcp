@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJevResponse } from './jev/client.js';
-import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import { createNoKeyJevStats } from './stats.js';
 import type {
@@ -1273,5 +1273,228 @@ describe('novelty and cross-source dup (02-04)', () => {
     assert.equal(syndicated?.verdict, 'drop');
     assert.equal(syndicated?.reason, 'rewrite');
     assert.equal(stats.local.empty_dropped, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 批 D（02-FIX）：32k 砍尾后没砍的片段分数照常生效；score 删掉部分片段后残余
+// 一句话来源仍要进 shadow 的 would_drop。
+// ---------------------------------------------------------------------------
+
+describe('score alignment after the 32k cut_tail downgrade (02-FIX batch D)', () => {
+  it('removes only the scored snippet and keeps the ones cut off before sending', async () => {
+    // 一个来源 5 个片段，假 classify 报 ladder cut_tail / sent_snippets 3、
+    // snip0..2 分数 [2, 0, 2] → 只有第 2 个片段被删，第 4、5 个（没发出去）保留
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://cut.example/',
+            title: 'Cut',
+            snippets: [
+              'Brave alpha fact.',
+              'Brave beta fact.',
+              'Brave gamma fact.',
+              'Brave delta fact.',
+              'Brave epsilon fact.',
+            ],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+    const classify: ClassifyDeps['classify'] = async () => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      answers: {
+        ...Object.fromEntries(
+          Object.keys(SOURCE_QUESTIONS).map((key) => [
+            key,
+            { kind: 'noul' as const, probability: 0 },
+          ])
+        ),
+        snip0: { kind: 'score', score: 2 },
+        snip1: { kind: 'score', score: 0 },
+        snip2: { kind: 'score', score: 2 },
+      },
+      input_tokens: 10,
+      ladder: 'cut_tail',
+      sent_snippets: 3,
+    });
+
+    const { result, stats } = await filterLlmContext(
+      data,
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify,
+      }
+    );
+
+    assert.deepEqual(stats.jev?.per_source[0].snippet_scores, [2, 0, 2]);
+    assert.deepEqual(
+      stats.sources[0].snippets.map((row) => [row.kept, row.reason ?? null]),
+      [
+        [true, null],
+        [false, 'score'],
+        [true, null],
+        [true, null],
+        [true, null],
+      ]
+    );
+    assert.equal(result.grounding.generic[0].snippets.length, 4);
+  });
+
+  it('keeps every snippet when a score in the sent range is missing', async () => {
+    // sent_snippets 3 但只回了 snip0 与 snip2：中间缺一个会让位置整体错位，
+    // 保守起见整源不写 snippet_scores、片段全保留
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://gap.example/',
+            title: 'Gap',
+            snippets: ['Brave one.', 'Brave two.', 'Brave three.', 'Brave four.'],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+    const classify: ClassifyDeps['classify'] = async () => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      answers: {
+        ...Object.fromEntries(
+          Object.keys(SOURCE_QUESTIONS).map((key) => [
+            key,
+            { kind: 'noul' as const, probability: 0 },
+          ])
+        ),
+        snip0: { kind: 'score', score: 2 },
+        snip2: { kind: 'score', score: 0 },
+      },
+      input_tokens: 10,
+      ladder: 'cut_tail',
+      sent_snippets: 3,
+    });
+
+    const { stats } = await filterLlmContext(
+      data,
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify,
+      }
+    );
+
+    assert.equal(stats.jev?.per_source[0].snippet_scores, undefined);
+    assert.deepEqual(
+      stats.sources[0].snippets.map((row) => row.kept),
+      [true, true, true, true]
+    );
+  });
+
+  it('keeps every snippet when the source_only_questions level sends no scores', async () => {
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          { url: 'https://wide.example/', title: 'Wide', snippets: ['Brave one.', 'Brave two.'] },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+    const classify: ClassifyDeps['classify'] = async () => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      answers: Object.fromEntries(
+        Object.keys(SOURCE_QUESTIONS).map((key) => [key, { kind: 'noul' as const, probability: 0 }])
+      ),
+      input_tokens: 10,
+      ladder: 'source_only_questions',
+      // 客户端在该级别不发任何 snip 题，落实发片段数为 0
+      sent_snippets: 0,
+    });
+
+    const { stats } = await filterLlmContext(
+      data,
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify,
+      }
+    );
+
+    assert.deepEqual(stats.jev?.per_source[0].snippet_scores, []);
+    assert.deepEqual(
+      stats.sources[0].snippets.map((row) => row.kept),
+      [true, true]
+    );
+  });
+});
+
+describe('one-liner sources emptied by score still land in would_drop (02-FIX batch D2)', () => {
+  it('reports a source that keeps only one query-term-free snippet after scoring', async () => {
+    // s1 两个片段：score 删掉含 query 实词的那条，只剩一条不含实词的短片段。
+    // off 链下它照常保留（off 不看 score）；on 链下步 8 判一句话来源丢掉。
+    // shadow 的 would_drop 必须记到它——这正是"按原因白名单推断"漏记的那一类。
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://keep.example/',
+            title: 'Keep',
+            snippets: ['Brave alpha source with details.'],
+          },
+          {
+            url: 'https://oneliner.example/',
+            title: 'Oneliner',
+            snippets: ['Brave beta fragment with query terms.', 'The current release timing.'],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+    const classify: ClassifyDeps['classify'] = async ({ state }) => {
+      const answers: Record<
+        string,
+        { kind: 'noul'; probability: number } | { kind: 'score'; score: number }
+      > = {};
+      for (const key of Object.keys(SOURCE_QUESTIONS)) {
+        answers[key] = { kind: 'noul', probability: 0 };
+      }
+      // s1 的第一条（含实词）打 0 分被删，第二条（不含实词的短句）保留 → 一句话来源
+      answers.snip0 = {
+        kind: 'score',
+        score: state.source.id === 's1' ? 0 : 2,
+      };
+      if (state.source.id === 's1') answers.snip1 = { kind: 'score', score: 2 };
+      return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
+    };
+
+    const offRun = await filterLlmContext(data, request, offConfig);
+    const onRun = await filterLlmContext(data, request, { ...offConfig, mode: 'on' }, { classify });
+    const shadowRun = await filterLlmContext(
+      data,
+      request,
+      { ...offConfig, mode: 'shadow' },
+      { classify }
+    );
+
+    // off 保留 s1；on 把 s1 丢掉（score 删掉含实词片段后只剩一句话）
+    assert.equal(
+      offRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
+      true
+    );
+    assert.equal(
+      onRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
+      false
+    );
+    // shadow 正本与 off 一致，would_drop 里必须有 s1
+    assert.deepEqual(shadowRun.result, offRun.result);
+    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s1']);
   });
 });
