@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -19,6 +19,8 @@ describe('resolveToolDescription', () => {
 
   after(() => {
     console.error = originalConsoleError;
+    // 测后删临时目录（审查 R5：不清理会在本机 Temp 里无限积累）
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('returns the fallback verbatim when no path is configured', () => {

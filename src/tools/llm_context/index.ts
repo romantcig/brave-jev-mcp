@@ -59,8 +59,9 @@ export const description = `
 `.trim();
 
 // 进程级配置惰性单例（EMBED-05）：第一次需要时解析 `JEV_FILTER_CONFIG_FILE`，之后
-// 复用——启动时读一次，改配置要重启 MCP。惰性而不是模块求值时读：`src/server.ts`
-// 先求值工具模块、`dotenv.config()` 在其后（config.ts 头注释）。
+// 复用——启动时读一次，改配置要重启 MCP。惰性而不是模块求值时读，因为模块求值
+// 早于 dotenv：入口 `src/config.ts` 先 import 工具模块（求值链包含本文件），之后
+// 才执行 `dotenv.config()`——模块求值时读 .env 里的变量会读到空。
 let filterConfig: FilterConfig | undefined;
 
 const configFor = (): FilterConfig => {

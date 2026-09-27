@@ -1460,52 +1460,53 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
   it('hands the slot to the head waiter instead of reopening a gap (C4)', async () => {
     // concurrency 1。旧实现 release 先 `active -= 1` 再唤醒等待者，等待者的
     // `active += 1` 在微任务里才跑——两者之间进入的新调用会看到空位直接开跑，
-    // 在途数超过上限。这里精确制造那个窗口：释放 A 的同一同步回合，用微任务插入
-    // 新调用 C（它排在 A 的续体之后、被唤醒的等待者之前）。
-    let inflight = 0;
-    let peak = 0;
-    const pending: Array<() => void> = [];
+    // 在途数超过上限。A 的 fetch 放行后还要读正文、解析、进 finally 才 release，
+    // 窗口落在第几个微任务不固定，所以扫描式插入：A 放行后让 C 延迟 k 个微任务
+    // 再进闸（k = 0..29），每轮重建分类器，所有轮次的在途峰值都必须是 1（审查 R1）。
     const saved = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      inflight += 1;
-      peak = Math.max(peak, inflight);
-      await new Promise<void>((resolve) => pending.push(resolve));
-      inflight -= 1;
-      return okResponseOf(defaultRecording.results['s0']);
-    }) as typeof fetch;
-
     try {
-      const classifier = createJevClassifier(
-        { ...jevConfig, concurrency: 1 },
-        { TYPESAFE_API_KEY: 'k' },
-        { random: () => 0 }
-      );
+      for (let k = 0; k < 30; k += 1) {
+        let inflight = 0;
+        let peak = 0;
+        const pending: Array<() => void> = [];
+        globalThis.fetch = (async () => {
+          inflight += 1;
+          peak = Math.max(peak, inflight);
+          await new Promise<void>((resolve) => pending.push(resolve));
+          inflight -= 1;
+          return okResponseOf(defaultRecording.results['s0']);
+        }) as typeof fetch;
 
-      const promises: Array<Promise<{ status: string }>> = [];
-      promises.push(classifier.classify(request)); // A 立即在途
-      await waitFor(() => pending.length === 1);
-      promises.push(classifier.classify(request)); // B 排队
-      await new Promise((resolve) => setTimeout(resolve, 10));
+        const classifier = createJevClassifier(
+          { ...jevConfig, concurrency: 1 },
+          { TYPESAFE_API_KEY: 'k' },
+          { random: () => 0 }
+        );
 
-      // 释放 A，并在同一同步回合排队一个微任务插入 C
-      pending.shift()!();
-      const inserted = Promise.resolve().then(() => classifier.classify(request));
-      promises.push(inserted);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.equal(peak, 1, `the inserted call must queue, not jump the gate (peak ${peak})`);
+        const promises: Array<Promise<{ status: string }>> = [];
+        promises.push(classifier.classify(request)); // A 立即在途
+        await waitFor(() => pending.length === 1);
+        promises.push(classifier.classify(request)); // B 排队
+        await new Promise((resolve) => setTimeout(resolve, 5));
 
-      // 再放行两次：B（被交接的名额）与 C
-      for (let i = 0; i < 2; i += 1) {
-        await waitFor(() => pending.length > 0);
+        // 放行 A，C 延迟 k 个微任务后进闸
         pending.shift()!();
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+        let delayed: Promise<void> = Promise.resolve();
+        for (let i = 0; i < k; i += 1) delayed = delayed.then(() => {});
+        promises.push(delayed.then(() => classifier.classify(request)));
 
-      const outcomes = await Promise.all(promises);
-      for (const outcome of outcomes) {
-        assert.equal(outcome.status, 'answered', JSON.stringify(outcome));
+        // 依次放行 B 与 C
+        for (let i = 0; i < 2; i += 1) {
+          await waitFor(() => pending.length > 0);
+          pending.shift()!();
+        }
+
+        const outcomes = await Promise.all(promises);
+        for (const outcome of outcomes) {
+          assert.equal(outcome.status, 'answered', JSON.stringify(outcome));
+        }
+        assert.equal(peak, 1, `k=${k}: peak in-flight fetches must be exactly 1, saw ${peak}`);
       }
-      assert.equal(peak, 1, `peak in-flight fetches must be exactly 1, saw ${peak}`);
     } finally {
       globalThis.fetch = saved;
     }

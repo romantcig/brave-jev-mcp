@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { useTestClient } from '../../testUtils/mcpTestHarness.js';
+import { connectTestClient, useTestClient } from '../../testUtils/mcpTestHarness.js';
 import { JEV_CONFIG_FILE_ENV } from '../../filter/config.js';
 import { name, resetFilterStateForTest } from './index.js';
 import { LlmContextInputSchema, RequestParamsSchema } from './schemas/input.js';
@@ -306,17 +306,55 @@ describe(`${name} (config file lifecycle)`, () => {
   });
 
   it('ignores the removed JEV_FILTER_MODE variable entirely', async () => {
-    // 旧变量设成 on 但配置文件未设 mode → 仍是 off（配置载体只剩文件一个）
+    // 新写一份不含 mode 的配置（上一条用例已把旧文件改成 mode on），删掉 key，
+    // 旧变量设成 on：若它仍被读，on 缺 key 会打 "No Jev API key" 那一行；
+    // 走 off 则一行都不打（审查 R2）
+    const savedKey = process.env.TYPESAFE_API_KEY;
+    const savedMode = process.env.JEV_FILTER_MODE;
+    delete process.env.TYPESAFE_API_KEY;
+    useFilterConfig({ overfetch_factor: 1 });
     process.env.JEV_FILTER_MODE = 'on';
-    resetFilterStateForTest();
+
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
     try {
       const result = await call();
       assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
-      // off 模式下 factor 1 不放大：Brave 收到原样 5
-      assert.equal(forwarded[forwarded.length - 1].searchParams.get('maximum_number_of_urls'), '5');
+      assert.ok(
+        !errors.some((args) => args.some((arg) => String(arg).includes('No Jev API key'))),
+        `JEV_FILTER_MODE must not switch the mode on: ${JSON.stringify(errors)}`
+      );
     } finally {
-      delete process.env.JEV_FILTER_MODE;
+      console.error = originalError;
+      if (savedMode === undefined) delete process.env.JEV_FILTER_MODE;
+      else process.env.JEV_FILTER_MODE = savedMode;
+      if (savedKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = savedKey;
       resetFilterStateForTest();
+    }
+  });
+});
+
+describe(`${name} (tool_description_file from config)`, () => {
+  useIsolatedFilterEnv();
+
+  it('overrides the tool description with the file named in the config', async () => {
+    // register 必须从配置取描述文件路径（审查 R6）：适配行改成 undefined 这条就红
+    const descPath = join(configDir, `desc-${Date.now()}.md`);
+    writeFileSync(descPath, 'Custom description from file.', 'utf8');
+    useFilterConfig({ tool_description_file: descPath });
+
+    const client = await connectTestClient();
+    try {
+      const { tools } = await client.listTools();
+      const tool = tools.find((t) => t.name === name);
+      assert.ok(tool);
+      assert.equal(tool.description, 'Custom description from file.');
+    } finally {
+      await client.close();
     }
   });
 });
