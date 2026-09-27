@@ -531,15 +531,26 @@ const loadShadowExpectedHeader = (
 const deriveShadowDiff = (
   offSources: SourceStats[],
   onSources: SourceStats[]
-): { would_drop: string[]; would_remove_snippets: number } => {
+): {
+  would_drop: string[];
+  would_remove_snippets: number;
+  would_restore: string[];
+  would_restore_snippets: number;
+} => {
   const offByIndex = new Map(offSources.map((source) => [source.index, source]));
   const wouldDrop: string[] = [];
   let wouldRemoveSnippets = 0;
+  const wouldRestore: string[] = [];
+  let wouldRestoreSnippets = 0;
   for (const onSource of onSources) {
     const offSource = offByIndex.get(onSource.index);
     assert.ok(offSource, `source ${onSource.index} missing from the off run`);
     if (offSource.verdict === 'keep' && onSource.verdict === 'drop') {
       wouldDrop.push(`s${onSource.index}`);
+      continue;
+    }
+    if (offSource.verdict === 'drop' && onSource.verdict === 'keep') {
+      wouldRestore.push(`s${onSource.index}`);
       continue;
     }
     if (offSource.verdict !== 'keep' || onSource.verdict !== 'keep') continue;
@@ -552,9 +563,30 @@ const deriveShadowDiff = (
     for (const onRow of onSource.snippets) {
       const key = onRow.part === undefined ? String(onRow.index) : `${onRow.index}.${onRow.part}`;
       if (!onRow.kept && offKept.get(key) === true) wouldRemoveSnippets += 1;
+      if (onRow.kept && offKept.get(key) === false) wouldRestoreSnippets += 1;
     }
   }
-  return { would_drop: wouldDrop, would_remove_snippets: wouldRemoveSnippets };
+  return {
+    would_drop: wouldDrop,
+    would_remove_snippets: wouldRemoveSnippets,
+    would_restore: wouldRestore,
+    would_restore_snippets: wouldRestoreSnippets,
+  };
+};
+
+const SHADOW_DIFF_EXPECTED: Record<string, unknown> = {
+  jev_release_default: {
+    would_drop: [],
+    would_remove_snippets: 9,
+    would_restore: [],
+    would_restore_snippets: 11,
+  },
+  jev_release_strict: {
+    would_drop: [],
+    would_remove_snippets: 5,
+    would_restore: ['s11'],
+    would_restore_snippets: 5,
+  },
 };
 
 for (const stem of ['jev_release_default', 'jev_release_strict']) {
@@ -607,6 +639,12 @@ for (const stem of ['jev_release_default', 'jev_release_strict']) {
         shadowRun.stats.shadow_diff,
         deriveShadowDiff(offRun.stats.sources, onRun.stats.sources)
       );
+    });
+
+    it('pins the concrete shadow_diff values, including what on restores', () => {
+      // on 按 is_primary 播种、保护原创论证段，会救回 off 删掉的内容（审查 R10）：
+      // strict 的 s11（therundown）被 off 判 rewrite 整源丢掉，on 保留
+      assert.deepEqual(shadowRun.stats.shadow_diff, SHADOW_DIFF_EXPECTED[stem]);
     });
   });
 }

@@ -737,6 +737,9 @@ const runOffChain = (
  * - `would_drop`：off 结果 keep、on 结果 drop 的来源 src id（Brave 序）。
  * - `would_remove_snippets`：在 off 与 on **都保留**的来源里，off 保留、on 删除的
  *   片段数——整源被 would_drop 的来源不重复计。
+ * - `would_restore`：off 结果 drop、on 结果 keep 的来源 src id（Brave 序）——on 按
+ *   is_primary 播种、保护原创论证段会救回 off 删掉的来源。
+ * - `would_restore_snippets`：在两边都保留的来源里，off 删除、on 保留的片段数。
  *
  * 两张表按 `source.index` / 片段 `index`+`part` 配对；步 9 裁剪在两侧之后，故
  * 超量预算造成的差异不会混入本对比。
@@ -745,6 +748,8 @@ const diffShadow = (offTable: WorkSource[], onTable: WorkSource[]): ShadowDiff =
   const offByIndex = new Map(offTable.map((source) => [source.index, source]));
   const wouldDrop: string[] = [];
   let wouldRemoveSnippets = 0;
+  const wouldRestore: string[] = [];
+  let wouldRestoreSnippets = 0;
 
   for (const onSource of onTable) {
     const offSource = offByIndex.get(onSource.index);
@@ -754,17 +759,26 @@ const diffShadow = (offTable: WorkSource[], onTable: WorkSource[]): ShadowDiff =
       wouldDrop.push(`s${onSource.index}`);
       continue;
     }
+    if (offSource.verdict === 'drop' && onSource.verdict === 'keep') {
+      wouldRestore.push(`s${onSource.index}`);
+      continue;
+    }
     if (offSource.verdict !== 'keep' || onSource.verdict !== 'keep') continue;
 
     const offSnippets = new Map(offSource.snippets.map((row) => [snippetKey(row), row]));
     for (const onSnippet of onSource.snippets) {
-      if (!onSnippet.kept && offSnippets.get(snippetKey(onSnippet))?.kept === true) {
-        wouldRemoveSnippets += 1;
-      }
+      const offKept = offSnippets.get(snippetKey(onSnippet))?.kept;
+      if (!onSnippet.kept && offKept === true) wouldRemoveSnippets += 1;
+      if (onSnippet.kept && offKept === false) wouldRestoreSnippets += 1;
     }
   }
 
-  return { would_drop: wouldDrop, would_remove_snippets: wouldRemoveSnippets };
+  return {
+    would_drop: wouldDrop,
+    would_remove_snippets: wouldRemoveSnippets,
+    would_restore: wouldRestore,
+    would_restore_snippets: wouldRestoreSnippets,
+  };
 };
 
 /**

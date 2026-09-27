@@ -200,6 +200,8 @@ export type JevStats = {
 export type ShadowDiff = {
   would_drop: string[];
   would_remove_snippets: number;
+  would_restore: string[];
+  would_restore_snippets: number;
 };
 
 /** 来源被整体丢弃的原因。前五个 Phase 1 可产生，其余 Phase 2。 */

@@ -187,8 +187,7 @@ const replayClassifier =
 // 跑过滤：off 直接跑；shadow / on 回放（先核对候选覆盖）；shadow 另跑一遍 off 作对照
 // ---------------------------------------------------------------------------
 
-const config =
-  parseFilterConfigObject(mode === 'off' ? {} : { mode });
+const config = parseFilterConfigObject(mode === 'off' ? {} : { mode });
 const results = mode === 'off' ? undefined : loadRecording();
 
 // 候选覆盖核对（与管道步 5 同源 collectJevCandidates）：录制里缺的候选 id 打一行
@@ -282,6 +281,6 @@ if (mode === 'shadow' && offRun !== undefined) {
     `shadow vs off: result ${resultSame ? 'identical' : 'DIFFERENT'} | local ${localSame ? 'identical' : 'DIFFERENT'} | sources ${sourcesSame ? 'identical' : 'DIFFERENT'}`
   );
   console.log(
-    `shadow_diff: would_drop=[${(stats.shadow_diff?.would_drop ?? []).join(', ')}] would_remove_snippets=${stats.shadow_diff?.would_remove_snippets ?? 0}`
+    `shadow_diff: would_drop=[${(stats.shadow_diff?.would_drop ?? []).join(', ')}] would_remove_snippets=${stats.shadow_diff?.would_remove_snippets ?? 0} would_restore=[${(stats.shadow_diff?.would_restore ?? []).join(', ')}] would_restore_snippets=${stats.shadow_diff?.would_restore_snippets ?? 0}`
   );
 }
