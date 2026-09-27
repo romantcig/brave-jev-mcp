@@ -128,9 +128,16 @@ export const RETRY_BACKOFF_MULTIPLIER = 2;
 
 /**
  * 单次退避封顶毫秒数（PLAN 第 5 节"兜底"行：500 × 2^(n-1) 封顶 5s，再随机减最多
- * 25%）。同一常量也是 Retry-After 的分界：服务端要求等更久就不再重试。
+ * 25%）。
  */
 export const RETRY_BACKOFF_CAP_MS = 5000;
+
+/**
+ * Retry-After 要求等待超过该上限就放弃该源按"留"（PLAN 第 5 节"兜底"行：搜索在
+ * 同步等 Jev，官方 SDK 最多照办 60 s 的等待会卡住整次搜索）。与退避封顶是两条
+ * 独立决策，数值当前相同但分开声明（审查 R9），调其中一个不连带另一个。
+ */
+export const RETRY_AFTER_MAX_MS = 5000;
 
 /** 退避的随机抖动上限比例：`(1 - 0.25 × random)`（PLAN 第 5 节"兜底"行）。 */
 export const RETRY_JITTER_RATIO = 0.25;
@@ -547,7 +554,7 @@ export function createJevClassifier(
 
         // Retry-After 优先于普通退避；要求等超上限就干脆不再重试
         const retryAfterMs = parseRetryAfterMs(response, now);
-        if (retryAfterMs !== undefined && retryAfterMs > RETRY_BACKOFF_CAP_MS) {
+        if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) {
           recordFailure(mapped.kind);
           return httpFailure(mapped.kind, status, bodyText);
         }

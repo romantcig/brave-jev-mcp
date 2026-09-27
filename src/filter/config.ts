@@ -87,12 +87,16 @@ const inRange = (value: unknown, min: number, max: number, integer = false): val
   value <= max &&
   (!integer || Number.isInteger(value));
 
-/** 配置文件里的非空字符串路径（trim）；非字符串或空白 → undefined。 */
+/**
+ * 配置文件里的非空字符串路径（trim + 开头 `~` 展开为本机 home）；非字符串或空白 →
+ * undefined。三个路径键（`blocklist_file` / `tool_description_file` / `log_dir`）
+ * 共用同一展开口径：只认单独 `~` 或 `~/`、`~\` 开头，`~foo` 原样保留（审查 R8）。
+ */
 const optionalPath = (file: Record<string, unknown>, key: string): string | undefined => {
   const value = file[key];
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
-  return trimmed === '' ? undefined : trimmed;
+  return trimmed === '' ? undefined : expandHome(trimmed);
 };
 
 /** 展开开头的 `~` 为本机 home（`~/x` 与 `~\x` 都认）。 */
@@ -286,7 +290,15 @@ export function loadFilterConfig(env: Record<string, string | undefined>): Filte
   let raw: unknown;
   if (filePath) {
     try {
-      raw = JSON.parse(readFileSync(filePath, 'utf8'));
+      // 去掉开头的 UTF-8 BOM：PowerShell 5.1 的 `-Encoding UTF8` 写出的文件带 BOM，
+      // 不去掉整份配置会被 JSON.parse 作废（审查 R4）
+      raw = JSON.parse(readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+      if (raw === null) {
+        // JSON 文本 `null` 解析成功但顶层不是对象——与数组/标量同待遇报一行，
+        // 不能静默回落（审查 R3）；置 undefined 走"无配置"路径避免二次告警
+        console.error('[jev-filter] config: top level is not a JSON object; using all defaults.');
+        raw = undefined;
+      }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       console.error(

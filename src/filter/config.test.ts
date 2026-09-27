@@ -439,6 +439,52 @@ describe('parseFilterConfigObject: file paths and log_dir', () => {
     assert.equal(parseFilterConfigObject({ log_dir: 'C:/logs' }).logDir, 'C:/logs');
   });
 
+  it('expands a leading ~ in tool_description_file with the same rule (R8)', () => {
+    assert.equal(
+      parseFilterConfigObject({ tool_description_file: '~/desc.txt' }).toolDescriptionFile,
+      join(homedir(), 'desc.txt')
+    );
+    assert.equal(
+      parseFilterConfigObject({ tool_description_file: '~\\desc.txt' }).toolDescriptionFile,
+      join(homedir(), 'desc.txt')
+    );
+    assert.equal(
+      parseFilterConfigObject({ tool_description_file: '~' }).toolDescriptionFile,
+      homedir()
+    );
+    // `~foo` 不是 home 引用，原样保留
+    assert.equal(
+      parseFilterConfigObject({ tool_description_file: '~foo/desc.txt' }).toolDescriptionFile,
+      '~foo/desc.txt'
+    );
+  });
+
+  it('expands a leading ~ in blocklist_file before reading it (R8)', () => {
+    // 黑名单路径不进 FilterConfig，loadFilterConfig 直接按它读文件：写一份真文件
+    // 到临时目录，路径用 `~/` 形式没意义（不在 home 下），所以这里断言的是"读不到
+    // 时 stderr 里的路径已展开"——写 `~\no-such-bl-<rand>.txt`，报错行必须是绝对路径
+    const dir = mkdtempSync(join(tmpdir(), 'jev-config-test-r8-'));
+    const name = `no-such-bl-${Math.random().toString(36).slice(2)}.txt`;
+    let stderr: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    };
+    try {
+      const file = join(dir, 'cfg.json');
+      writeFileSync(file, JSON.stringify({ blocklist_file: `~\\${name}` }), 'utf8');
+      loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    } finally {
+      console.error = original;
+      rmSync(dir, { recursive: true, force: true });
+    }
+    assert.equal(stderr.length, 1, stderr.join('\n'));
+    assert.ok(
+      stderr[0].includes(join(homedir(), name)),
+      `blocklist path must be ~-expanded: ${stderr[0]}`
+    );
+  });
+
   it('falls back to the default log_dir for blank or non-string values', () => {
     const lines: string[] = [];
     const config = parseFilterConfigObject({ log_dir: '   ' }, (line) => lines.push(line));
@@ -530,6 +576,32 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
     });
     assert.deepEqual(config, defaults());
     assert.equal(stderr.length, 1, stderr.join('\n'));
+  });
+
+  it('warns instead of falling back silently when the file content is JSON null (R3)', () => {
+    // JSON 文本 `null` 解析成功但顶层不是对象——必须与数组/标量同待遇，报同一行，
+    // 不能静默回落（审查 R3：静默失效违背 EMBED-05"坏值要看得见"）
+    const file = writeFixture(tmpRoot, 'null.json', null);
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    });
+    assert.deepEqual(config, defaults());
+    assert.equal(stderr.length, 1, stderr.join('\n'));
+    assert.match(stderr[0], /top level is not a JSON object/, stderr[0]);
+  });
+
+  it('tolerates a UTF-8 BOM instead of discarding the whole file (R4)', () => {
+    // PowerShell 5.1 的 `-Encoding UTF8` 写出的文件带 BOM；JSON.parse 会报错，
+    // 整份配置回落 off——去 BOM 后照常解析（审查 R4）
+    const file = join(tmpRoot, 'bom.json');
+    writeFileSync(file, `\uFEFF${JSON.stringify({ mode: 'on' })}`, 'utf8');
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    });
+    assert.equal(config?.mode, 'on');
+    assert.equal(stderr.length, 0, stderr.join('\n'));
   });
 
   it('parses a full config file into the documented shape', () => {
