@@ -219,10 +219,11 @@ describe(`${name} (no jev key, mode on)`, () => {
 
   it('treats a missing key as off: normal result, one stderr line, zero Jev traffic', async () => {
     // key 变量不在 FILTER_ENV_VARS 名单（全局约定名），本用例内单独装卸：
-    // Windows 的 process.env 大小写不敏感，delete 覆盖本机 shell 的 JEV_API_KEY
-    const savedKeys: Array<[string, string | undefined]> = ['jev_API_KEY', 'TYPESAFE_API_KEY'].map(
-      (key) => [key, process.env[key]]
-    );
+    // delete 覆盖本机 shell 里设的 key
+    const savedKeys: Array<[string, string | undefined]> = ['TYPESAFE_API_KEY'].map((key) => [
+      key,
+      process.env[key],
+    ]);
     for (const [key] of savedKeys) delete process.env[key];
     // mode 来自配置文件（旧 JEV_FILTER_MODE 变量已不再被读）
     useFilterConfig({ mode: 'on' });

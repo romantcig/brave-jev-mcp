@@ -418,14 +418,14 @@ const okResponseOf = (entry: { response: unknown }): Response =>
   });
 
 describe('hasJevKey', () => {
-  it('accepts either probe-script variable name with a non-blank value (A9 order names)', () => {
+  it('accepts only the official TYPESAFE_API_KEY with a non-blank value', () => {
     assert.equal(hasJevKey({}), false);
-    assert.equal(hasJevKey({ jev_API_KEY: '' }), false);
-    assert.equal(hasJevKey({ jev_API_KEY: '   ' }), false);
     assert.equal(hasJevKey({ TYPESAFE_API_KEY: '' }), false);
-    assert.equal(hasJevKey({ jev_API_KEY: 'k' }), true);
+    assert.equal(hasJevKey({ TYPESAFE_API_KEY: '   ' }), false);
     assert.equal(hasJevKey({ TYPESAFE_API_KEY: 'k' }), true);
-    assert.equal(hasJevKey({ jev_API_KEY: undefined, TYPESAFE_API_KEY: 'k' }), true);
+    // 旧的自拟变量名不再生效（普通对象大小写敏感，与 Linux / macOS 环境一致）
+    assert.equal(hasJevKey({ jev_API_KEY: 'k' }), false);
+    assert.equal(hasJevKey({ JEV_API_KEY: 'k' }), false);
   });
 });
 
@@ -444,7 +444,7 @@ describe('createJevClassifier', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'probe-order-key' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'official-key' });
       const questions = buildQuestions(2);
       const outcome = await classifier.classify({ state, questions });
 
@@ -456,7 +456,7 @@ describe('createJevClassifier', () => {
       assert.equal(capturedUrl, JEVI_ENDPOINT);
       assert.equal(capturedInit?.method, 'POST');
       const headers = capturedInit?.headers as Record<string, string>;
-      assert.equal(headers['Authorization'], 'Bearer probe-order-key');
+      assert.equal(headers['Authorization'], 'Bearer official-key');
       assert.equal(headers['Content-Type'], 'application/json');
       assert.ok(capturedInit?.signal instanceof AbortSignal, 'must pass an abort signal');
       const body = JSON.parse(String(capturedInit?.body)) as {
@@ -481,7 +481,7 @@ describe('createJevClassifier', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify({
         state,
         questions: buildQuestions(0),
@@ -506,7 +506,7 @@ describe('createJevClassifier', () => {
       // 超时不重试（2026-09-27 定）：一次失败即返回，注入 no-op sleep 只是为了不走真退避
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         {
           sleep: async () => {},
         }
@@ -537,7 +537,7 @@ describe('createJevClassifier', () => {
       // 恒抛 → 耗尽重试（SAFE-03 网络异常白名单）；注入 no-op sleep 不真等
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         {
           sleep: async () => {},
         }
@@ -566,7 +566,7 @@ describe('createJevClassifier', () => {
       // 恒 429 → 耗尽重试；注入 no-op sleep 不真等
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: key },
+        { TYPESAFE_API_KEY: key },
         {
           sleep: async () => {},
         }
@@ -591,30 +591,6 @@ describe('createJevClassifier', () => {
     }
   });
 
-  it('reads the key in probe-script order: jev_API_KEY first, then TYPESAFE_API_KEY', async () => {
-    const authOf = async (env: Record<string, string | undefined>): Promise<string> => {
-      let captured = '';
-      const saved = globalThis.fetch;
-      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-        captured = (init?.headers as Record<string, string>)['Authorization'];
-        return okResponseOf(defaultRecording.results['s0']);
-      }) as typeof fetch;
-      try {
-        const classifier = createJevClassifier(jevConfig, env);
-        await classifier.classify({ state, questions: buildQuestions(0) });
-        return captured;
-      } finally {
-        globalThis.fetch = saved;
-      }
-    };
-
-    assert.equal(
-      await authOf({ jev_API_KEY: 'primary', TYPESAFE_API_KEY: 'fallback' }),
-      'Bearer primary'
-    );
-    assert.equal(await authOf({ TYPESAFE_API_KEY: 'fallback' }), 'Bearer fallback');
-  });
-
   it('caps concurrent fetches at the configured limit and queues the rest (JEV-04)', async () => {
     const entry = defaultRecording.results['s0'];
     const responseBody = JSON.stringify(entry.response);
@@ -634,7 +610,7 @@ describe('createJevClassifier', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const questions = buildQuestions(1);
       const request = { state, questions };
 
@@ -727,7 +703,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     ]);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -743,7 +719,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -760,7 +736,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -777,7 +753,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       for (const status of [408, 500, 503]) {
         const { fetchImpl, counter } = statusFetch(status, 'transient');
         globalThis.fetch = fetchImpl;
-        const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+        const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
         const outcome = await classifier.classify(request);
         assert.ok(outcome.status === 'failed', `${status} ${JSON.stringify(outcome)}`);
         assert.equal(outcome.kind, status === 408 ? 'timeout' : 'network', `${status} kind`);
@@ -794,7 +770,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
       assert.deepEqual(outcome, { status: 'failed', kind: 'auth', detail: '403 forbidden' });
@@ -810,7 +786,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
       assert.deepEqual(outcome, { status: 'failed', kind: 'validation', detail: '404 not found' });
@@ -826,7 +802,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
       assert.deepEqual(outcome, {
@@ -859,7 +835,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     ]);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -875,7 +851,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { sleeps, hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -891,7 +867,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { sleeps, hooks } = sleepRecorder(1);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -910,7 +886,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { sleeps, hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -929,7 +905,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { sleeps, hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -946,7 +922,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { sleeps, hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -971,7 +947,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     try {
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { ...hooks, now: () => now }
       );
       const outcome = await classifier.classify(request);
@@ -992,7 +968,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { sleeps, hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -1025,7 +1001,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -1051,7 +1027,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const { hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' }, hooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const first = await classifier.classify(request);
       assert.ok(first.status === 'failed', JSON.stringify(first));
       assert.equal(first.kind, 'timeout');
@@ -1098,7 +1074,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify({
         state: bigState,
         questions: buildQuestions(5),
@@ -1138,7 +1114,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify({
         state: wideState,
         questions: buildQuestions(500),
@@ -1178,7 +1154,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { jev_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify({
         state: hugeState,
         questions: buildQuestions(1),
@@ -1216,7 +1192,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     try {
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { sleep: async () => {}, now: () => 1000000 }
       );
 
@@ -1250,7 +1226,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     try {
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { sleep: async () => {}, now: () => 1000000 }
       );
 
@@ -1288,7 +1264,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     try {
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { sleep: async () => {}, now: () => clock }
       );
 
@@ -1342,7 +1318,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     try {
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { sleep: async () => {}, now: () => clock }
       );
 
@@ -1386,7 +1362,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     try {
       const classifier = createJevClassifier(
         jevConfig,
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { sleep: async () => {}, now: () => 1000000 }
       );
 
@@ -1435,7 +1411,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
     try {
       const classifier = createJevClassifier(
         { ...jevConfig, concurrency: 1 },
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { sleep: async () => {}, random: () => 0, now: () => 1000000 }
       );
 
@@ -1501,7 +1477,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
     try {
       const classifier = createJevClassifier(
         { ...jevConfig, concurrency: 1 },
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { random: () => 0 }
       );
 
@@ -1550,7 +1526,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
     try {
       const classifier = createJevClassifier(
         { ...jevConfig, concurrency: 1 },
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { sleep: async () => {}, random: () => 0, now: () => 1000000 }
       );
 
@@ -1602,7 +1578,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
       globalThis.fetch = signalAwareFetch(50) as typeof fetch;
       const fast = createJevClassifier(
         { ...jevConfig, timeoutMs: 1000 },
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { random: () => 0 }
       );
       const answered = await fast.classify(request);
@@ -1619,7 +1595,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
       }) as typeof fetch;
       const slow = createJevClassifier(
         { ...jevConfig, timeoutMs: 1000 },
-        { jev_API_KEY: 'k' },
+        { TYPESAFE_API_KEY: 'k' },
         { random: () => 0 }
       );
       const timedOut = await slow.classify(request);

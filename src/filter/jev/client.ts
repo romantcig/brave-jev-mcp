@@ -162,37 +162,29 @@ const TRANSIENT_FAILURE_KINDS: ReadonlySet<ClassifyFailKind> = new Set([
 ]);
 
 /**
- * key 环境变量读取顺序（A9 落定）：探测脚本现名 `jev_API_KEY` →
- * `TYPESAFE_API_KEY`，原样沿用不发明新名。key 只从 env 参数读进闭包内存，
+ * key 环境变量：只认官方 SDK（typesafe-sdk-js / typesafe-sdk-python）同名的
+ * `TYPESAFE_API_KEY`（老大 2026-09-27 定）。key 只从 env 参数读进闭包内存，
  * 绝不落盘、绝不进错误面（T-02-05-1）。
  */
-const KEY_ENV_NAMES = ['jev_API_KEY', 'TYPESAFE_API_KEY'] as const;
+const KEY_ENV_NAME = 'TYPESAFE_API_KEY';
+
+/** 读 key 原值；未设或全空白返回空串（调用方已用 hasJevKey 预检）。 */
+const readKey = (env: Record<string, string | undefined>): string => {
+  const value = env[KEY_ENV_NAME];
+  return typeof value === 'string' && value.trim() !== '' ? value : '';
+};
 
 /**
- * 判定环境里是否配置了 Jev key：按 A9 顺序找第一个存在且非空白的值。
+ * 判定环境里是否配置了 Jev key（存在且非空白）。
  * 适配行用它实现 no_key 语义（EMBED-05）：缺失且 mode 非 off → 不创建实例、
  * stderr 一行、管道记 no_key 零请求（等价 off）。
  * @example hasJevKey({}) === false
- * @example hasJevKey({ jev_API_KEY: 'k' }) === true
  * @example hasJevKey({ TYPESAFE_API_KEY: 'k' }) === true
- * @example hasJevKey({ jev_API_KEY: '  ' }) === false
+ * @example hasJevKey({ TYPESAFE_API_KEY: '  ' }) === false
  */
 export function hasJevKey(env: Record<string, string | undefined>): boolean {
-  for (const name of KEY_ENV_NAMES) {
-    const value = env[name];
-    if (typeof value === 'string' && value.trim() !== '') return true;
-  }
-  return false;
+  return readKey(env) !== '';
 }
-
-/** 按 A9 顺序读 key 原值；缺失返回空串（调用方已用 hasJevKey 预检）。 */
-const readKey = (env: Record<string, string | undefined>): string => {
-  for (const name of KEY_ENV_NAMES) {
-    const value = env[name];
-    if (typeof value === 'string' && value.trim() !== '') return value;
-  }
-  return '';
-};
 
 /** AbortSignal.timeout 触发的 reject 名（Node 实测 'TimeoutError'；手动 abort 为 'AbortError'），二者都按超时记。 */
 const ABORT_ERROR_NAMES: ReadonlySet<string> = new Set(['AbortError', 'TimeoutError']);

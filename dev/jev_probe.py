@@ -1,6 +1,6 @@
 """对一份 Brave 夹具跑 Jev v3 题库（TypeSafe 直连），输出逐来源裁决表并把原始响应存到 fixtures/<name>.jev.json。
 用法: python dev/jev_probe.py fixtures/jev_release_default.json "<intent>"
-后端：TypeSafe 直连（noul 协议，顺序执行）；key 从环境变量 jev_API_KEY 或 TYPESAFE_API_KEY 读。代理从 HTTPS_PROXY 环境变量读，未设则直连。
+后端：TypeSafe 直连（noul 协议，顺序执行）；key 从环境变量 TYPESAFE_API_KEY 读（官方 SDK 同名）。代理从 HTTPS_PROXY 环境变量读，未设则直连。
 OpenRouter / Vercel 网关通道已于 2026-09-24 退役（见 notes/decisions-log.md）。
 候选集先由 dev/dump_local_rules.ts 跑本地规则（步 1–4）：只对幸存来源发请求、对幸存片段录答案——
 录好的 .jev.json 与管道步 5 发送的 state 逐源逐片段对齐（02-01 重录口径）。
@@ -13,8 +13,8 @@ import os
 URL = "https://api.typesafe.ai/v1/systemone"; MODEL = "jev-1.13.0"; BOOL = "noul"
 
 def get_key():
-    k = os.environ.get("jev_API_KEY") or os.environ.get("TYPESAFE_API_KEY")
-    assert k, "jev_API_KEY / TYPESAFE_API_KEY missing"
+    k = os.environ.get("TYPESAFE_API_KEY")
+    assert k, "TYPESAFE_API_KEY missing"
     return k
 
 def prob(ans):

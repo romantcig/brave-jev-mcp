@@ -78,7 +78,7 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
   if (config.mode === 'off') return undefined;
   if (!hasJevKey(process.env)) {
     console.error(
-      '[jev-filter] No Jev API key found (jev_API_KEY / TYPESAFE_API_KEY); treating Jev filtering as off.'
+      '[jev-filter] No Jev API key found (TYPESAFE_API_KEY); treating Jev filtering as off.'
     );
     return undefined;
   }

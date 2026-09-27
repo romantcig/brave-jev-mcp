@@ -1,7 +1,7 @@
 /**
  * 过滤层配置解析：单个 JSON 配置文件 → FilterConfig（EMBED-05）。
  *
- * 环境变量只剩两类：Jev key（`jev_API_KEY` / `TYPESAFE_API_KEY`，见 jev/client.ts）
+ * 环境变量只剩两类：Jev key（`TYPESAFE_API_KEY`，见 jev/client.ts）
  * 与指向配置文件的 `JEV_FILTER_CONFIG_FILE`。其余设置全部进文件，**启动时读一次**
  * （适配行持惰性单例）；改配置要重启 MCP。
  *
