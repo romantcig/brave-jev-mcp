@@ -24,6 +24,10 @@ export type FilterRequest = {
   /** 模型要的总 token 上限；缺省按 Brave 默认 8192 */
   maximum_number_of_tokens?: number;
   maximum_number_of_tokens_per_url?: number;
+  /** Brave freshness 参数（pd/pw/pm/py）；缺省不传——统计表按条件 spread 省略键 */
+  freshness?: string;
+  /** Brave context_threshold_mode（'disabled'|'strict'|'lenient'|'balanced'）；缺省不传 */
+  context_threshold_mode?: string;
 };
 
 /**
@@ -279,10 +283,27 @@ export type LocalStats = {
   empty_dropped: number;
   budget_dropped_sources: number;
   budget_trimmed_snippets: number;
-  /** 步 7 后半被事实指纹新颖度删除的片段数（02-04；只进计数，不含指纹内容——LOG-03） */
+  /** 步 7 后半被事实指纹新颖度删除的片段数（02-04） */
   novelty_removed: number;
   /** 步 7 后半被跨来源 5-gram 逐字重复删除的片段数（02-04；用户已定决策 5 的独立计数） */
   cross_source_dup_removed: number;
+  /**
+   * 步 7 后半的新颖度指纹明细（D-10）：只为发生过指纹新颖度删除的来源记条目，
+   * `fp_total` 是该来源被删片段指纹的并集大小，`novel` 是其中对幸存指纹并集而言
+   * 首次出现 novel 的指纹串——影子期审核"这个来源为什么被删"的证据。只存指纹串
+   * 本身，绝不存片段正文（LOG-03 允许的记录面：URL、标题、指纹与概率）。
+   */
+  novelty: NoveltySourceDetail[];
+};
+
+/**
+ * 新颖度明细的一个来源条目（D-10 笔记草案形状）。`src` 取探测约定 `s{index}`；
+ * 跨来源 dup 删除不建条目——明细只指新颖度指纹通道。
+ */
+export type NoveltySourceDetail = {
+  src: string;
+  fp_total: number;
+  novel: string[];
 };
 
 /** 统计表里单个片段的裁决；只有索引、标记与字符数，不含正文（LOG-03）。 */
@@ -302,6 +323,7 @@ export type SnippetStats = {
 export type SourceStats = {
   index: number;
   url: string;
+  title: string;
   canonical_url: string;
   hostname?: string;
   verdict: 'keep' | 'drop';
@@ -323,11 +345,20 @@ export type FilterStats = {
     max_tokens: number;
     per_url_tokens?: number;
     overfetch_factor: number;
+    /** Brave freshness 参数（pd/pw/pm/py）；请求未带时省略键（D-10 条件 spread） */
+    freshness?: string;
+    /** Brave context_threshold_mode；请求未带时省略键（D-10 条件 spread） */
+    context_threshold_mode?: string;
   };
   brave: {
     n_sources: number;
     n_snippets: number;
     chars: number;
+    /** Brave 请求耗时（毫秒）；适配行在 API.issueRequest 前后计时后回填（D-10） */
+    latency_ms?: number;
+    /** 过滤前全部片段文本的 token 估算（Math.ceil）；与 output.est_tokens 同一
+     * estimateTokens 同一口径——只算片段文本（D-10/TOOLS-04） */
+    est_tokens: number;
   };
   local: LocalStats;
   sources: SourceStats[];

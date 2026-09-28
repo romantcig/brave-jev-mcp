@@ -9,6 +9,7 @@
  */
 
 import { canonicalizeUrl } from './url.js';
+import { estimateTokens } from './tokens.js';
 import type {
   BraveLlmContextResponse,
   FilterMode,
@@ -20,7 +21,8 @@ import type {
 
 /**
  * 本地计数器的零值。冻结成常量，供夹具测试用 `{ ...zeroLocal, ...expected }` 合并；
- * 库内部只做浅拷贝后再递增，不会改到这份常量。
+ * 库内部只做浅拷贝后再递增，不会改到这份常量。`novelty` 数组在工厂里另行新建——
+ * 浅拷贝载体不共享这份空数组引用（替换式写回也绝不会 mutate 它）。
  */
 export const zeroLocal: Readonly<LocalStats> = Object.freeze({
   jsonld_converted: 0,
@@ -37,6 +39,7 @@ export const zeroLocal: Readonly<LocalStats> = Object.freeze({
   budget_trimmed_snippets: 0,
   novelty_removed: 0,
   cross_source_dup_removed: 0,
+  novelty: [],
 });
 
 /** 防御性读取 `grounding.generic`：上游已过 zod，但库对畸形输入也不抛。 */
@@ -91,9 +94,14 @@ export function createFilterStats(
 
   let braveSnippets = 0;
   let braveChars = 0;
+  // 过滤前 token 估算（D-10/TOOLS-04）：对全部片段文本求和后 Math.ceil——与
+  // summarizeOutput 的 output.est_tokens 同一 estimateTokens 同一口径（只算片段
+  // 文本），绝不复制实现（tokens.ts 头注释明文）。
+  let braveTokenSum = 0;
 
   const sources: SourceStats[] = items.map((item, index) => {
     const url = typeof item?.url === 'string' ? item.url : '';
+    const title = typeof item?.title === 'string' ? item.title : '';
     const texts = Array.isArray(item?.snippets) ? item.snippets : [];
     const meta = metaOf(data, url);
     const hostname = typeof meta?.hostname === 'string' ? meta.hostname : undefined;
@@ -103,12 +111,14 @@ export function createFilterStats(
       const chars = typeof text === 'string' ? text.length : 0;
       braveSnippets += 1;
       braveChars += chars;
+      braveTokenSum += typeof text === 'string' ? estimateTokens(text) : 0;
       return { index: snippetIndex, kept: true, chars };
     });
 
     return {
       index,
       url,
+      title,
       canonical_url: canonicalizeUrl(url),
       ...(hostname !== undefined ? { hostname } : {}),
       verdict: 'keep' as const,
@@ -119,8 +129,15 @@ export function createFilterStats(
   return {
     mode,
     request: { ...request },
-    brave: { n_sources: items.length, n_snippets: braveSnippets, chars: braveChars },
-    local: { ...zeroLocal },
+    brave: {
+      n_sources: items.length,
+      n_snippets: braveSnippets,
+      chars: braveChars,
+      est_tokens: Math.ceil(braveTokenSum),
+    },
+    // novelty 另行新建：浅拷贝载体不共享 zeroLocal 的空数组引用（工厂每次调用
+    // 新建对象的不变量；applyNovelty 的明细写回是替换式，双保险）
+    local: { ...zeroLocal, novelty: [] },
     sources,
     jev: null,
     output: { n_sources: 0, n_snippets: 0, chars: 0, est_tokens: 0 },

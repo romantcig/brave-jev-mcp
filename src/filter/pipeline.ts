@@ -405,6 +405,7 @@ const projectSource = (source: WorkSource): SourceStats => {
   return {
     index: source.index,
     url: source.url,
+    title: source.title,
     canonical_url: source.canonical,
     ...(hostname !== undefined ? { hostname } : {}),
     verdict: source.verdict,
