@@ -4,8 +4,20 @@
  * tools/list → tools/call 全程，零网络确定性地验证返回形状与状态行——切到
  * ~/.claude.json（03-04）之前的最后一道自动闸，冒烟通过是切换任务的硬前置。
  *
- * 用法：node --import tsx dev/smoke_stdio.ts --mode off
- *   mode 缺省 off；shadow / on 与 --live 真实网络手动开关（D-18）由 Task 2 加入。
+ * 用法：node --import tsx dev/smoke_stdio.ts [--mode off|shadow|on] [--live]
+ *   不带 --mode 跑三模式全量（off → shadow → on，每模式各自 spawn 一次服务器、
+ *   各自临时配置与临时 log_dir——mode 在配置文件里、服务器启动读一次）；单独
+ *   --mode shadow 时自动先跑一遍 off 作逐字对照（dev/compare.ts 先例）。--live
+ *   是真实网络手动开关（D-18，不进自动验证，切换前跑一次确认 key 与代理通），
+ *   与 --mode 互斥。
+ *
+ * 三模式专属断言：
+ *   - shadow：状态行与 JSON 块都和 off 那次独立 spawn 的结果逐字相同（D-07 红线
+ *     + "shadow 输出与 off 完全相同"的端到端确认）；
+ *   - on：从临时 log_dir 的记录断言 jev.n_requests == 回放表键数——假 key 已显式
+ *     传，若仍为 0 即 no_key 静默短路假绿（Pitfall 2 的直接防线）；未判定段按
+ *     D-06 语义断言（本夹具 on 全部 12 源 answered，不该出现）；
+ *   - 三模式共同：每模式日志至少一条且记录 mode 字段与配置一致（D-16）。
  *
  * 断言清单（D-19，照 src/tools/llm_context/index.test.ts 既有断言抄）：
  *   1. 工具声明：inputSchema.properties == 白名单九键 + intent、required ==
@@ -27,16 +39,25 @@
  * dev/ 不进 tsc / prettier 门禁；相对导入带 .js 后缀（NodeNext ESM 直跑约定）。
  */
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+import { JEV_CONFIG_FILE_ENV } from '../src/filter/config.js';
+
 // ---------------------------------------------------------------------------
-// argv：--mode 只认 off（Task 2 扩展 shadow/on 与 --live）
+// argv：--mode off|shadow|on（缺省三模式全量）；--live 真实网络手动开关（互斥）
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
@@ -45,13 +66,21 @@ const die = (message: string): never => {
   process.exit(1);
 };
 
-let mode = 'off';
+const MODES = ['off', 'shadow', 'on'] as const;
+type SmokeMode = (typeof MODES)[number];
+
+let modeFilter: SmokeMode | undefined;
 const modeIndex = args.indexOf('--mode');
 if (modeIndex !== -1) {
-  mode = args[modeIndex + 1] ?? '';
+  const value = args[modeIndex + 1] ?? '';
+  if (!(MODES as readonly string[]).includes(value)) {
+    die(`--mode 只认 off|shadow|on，收到：${value || '(缺值)'}`);
+  }
+  modeFilter = value as SmokeMode;
 }
-if (mode !== 'off') {
-  die(`--mode 只支持 off（shadow / on 与 --live 由 03-03 Task 2 加入），收到：${mode || '(缺值)'}`);
+const live = args.includes('--live');
+if (live && modeFilter !== undefined) {
+  die('--live 与 --mode 互斥：--live 是真实网络手动开关（D-18），单独跑');
 }
 
 // ---------------------------------------------------------------------------
@@ -126,10 +155,20 @@ const WHITELIST = [
 
 type ModeResult = { jsonText: string; statusLine: string | undefined };
 
+/** 本地日期（YYYY-MM-DD）：本地 getter，不用 getUTC*（会差 8 小时，RESEARCH 六问 6.1）。 */
+const todayLocalDate = (): string => {
+  const d = new Date();
+  const pad2 = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+};
+
 /** 等子进程把日志落盘（写入在进程内 promise 链里异步完成），轮询至多 ~5 s。 */
-const pollForLogLines = async (logDir: string): Promise<string[]> => {
+const pollForLogLines = async (
+  logDir: string,
+  fileFilter: (file: string) => boolean = (file) => file.endsWith('.jsonl')
+): Promise<string[]> => {
   for (let waited = 0; waited < 5000; waited += 50) {
-    const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    const files = readdirSync(logDir).filter(fileFilter);
     if (files.length > 0) {
       const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
       if (lines.length > 0) return lines;
@@ -287,12 +326,122 @@ const runStubbedMode = async (runMode: string): Promise<ModeResult> => {
 };
 
 // ---------------------------------------------------------------------------
-// 主流程：off 全断言，一行汇总便于 verify grep
+// --live（D-18）：真实网络手动开关——不注入桩，key 与代理从当前进程环境透传，
+// 只验证启动 / initialize / callTool 成功 / 返回可解析 / 日志写出，不做内容断言
+//（真实网络非确定性）；stderr 直通终端便于人工观察。不进自动验证，切换前跑一次。
+// ---------------------------------------------------------------------------
+
+/** live 透传的白名单外变量（有则传无则跳过）；TYPESAFE_API_KEY 旧名已不生效。 */
+const LIVE_ENV_KEYS = [
+  'TYPESAFE_API_KEY',
+  'BRAVE_API_KEY',
+  'ALL_PROXY',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'NODE_USE_ENV_PROXY',
+];
+
+const runLiveMode = async (): Promise<void> => {
+  const homeConfig = join(homedir(), '.brave-jev', 'config.json');
+  const env: Record<string, string> = {};
+  for (const key of LIVE_ENV_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined && value !== '') env[key] = value;
+  }
+  // 真实配置与 log_dir（D-24）：配置文件存在则指向，缺省则不设变量走服务器默认；
+  // 生效 log_dir 供"日志文件写出"断言——配置的 log_dir 优先（~ 展开），否则默认
+  let logDir = join(homedir(), '.brave-jev', 'logs');
+  if (existsSync(homeConfig)) {
+    env[JEV_CONFIG_FILE_ENV] = homeConfig;
+    try {
+      const parsed = JSON.parse(readFileSync(homeConfig, 'utf8')) as { log_dir?: string };
+      if (typeof parsed.log_dir === 'string' && parsed.log_dir !== '') {
+        logDir = parsed.log_dir.startsWith('~')
+          ? join(homedir(), parsed.log_dir.slice(1))
+          : parsed.log_dir;
+      }
+    } catch {
+      // 坏配置按服务器默认路径兜底（与 config.ts 的 fail-open 同精神）
+    }
+  }
+
+  console.error('*** LIVE MODE: 即将发起真实网络请求（Brave + Jev），key 与代理走本机环境 ***');
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [distIndexJs, '--transport', 'stdio'],
+    env,
+    stderr: 'inherit',
+  });
+  const client = new Client({ name: 'smoke-stdio-live', version: '0.0.0' });
+  try {
+    await client.connect(transport);
+    const { tools } = await client.listTools();
+    assert.ok(tools.some((t) => t.name === toolName), `live: ${toolName} is not listed`);
+
+    const result = (await client.callTool({
+      name: toolName,
+      arguments: { query: expected.query, intent: expected.intent, ...expected.request },
+    })) as { isError?: boolean; content: { type: string; text: string }[] };
+    assert.equal(result.isError ?? false, false, 'live: callTool failed');
+    assert.equal(result.content[0]?.type, 'text', 'live: content[0] must be a text block');
+    try {
+      JSON.parse(result.content[0].text);
+    } catch (error) {
+      throw new Error(`live: content[0] JSON parse failed — ${String(error)}`);
+    }
+
+    const lines = await pollForLogLines(logDir, (file) => file === `${todayLocalDate()}.jsonl`);
+    assert.ok(
+      lines.length >= 1,
+      `live: expected at least one record in ${join(logDir, `${todayLocalDate()}.jsonl`)}`
+    );
+    console.log('smoke live: all assertions passed');
+    console.error('*** LIVE 完成：真实网络请求已发生（Brave + Jev）***');
+  } finally {
+    await client.close();
+  }
+};
+
+// ---------------------------------------------------------------------------
+// 主流程：三模式循环（shadow 与 off 逐字对照）或 --live；汇总行便于 verify grep
 // ---------------------------------------------------------------------------
 
 try {
-  await runStubbedMode(mode);
-  console.log(`smoke ${mode}: all assertions passed`);
+  if (live) {
+    await runLiveMode();
+  } else {
+    const runs = new Map<SmokeMode, ModeResult>();
+    const modes: SmokeMode[] = modeFilter ? [modeFilter] : [...MODES];
+    for (const m of modes) {
+      // 单独 --mode shadow：先静默跑一遍 off 作对照——D-07 逐字断言需要两份
+      // 独立 spawn 的结果（dev/compare.ts 的"同时跑一遍 off 作对照"先例）
+      if (m === 'shadow' && !runs.has('off')) {
+        runs.set('off', await runStubbedMode('off'));
+      }
+      const run = await runStubbedMode(m);
+      runs.set(m, run);
+      if (m === 'shadow') {
+        const offRun = runs.get('off');
+        assert.ok(offRun !== undefined, 'shadow: off baseline missing');
+        assert.equal(
+          run.statusLine,
+          offRun.statusLine,
+          `shadow: status line must be verbatim-identical to the off run (D-07) — off=${JSON.stringify(offRun.statusLine)} shadow=${JSON.stringify(run.statusLine)}`
+        );
+        assert.equal(
+          run.jsonText,
+          offRun.jsonText,
+          'shadow: JSON block must be verbatim-identical to the off run ("shadow 输出与 off 完全相同")'
+        );
+      }
+      console.log(`smoke ${m}: all assertions passed`);
+    }
+    if (modeFilter === undefined) {
+      console.log('smoke all: 3 modes passed');
+    }
+  }
 } catch (error) {
-  die(`smoke FAILED [${mode}]: ${error instanceof Error ? error.message : String(error)}`);
+  const where = live ? 'live' : (modeFilter ?? 'all');
+  die(`smoke FAILED [${where}]: ${error instanceof Error ? error.message : String(error)}`);
 }
