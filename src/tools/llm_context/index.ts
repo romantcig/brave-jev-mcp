@@ -13,6 +13,7 @@ import {
   applyMinimumValues,
   applyOverfetch,
   createJevClassifier,
+  createLogWriter,
   filterLlmContext,
   hasJevKey,
   loadFilterConfig,
@@ -20,7 +21,14 @@ import {
   resolveToolDescription,
   withAdjustments,
 } from '../../filter/index.js';
-import type { ClassifyDeps, FilterConfig, FilterDeps } from '../../filter/index.js';
+import type {
+  ClassifyDeps,
+  FilterConfig,
+  FilterDeps,
+  FilteredResponse,
+  FilterResult,
+  FilterStats,
+} from '../../filter/index.js';
 
 export const name = 'brave_llm_context';
 
@@ -87,13 +95,19 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
   return { classify: jevClassifier.classify };
 };
 
+// 进程级 JSONL 日志写入器惰性单例（D-16 三档模式都写）：串行链与目录自愈住在
+// createLogWriter 闭包里（库无模块级可变状态），适配行只持引用。log_dir 取自
+// config（启动时读一次），改配置要重启 MCP——与 config 单例同生命周期。
+let logWriter: ((stats: FilterStats) => void) | undefined;
+
 /**
- * 仅供测试：清掉配置与分类器的进程级惰性单例，让下一次调用重新读环境 / 配置。
- * 生产代码不得调用（"读一次"语义靠不清除保证）。
+ * 仅供测试：清掉配置、分类器与日志写入器的进程级惰性单例，让下一次调用重新读
+ * 环境 / 配置。生产代码不得调用（"读一次"语义靠不清除保证）。
  */
 export const resetFilterStateForTest = (): void => {
   filterConfig = undefined;
   jevClassifier = undefined;
+  logWriter = undefined;
 };
 
 export const execute = async (params: QueryParams) => {
@@ -105,24 +119,46 @@ export const execute = async (params: QueryParams) => {
 
   const response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
-  const payload = success
-    ? withAdjustments(
-        (
-          await filterLlmContext(
-            data,
-            { params: parsedParams, intent: params.intent },
-            config,
-            jevDepsFor(config)
-          )
-        ).result,
-        raised
-      )
-    : z.treeifyError(error);
+  // 成功时接住统计对象：状态行第二块与 JSONL 日志都从它出（LOG-01/LOG-02）；
+  // 失败（Brave 报错 / zod 校验失败）无 stats。
+  let filtered: FilterResult | undefined;
+  let payload: unknown;
+  if (success) {
+    filtered = await filterLlmContext(
+      data,
+      { params: parsedParams, intent: params.intent },
+      config,
+      jevDepsFor(config)
+    );
+    // 第一个 JSON 块在过滤结果之上附加统计摘要（stats.output，含 status_line）：
+    // 状态行第二块与 JSON 块内 output.status_line 逐字同源（D-08/LOG-03 红线），
+    // 模型也能直接读到幸存规模与 token 估算。
+    const enriched: FilteredResponse & { output: FilterStats['output'] } = {
+      ...filtered.result,
+      output: filtered.stats.output,
+    };
+    payload = withAdjustments(enriched, raised);
+  } else {
+    payload = z.treeifyError(error);
+  }
+
+  // 逐请求 JSONL 日志（D-16 三档模式都写；本批先在成功路径落账，错误请求的
+  // 记录形状随后补）。写入失败 fail-open，绝不影响搜索返回（D-14）。
+  if (filtered !== undefined) {
+    logWriter ??= createLogWriter(config.logDir);
+    logWriter(filtered.stats);
+  }
 
   logRaisedToStderr(raised);
 
+  // 状态行作为第二个 text 块追加在末尾（D-08）：追加条件与 buildStatusLine 返回值
+  // 同源——直接读 stats.output.status_line（步 10 写入点），绝不自创条件。
+  const statusLine = filtered?.stats.output.status_line;
   return {
-    content: [{ type: 'text', text: JSON.stringify(payload) } as TextContent],
+    content: [
+      { type: 'text', text: JSON.stringify(payload) } as TextContent,
+      ...(statusLine !== undefined ? [{ type: 'text', text: statusLine } as TextContent] : []),
+    ],
     isError: !success,
   };
 };

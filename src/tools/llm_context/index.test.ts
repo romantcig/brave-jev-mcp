@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -15,31 +15,43 @@ const FILTER_ENV_VARS = [JEV_CONFIG_FILE_ENV] as const;
 /** 临时配置目录：整个文件一个，测后统一清理。 */
 const configDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-test-'));
 
+// execute() 现在每请求写一条 JSONL 日志（D-16），无显式 log_dir 时默认
+// ~/.brave-jev/logs 会把测试日志写进真实 home——测试一律指进临时目录，用后即删
+// （T-03-03）。这份默认隔离配置只改 log_dir，其余全默认（mode off）。
+const defaultLogDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-logs-'));
+const defaultConfigPath = join(configDir, 'default-config.json');
+writeFileSync(defaultConfigPath, JSON.stringify({ log_dir: defaultLogDir }), 'utf8');
+
 after(() => {
   rmSync(configDir, { recursive: true, force: true });
+  rmSync(defaultLogDir, { recursive: true, force: true });
 });
 
 /**
  * 写入配置 JSON 并让适配行重新读一次：设 `JEV_FILTER_CONFIG_FILE` 指向新文件、
  * 清掉惰性单例。返回文件路径，供"改内容后再搜索"的用例复用同一路径。
+ * 配置对象默认注入临时 `log_dir`（用例显式给出时以用例为准）。
  */
 const useFilterConfig = (
   value: unknown,
   filename = `config-${Date.now()}-${Math.random()}.json`
 ) => {
   const filePath = join(configDir, filename);
-  writeFileSync(filePath, JSON.stringify(value), 'utf8');
+  const withLogDir = { log_dir: defaultLogDir, ...(value as Record<string, unknown>) };
+  writeFileSync(filePath, JSON.stringify(withLogDir), 'utf8');
   process.env[JEV_CONFIG_FILE_ENV] = filePath;
   resetFilterStateForTest();
   return filePath;
 };
 
-// 在 describe 体内注册一对 before/after，删掉并恢复配置文件变量、清单例
+// 在 describe 体内注册一对 before/after，把配置文件变量指到默认隔离配置（不再
+// 指向真实配置）、清单例；after 恢复原值
 const useIsolatedFilterEnv = () => {
   const originalEnv = Object.fromEntries(FILTER_ENV_VARS.map((key) => [key, process.env[key]]));
 
   before(() => {
     for (const key of FILTER_ENV_VARS) delete process.env[key];
+    process.env[JEV_CONFIG_FILE_ENV] = defaultConfigPath;
     resetFilterStateForTest();
   });
 
@@ -170,6 +182,135 @@ describe(name, () => {
     // 整个调用只打一次 Brave，且 intent 没有转发给 Brave
     assert.equal(calls, 1);
     assert.equal(intentForwarded, false);
+  });
+});
+
+describe(`${name} (status line and JSONL log)`, () => {
+  useIsolatedFilterEnv();
+
+  const logDirs: string[] = [];
+
+  after(() => {
+    for (const dir of logDirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // 写入在进程内 promise 链里异步完成：让出一轮事件循环等它落盘再断言
+  const flushWrites = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+  /** 建一个独立的临时 log_dir 并登记，测后统一清理。 */
+  const newLogDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-statusline-log-'));
+    logDirs.push(dir);
+    return dir;
+  };
+
+  /** 最小合法上游载荷（照抄文件顶部的 braveResponse 形状）。 */
+  const cleanResponse = {
+    grounding: {
+      generic: [
+        {
+          url: 'https://search.brave.com/',
+          title: 'Brave Search',
+          snippets: ['Brave is a privacy-focused browser and search engine.'],
+        },
+      ],
+      map: [],
+    },
+    sources: {
+      'https://search.brave.com/': {
+        title: 'Brave Search',
+        hostname: 'search.brave.com',
+        age: [],
+      },
+    },
+  };
+
+  // 有丢弃的载荷：第二个来源只有空白片段（步 3 删光 → 步 8 空来源丢弃）；
+  // 幸存来源的片段长过 200 字符，避免步 8 的一句话来源规则把它也丢掉
+  // （drop case 的 query 实词不在片段里，短片段会被 isOneLiner 判丢）
+  const dropResponse = {
+    grounding: {
+      generic: [
+        {
+          url: 'https://good.example/post',
+          title: 'Good Post',
+          snippets: [
+            'A real snippet with enough content to survive every local rule in the pipeline. '.repeat(
+              3
+            ),
+          ],
+        },
+        {
+          url: 'https://empty.example/',
+          title: 'Empty Page',
+          snippets: ['   '],
+        },
+      ],
+      map: [],
+    },
+    sources: {
+      'https://good.example/post': { title: 'Good Post', hostname: 'good.example', age: [] },
+      'https://empty.example/': { title: 'Empty Page', hostname: 'empty.example', age: [] },
+    },
+  };
+
+  const getClient = useTestClient((url) => {
+    if (url.pathname === '/res/v1/llm/context') {
+      return url.searchParams.get('q') === 'drop case' ? dropResponse : cleanResponse;
+    }
+  });
+
+  it('appends no second block without drops and still writes one JSONL record', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'off', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: {
+        query: 'brave browser',
+        intent: 'What Brave Search is and how it differs from other engines',
+      },
+    });
+
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const content = result.content as { text: string }[];
+    // 无丢弃：content 恰一块（D-08 追加条件与 buildStatusLine 返回值同源）
+    assert.equal(content.length, 1);
+
+    // 临时 log_dir 恰一个按天文件、恰一行、可解析、含 mode 与 ts
+    await flushWrites();
+    const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    assert.equal(files.length, 1);
+    const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    const record = JSON.parse(lines[0]) as Record<string, unknown>;
+    assert.equal(record.mode, 'off');
+    assert.match(String(record.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+  });
+
+  it('appends a single-line status block identical to stats.output.status_line with drops', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'off', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: {
+        query: 'drop case',
+        intent: 'What Brave Search is and how it differs from other engines',
+      },
+    });
+
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const content = result.content as { text: string }[];
+    // 有丢弃：第二块存在、以 [filter] 开头、单行英文
+    assert.equal(content.length, 2);
+    const statusLine = content[1].text;
+    assert.ok(statusLine.startsWith('[filter] '), statusLine);
+    assert.ok(!statusLine.includes('\n'), 'status line must be a single line');
+
+    // D-08 同源红线：状态行文本与 JSON 块内 stats.output.status_line 逐字相同
+    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
+    assert.equal(payload.output.status_line, statusLine);
   });
 });
 

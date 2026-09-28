@@ -42,6 +42,7 @@ import { buildQuestions, buildState, SOURCE_QUESTIONS } from './jev/questions.js
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
+import { buildStatusLine } from './statusline.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
 import { createFilterStats, createNoKeyJevStats, zeroLocal } from './stats.js';
@@ -514,10 +515,12 @@ export async function filterLlmContext(
       source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'budget').length,
     0
   );
-  // 步 10 状态行：Phase 3
-
   const result = rebuildOutput(table, data);
   finalizeStats(stats, table);
+  // 步 10 状态行：从最终统计对象投影（D-01..D-08）。落点必须在 finalizeStats
+  // 之后——它整体替换 stats.output，写在之前会被吞掉（03-RESEARCH Pitfall 1）。
+  // shadow 的正本走 off 链，生成只读实际生效链的结果，绝不读 shadow_diff（D-07）。
+  stats.output.status_line = buildStatusLine(stats);
 
   return { result, stats };
 }
