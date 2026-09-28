@@ -524,6 +524,58 @@ describe(`${name} (malformed upstream response)`, () => {
   });
 });
 
+describe(`${name} (brave 500 error logging)`, () => {
+  useIsolatedFilterEnv();
+
+  let restoreFetch: () => void = () => {};
+  const logDir = mkdtempSync(join(tmpdir(), 'jev-error-log-'));
+
+  before(() => {
+    // useTestClient 的桩固定回 200：这条用例要真 500，自管 fetch 桩
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('{"error":"boom"}', {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch;
+    restoreFetch = () => {
+      globalThis.fetch = originalFetch;
+    };
+  });
+
+  after(() => {
+    restoreFetch();
+    rmSync(logDir, { recursive: true, force: true });
+  });
+
+  it('writes one error record and still returns an error result when Brave fails', async () => {
+    useFilterConfig({ mode: 'off', log_dir: logDir });
+    const client = await connectTestClient();
+    try {
+      const result = await client.callTool({
+        name,
+        arguments: { query: 'brave browser', intent: 'What Brave Search is' },
+      });
+      assert.equal(result.isError, true);
+
+      // 错误请求也落账（Brave 报错记 stage 'brave'）：临时 log_dir 恰一条含
+      // error 字段的记录
+      await new Promise((resolve) => setImmediate(resolve));
+      const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+      assert.equal(files.length, 1);
+      const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+      assert.equal(lines.length, 1);
+      const record = JSON.parse(lines[0]) as Record<string, unknown>;
+      const error = record.error as { stage: string; message: string } | undefined;
+      assert.ok(error, `error field missing: ${lines[0]}`);
+      assert.equal(error.stage, 'brave');
+      assert.match(error.message, /500/);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
 describe(`${name} (below-minimum clamping)`, () => {
   useIsolatedFilterEnv();
 

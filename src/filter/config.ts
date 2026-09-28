@@ -115,8 +115,11 @@ const configFileRecord = (raw: unknown): Record<string, unknown> => (isRecord(ra
  * 范围语义：六个概率门槛（五道丢弃 + reasoning 保护）与 cjk_bonus、cjk_share 取
  * [0,1] 的有限数；snippet_min 取 [0,2]（score 上限 2.0）；min_facts 与 novelty_min
  * 取 >= 1 的**整数**。max 为 Infinity 表示只有下限。
+ *
+ * logging.ts 的日志信封复用本表投影阈值快照（`key` 即日志键名）——绝不手写
+ * 11 个键名，影子期改阈值后旧记录仍可复现裁决（D-11）。
  */
-const THRESHOLD_SPECS: ReadonlyArray<{
+export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly key: string;
   readonly configKey: keyof JevThresholds;
   readonly min: number;

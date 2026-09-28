@@ -35,7 +35,11 @@ const statsOf = (
     { url: 'https://b.example/', snippets: ['two'] },
     { url: 'https://c.example/', snippets: ['three'] },
   ];
-  return createFilterStats(mode, { ...request, ...(overrides.intent ? { intent: overrides.intent } : {}) }, dataOf(...sources));
+  return createFilterStats(
+    mode,
+    { ...request, ...(overrides.intent ? { intent: overrides.intent } : {}) },
+    dataOf(...sources)
+  );
 };
 
 /** 把统计表里的一个来源翻成丢弃（管道各步的最终落账形状）。 */
@@ -60,7 +64,11 @@ const withJev = (
     input_tokens: 0,
     latency_ms_total: 0,
     status: 'ok',
-    per_source: rows.map((row) => ({ src: row.src, url: `https://${row.src}.example/`, status: row.status })),
+    per_source: rows.map((row) => ({
+      src: row.src,
+      url: `https://${row.src}.example/`,
+      status: row.status,
+    })),
   };
   return stats;
 };
@@ -81,10 +89,7 @@ describe('buildStatusLine', () => {
     dropSource(stats, 0, 'rewrite');
     dropSource(stats, 1, 'rewrite');
     dropSource(stats, 2, 'blocklist');
-    assert.equal(
-      buildStatusLine(stats),
-      '[filter] dropped 3 of 3 sources: 2 rewrite, 1 blocklist'
-    );
+    assert.equal(buildStatusLine(stats), '[filter] dropped 3 of 3 sources: 2 rewrite, 1 blocklist');
   });
 
   it('keeps reason words undeformed and counts budget like any other reason', () => {
@@ -213,7 +218,10 @@ describe('buildStatusLine', () => {
     assert.equal(buildStatusLine(stats), '[filter] 1 source not checked by Jev (kept)');
 
     const twoFailed = statsOf('on');
-    withJev(twoFailed, [{ src: 's0', status: 'failed' }, { src: 's1', status: 'failed' }]);
+    withJev(twoFailed, [
+      { src: 's0', status: 'failed' },
+      { src: 's1', status: 'failed' },
+    ]);
     dropSource(twoFailed, 0, 'stale');
     // s0 已被丢弃不参与未判定计数；keep 的 s1（failed）与 s2（缺行）都算未判定
     assert.equal(

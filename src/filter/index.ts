@@ -24,6 +24,7 @@ export {
 export { createJevClassifier, hasJevKey } from './jev/client.js';
 export { resolveToolDescription } from './description.js';
 export { createLogWriter } from './logging.js';
+export type { LogErrorStage, LogWriter } from './logging.js';
 export { filterLlmContext, trimSourceMeta } from './pipeline.js';
 export { createFilterStats, zeroLocal } from './stats.js';
 export { buildStatusLine } from './statusline.js';

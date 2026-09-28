@@ -34,7 +34,8 @@ import type { FilterStats, SourceDropReason } from './types.js';
 const INTENT_ECHO_MAX = 100;
 
 /** 主数字的英文复数规则；原因词不变形，不用本助手。 */
-const plural = (count: number, singular: string): string => (count === 1 ? singular : `${singular}s`);
+const plural = (count: number, singular: string): string =>
+  count === 1 ? singular : `${singular}s`;
 
 /**
  * 从最终统计对象生成状态行；无可报告内容时返回 undefined（不附第二块）。

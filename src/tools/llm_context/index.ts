@@ -28,6 +28,7 @@ import type {
   FilteredResponse,
   FilterResult,
   FilterStats,
+  LogWriter,
 } from '../../filter/index.js';
 
 export const name = 'brave_llm_context';
@@ -96,9 +97,10 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
 };
 
 // 进程级 JSONL 日志写入器惰性单例（D-16 三档模式都写）：串行链与目录自愈住在
-// createLogWriter 闭包里（库无模块级可变状态），适配行只持引用。log_dir 取自
-// config（启动时读一次），改配置要重启 MCP——与 config 单例同生命周期。
-let logWriter: ((stats: FilterStats) => void) | undefined;
+// createLogWriter 闭包里（库无模块级可变状态），适配行只持引用。log_dir、钉版
+// 模型与阈值都取自 config（启动时读一次），改配置要重启 MCP——与 config 单例同
+// 生命周期。
+let logWriter: LogWriter | undefined;
 
 /**
  * 仅供测试：清掉配置、分类器与日志写入器的进程级惰性单例，让下一次调用重新读
@@ -117,10 +119,27 @@ export const execute = async (params: QueryParams) => {
   const config = configFor();
   const braveParams = applyOverfetch(parsedParams, config);
 
-  const response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
+  // 逐请求 JSONL 日志（D-16 三档模式都写，错误请求也落账）：写入失败 fail-open，
+  // 绝不影响搜索返回（D-14）。
+  const writer = (logWriter ??= createLogWriter(config));
+
+  let response: unknown;
+  try {
+    response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
+  } catch (requestError) {
+    // Brave 报错（抛错 / 非 2xx 由 issueRequest 统一转 Error）：写一条带 error
+    // 标记的日志再原样上抛，保持既有失败行为（stage 'brave'）。
+    writer.writeError({
+      stage: 'brave',
+      message: requestError instanceof Error ? requestError.message : String(requestError),
+      query: params.query,
+      intent: params.intent,
+    });
+    throw requestError;
+  }
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
   // 成功时接住统计对象：状态行第二块与 JSONL 日志都从它出（LOG-01/LOG-02）；
-  // 失败（Brave 报错 / zod 校验失败）无 stats。
+  // 失败（zod 校验失败，stage 'schema'）无 stats。
   let filtered: FilterResult | undefined;
   let payload: unknown;
   if (success) {
@@ -138,15 +157,15 @@ export const execute = async (params: QueryParams) => {
       output: filtered.stats.output,
     };
     payload = withAdjustments(enriched, raised);
+    writer.write(filtered.stats);
   } else {
     payload = z.treeifyError(error);
-  }
-
-  // 逐请求 JSONL 日志（D-16 三档模式都写；本批先在成功路径落账，错误请求的
-  // 记录形状随后补）。写入失败 fail-open，绝不影响搜索返回（D-14）。
-  if (filtered !== undefined) {
-    logWriter ??= createLogWriter(config.logDir);
-    logWriter(filtered.stats);
+    writer.writeError({
+      stage: 'schema',
+      message: error instanceof Error ? error.message : String(error),
+      query: params.query,
+      intent: params.intent,
+    });
   }
 
   logRaisedToStderr(raised);
