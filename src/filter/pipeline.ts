@@ -438,6 +438,12 @@ const toStatsRequest = (
     ...(params.maximum_number_of_tokens_per_url !== undefined
       ? { per_url_tokens: params.maximum_number_of_tokens_per_url }
       : {}),
+    // D-10：请求带 freshness / context_threshold_mode 才记键——条件 spread 省略
+    // undefined（deepEqual 把显式 undefined 键判不等），照 per_url_tokens 先例
+    ...(params.freshness !== undefined ? { freshness: params.freshness } : {}),
+    ...(params.context_threshold_mode !== undefined
+      ? { context_threshold_mode: params.context_threshold_mode }
+      : {}),
     overfetch_factor: config.overfetchFactor,
   };
 };
@@ -493,7 +499,10 @@ export async function filterLlmContext(
       // stats.local；per_source 的 verdict/reason 照常记账），正本再走 off 链——
       // 两条链同一份实现，`shadow_diff` 直接由比两张表得出（VERDICT-05）
       const onTable = cloneWorkTable(table);
-      const throwawayStats: FilterStats = { ...stats, local: { ...zeroLocal } };
+      // 一次性载体：local 全零且 novelty 数组另行新建——would 链的明细（若有）落
+      // 在这里，绝不混入正本 stats.local（正本只记实际生效链 off 链的明细，02-FIX
+      // 教训：shadow 输出必须与 off 相同）
+      const throwawayStats: FilterStats = { ...stats, local: { ...zeroLocal, novelty: [] } };
       runOnChain(onTable, judged, config.thresholds, throwawayStats, queryTerms);
       runOffChain(table, undefined, 'off', config.thresholds, stats, queryTerms);
       stats.shadow_diff = diffShadow(table, onTable);

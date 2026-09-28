@@ -17,6 +17,7 @@ import type {
   FilterMode,
   FilterStats,
   JevThresholds,
+  NoveltySourceDetail,
   SnippetRemovalReason,
   SourceDropReason,
 } from '../types.js';
@@ -140,8 +141,9 @@ const PROPER_NOUN_STOPWORDS: ReadonlySet<string> = new Set([
  * c: 代码标识符（反引号内容与点分形态）、q: ≥ 6 词的引号原文、
  * p: 连续大写词组（滤常见功能词）。
  *
- * 指纹只进计数与比对（键 = 'n:'/'d:'/'c:'/'q:'/'p:' 前缀 + 归一原文），绝不进
- * 统计对象或日志面（LOG-03 前置）。
+ * 指纹只进计数与比对（键 = 'n:'/'d:'/'c:'/'q:'/'p:' 前缀 + 归一原文）；进日志的
+ * 是指纹串本身——LOG-03/D-10 允许的记录面（只存 URL、标题、指纹与概率），
+ * 片段正文绝不进日志。
  * @returns 指纹集合；空串返回空集
  * @example extractFingerprints('raised $4.2M at 193x speed') 含 'n:$4.2m' 与 'n:193x'
  * @example extractFingerprints('the launch was smooth') 为空集
@@ -226,7 +228,8 @@ export function seedingOrder(
  * 3. 幸存片段的 shingles 与指纹并入并集（被删片段不并入）。
  *
  * 管道不重排幸存者：只翻 kept/reason 标记，输出仍按 Brave 原序重建（RULES-08）。
- * 指纹与 shingle 只进比对，绝不进统计对象或日志面（LOG-03）。
+ * shingle 只进比对、绝不外流；指纹进比对之外，新颖度删除的指纹明细按 D-10 记进
+ * `stats.local.novelty`（LOG-03 允许的记录面——只存 URL、标题、指纹与概率）。
  * @returns 逐源 Jev 侧删除标记表（novelty / crossSourceDup 两个布尔），供步 8
  *   rewrite/empty 归因——只在发生过对应删除时含该来源
  */
@@ -241,6 +244,26 @@ export function applyNovelty(
   const byIndex = new Map(table.map((entry) => [entry.index, entry]));
   const shingleUnion = new Set<string>();
   const fingerprintUnion = new Set<string>();
+
+  // D-10 明细（A3 聚合口径）：只为发生过指纹新颖度删除的来源记条目；fp_total =
+  // 该来源被删片段指纹的并集大小；novel = 条目并集减去幸存指纹并集（在每次删除
+  // 时重算——增量语义"对指纹并集而言首次出现 novel"，删除后 union 只增不减，
+  // 最后一次删除后的条目即最终态）。证据在被删片段的指纹里，幸存片段聚合会把
+  // 证据丢掉；cross_source_dup 删除不建条目（明细只指新颖度指纹通道）。
+  const noveltyDetail = new Map<number, Set<string>>();
+  let noveltyDetails: NoveltySourceDetail[] = [];
+  const recordNoveltyDetail = (index: number, fingerprints: ReadonlySet<string>): void => {
+    const union = noveltyDetail.get(index) ?? new Set<string>();
+    for (const fingerprint of fingerprints) union.add(fingerprint);
+    noveltyDetail.set(index, union);
+    const src = `s${index}`;
+    const novel = [...union].filter((fingerprint) => !fingerprintUnion.has(fingerprint));
+    noveltyDetails = noveltyDetails.some((entry) => entry.src === src)
+      ? noveltyDetails.map((entry) =>
+          entry.src === src ? { src, fp_total: union.size, novel } : entry
+        )
+      : [...noveltyDetails, { src, fp_total: union.size, novel }];
+  };
 
   const mark = (index: number, key: keyof JevSideDeletionFlags): void => {
     const entry = flags.get(index) ?? { novelty: false, crossSourceDup: false };
@@ -291,6 +314,7 @@ export function applyNovelty(
           snippet.reason = 'novelty';
           stats.local.novelty_removed += 1;
           mark(index, 'novelty');
+          recordNoveltyDetail(index, fingerprints);
           continue;
         }
       }
@@ -299,6 +323,11 @@ export function applyNovelty(
       for (const shingle of shingleSet) shingleUnion.add(shingle);
       for (const fingerprint of fingerprints) fingerprintUnion.add(fingerprint);
     }
+  }
+  // 明细写回（替换式，绝不 mutate 载体浅拷贝共享的 zeroLocal.novelty 空数组）；
+  // 明细条目按首次命中删除的顺序排列（Brave 序内先删先记）
+  if (noveltyDetails.length > 0) {
+    stats.local.novelty = noveltyDetails;
   }
   return flags;
 }

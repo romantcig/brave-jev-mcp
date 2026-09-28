@@ -123,6 +123,9 @@ export const execute = async (params: QueryParams) => {
   // 绝不影响搜索返回（D-14）。
   const writer = (logWriter ??= createLogWriter(config));
 
+  // Brave 请求计时（D-10）：计时点在适配行——API.issueRequest 前后，差值回填进
+  // stats.brave.latency_ms；Brave 报错时不回填（无 stats，走错误记录）。
+  const braveStartedAt = Date.now();
   let response: unknown;
   try {
     response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
@@ -137,6 +140,7 @@ export const execute = async (params: QueryParams) => {
     });
     throw requestError;
   }
+  const braveLatencyMs = Date.now() - braveStartedAt;
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
   // 成功时接住统计对象：状态行第二块与 JSONL 日志都从它出（LOG-01/LOG-02）；
   // 失败（zod 校验失败，stage 'schema'）无 stats。
@@ -149,6 +153,7 @@ export const execute = async (params: QueryParams) => {
       config,
       jevDepsFor(config)
     );
+    filtered.stats.brave.latency_ms = braveLatencyMs;
     // 第一个 JSON 块在过滤结果之上附加统计摘要（stats.output，含 status_line）：
     // 状态行第二块与 JSON 块内 output.status_line 逐字同源（D-08/LOG-03 红线），
     // 模型也能直接读到幸存规模与 token 估算。

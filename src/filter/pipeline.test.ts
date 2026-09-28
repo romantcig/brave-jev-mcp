@@ -8,6 +8,7 @@ import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import { createNoKeyJevStats } from './stats.js';
+import { estimateTokens } from './tokens.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
@@ -332,6 +333,13 @@ describe('filterLlmContext', () => {
       n_sources: 2,
       n_snippets: 3,
       chars: data.grounding.generic.flatMap((item) => item.snippets).join('').length,
+      // 过滤前 token 估算（D-10）：期望侧用同一 estimateTokens 逐段求和后 Math.ceil——
+      // 绝不复制公式，也不 join 后整体估算（跨段边界会拼出假 token 段）
+      est_tokens: Math.ceil(
+        data.grounding.generic
+          .flatMap((item) => item.snippets)
+          .reduce((sum, text) => sum + estimateTokens(text), 0)
+      ),
     });
     assert.deepEqual(
       stats.sources.map((source) => [
