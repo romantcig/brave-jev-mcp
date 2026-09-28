@@ -423,7 +423,8 @@ describe('hasJevKey', () => {
     assert.equal(hasJevKey({ TYPESAFE_API_KEY: '' }), false);
     assert.equal(hasJevKey({ TYPESAFE_API_KEY: '   ' }), false);
     assert.equal(hasJevKey({ TYPESAFE_API_KEY: 'k' }), true);
-    // 旧的自拟变量名不再生效（普通对象大小写敏感，与 Linux / macOS 环境一致）
+    // 其余名字（含大小写变体）一律不识别——当前识别的 key 只有 TYPESAFE_API_KEY；
+    // 普通对象大小写敏感，与 Linux / macOS 环境一致
     assert.equal(hasJevKey({ jev_API_KEY: 'k' }), false);
     assert.equal(hasJevKey({ JEV_API_KEY: 'k' }), false);
   });

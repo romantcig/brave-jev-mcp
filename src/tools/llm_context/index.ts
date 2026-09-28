@@ -80,16 +80,22 @@ const configFor = (): FilterConfig => {
 
 // 进程级 Jev 分类器惰性单例（A13）：熔断计数与并发闸住 createJevClassifier 闭包，
 // 跨请求复用——库自身无模块级可变状态（stats.ts 不变式）。mode 为 off 时不创建、
-// 不读 key；mode 非 off 且 key 缺失时按等价 off 处理（EMBED-05：stderr 一行、
-// 不传 deps，管道记 no_key 零请求），实例只在 key 可用时创建。
+// 不读 key；mode 非 off 且 key 缺失时按等价 off 处理（EMBED-05：不传 deps，管道记
+// no_key 零请求），实例只在 key 可用时创建。缺 key 的 stderr 告警只发一次（WR-02）：
+// 缺 key 是进程级持续配置状态，逐请求重复告警是噪音；每次请求仍照常落 no_key 日志、
+// on 模式的未判定提示照常存在——降噪不是掩盖。
 let jevClassifier: ClassifyDeps | undefined;
+let noKeyWarned = false;
 
 const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
   if (config.mode === 'off') return undefined;
   if (!hasJevKey(process.env)) {
-    console.error(
-      '[jev-filter] No Jev API key found (TYPESAFE_API_KEY); treating Jev filtering as off.'
-    );
+    if (!noKeyWarned) {
+      noKeyWarned = true;
+      console.error(
+        '[jev-filter] No Jev API key found (TYPESAFE_API_KEY); treating Jev filtering as off.'
+      );
+    }
     return undefined;
   }
   jevClassifier ??= createJevClassifier(config.jev, process.env);
@@ -103,13 +109,14 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
 let logWriter: LogWriter | undefined;
 
 /**
- * 仅供测试：清掉配置、分类器与日志写入器的进程级惰性单例，让下一次调用重新读
- * 环境 / 配置。生产代码不得调用（"读一次"语义靠不清除保证）。
+ * 仅供测试：清掉配置、分类器、日志写入器的进程级惰性单例与缺 key 告警标记，
+ * 让下一次调用重新读环境 / 配置。生产代码不得调用（"读一次"语义靠不清除保证）。
  */
 export const resetFilterStateForTest = (): void => {
   filterConfig = undefined;
   jevClassifier = undefined;
   logWriter = undefined;
+  noKeyWarned = false;
 };
 
 export const execute = async (params: QueryParams) => {

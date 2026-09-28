@@ -44,7 +44,11 @@ export type LogErrorStage = 'brave' | 'schema';
 
 /** 日志写入器：成功请求与错误请求两种落账入口，共用同一条串行写入链。 */
 export type LogWriter = {
-  /** 成功请求：信封 + FilterStats 整体展开（D-09）。 */
+  /**
+   * 成功请求：信封 + FilterStats 整体展开（D-09）。所有权约定（B-03）：落盘走
+   * 异步串行链、序列化发生在链回调里——`write` 返回后调用方不得再修改 stats
+   * （浅拷贝不隔离嵌套对象）；当前适配行在入队后不再改写任何字段。
+   */
   write(stats: FilterStats): void;
   /** 错误请求（无 stats 主体）：信封 + request + error 标记。 */
   writeError(entry: { stage: LogErrorStage; message: string; query: string; intent: string }): void;
@@ -53,18 +57,16 @@ export type LogWriter = {
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
 /** 本地日期文件名 `YYYY-MM-DD.jsonl`：本地 getter（UTC 系列会差时区）。 */
-const logFileName = (): string => {
-  const now = new Date();
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}.jsonl`;
-};
+const logFileName = (now: Date): string =>
+  `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}.jsonl`;
 
 /**
  * 带时区偏移的本地 ISO 时间戳 `YYYY-MM-DDTHH:mm:ss.sss±HH:MM`（D-11）。
  * 本地 get* 系列 + `getTimezoneOffset`（03-RESEARCH 六问 6.2 实测构造，
- * `Date.parse` 可回解析）。
+ * `Date.parse` 可回解析）。`now` 由调用方传入——同一条记录的 ts 与文件名
+ * 必须取自同一个 Date（B-01：两次独立取时跨午夜会把 ts 写进另一天的文件）。
  */
-const localIsoWithOffset = (): string => {
-  const now = new Date();
+const localIsoWithOffset = (now: Date): string => {
   const offsetMinutes = -now.getTimezoneOffset();
   const sign = offsetMinutes >= 0 ? '+' : '-';
   const abs = Math.abs(offsetMinutes);
@@ -75,6 +77,13 @@ const localIsoWithOffset = (): string => {
     `${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`
   );
 };
+
+/**
+ * stderr 告警单行化（B-02）：一次告警恰一行——换行/控制字符折成空格。
+ * 只用于 stderr 告警文本；日志记录本体由 JSON.stringify 转义，不走这里。
+ */
+export const oneLineStderr = (text: string): string =>
+  text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ');
 
 /** 十一项阈值快照：THRESHOLD_SPECS 投影（snake_case 键），绝不手写键名（D-11）。 */
 const thresholdSnapshot = (config: FilterConfig): Record<string, number> =>
@@ -94,18 +103,22 @@ export function createLogWriter(config: FilterConfig): LogWriter {
   // 串行链：同进程多请求按调用序落盘；同步 append 在 then 回调里执行，
   // 失败在链内消化，绝不向外抛（fail-open）
   let chain: Promise<void> = Promise.resolve();
-  const enqueue = (build: () => Record<string, unknown>): void => {
+  const enqueue = (build: (now: Date) => Record<string, unknown>): void => {
     chain = chain
       .then(() => {
-        const record = build();
-        const file = join(config.logDir, logFileName());
+        // 同一条记录只取一次 Date：ts 与文件名同一时刻，跨午夜不会各差一天（B-01）
+        const now = new Date();
+        const record = build(now);
+        const file = join(config.logDir, logFileName(now));
         mkdirSync(config.logDir, { recursive: true });
         appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
       })
       .catch((error: unknown) => {
         const reason = error instanceof Error ? error.message : String(error);
+        // stderr 告警恰一行（B-02）：路径与错误详情单行化；日志记录本体由
+        // JSON.stringify 转义，不受影响
         console.error(
-          `[jev-filter] Unable to write log record to '${config.logDir}': ${reason}; search result is unaffected.`
+          `[jev-filter] Unable to write log record to '${oneLineStderr(config.logDir)}': ${oneLineStderr(reason)}; search result is unaffected.`
         );
       });
   };
@@ -122,8 +135,8 @@ export function createLogWriter(config: FilterConfig): LogWriter {
 
   return {
     write(stats: FilterStats): void {
-      enqueue(() => ({
-        ts: localIsoWithOffset(),
+      enqueue((now) => ({
+        ts: localIsoWithOffset(now),
         backend: 'typesafe',
         model_config: config.jev.model,
         model_reported: modelReported(stats),
@@ -137,8 +150,8 @@ export function createLogWriter(config: FilterConfig): LogWriter {
       query: string;
       intent: string;
     }): void {
-      enqueue(() => ({
-        ts: localIsoWithOffset(),
+      enqueue((now) => ({
+        ts: localIsoWithOffset(now),
         backend: 'typesafe',
         model_config: config.jev.model,
         thresholds: thresholdSnapshot(config),

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { THRESHOLD_SPECS, parseFilterConfigObject } from './config.js';
 import { createFilterStats } from './stats.js';
-import { createLogWriter } from './logging.js';
+import { createLogWriter, oneLineStderr } from './logging.js';
 import { DEFAULT_JEV_MODEL } from './jev/questions.js';
 import type { BraveLlmContextResponse, FilterConfig, FilterStats } from './types.js';
 
@@ -191,10 +191,63 @@ describe('createLogWriter', () => {
     }
   });
 
+  it('captures one Date per record so the ts date always equals the rolling file date (B-01)', async () => {
+    const dir = join(logDir, 'b01-same-capture');
+    const writer = createLogWriter(configOf('off', dir));
+    const RealDate = globalThis.Date;
+    // 取时桩：第 1 次 new Date 返回 23:59:59.999，其后返回次日零点——修复前
+    // build 与 logFileName 各取一次 Date，会把前一天的 ts 写进后一天的文件
+    //（B-01 复现口径：ts=2026-09-28T23:59:59.999+08:00 落进 2026-09-29.jsonl）
+    const night = new RealDate('2026-09-28T23:59:59.999');
+    const nextDay = new RealDate('2026-09-29T00:00:00.001');
+    let calls = 0;
+    const StubDate = function (...args: unknown[]) {
+      if (args.length === 0) {
+        calls += 1;
+        return new RealDate(calls === 1 ? night : nextDay);
+      }
+      return new RealDate(...(args as []));
+    } as unknown as DateConstructor;
+    StubDate.parse = RealDate.parse;
+    StubDate.UTC = RealDate.UTC;
+    StubDate.now = RealDate.now;
+    globalThis.Date = StubDate;
+    try {
+      // 成功与错误两入口都覆盖：每次入队只取一次 Date，各条记录自洽
+      writer.write(statsOf('off'));
+      writer.writeError({ stage: 'brave', message: 'boom', query: 'q', intent: 'i' });
+      await flushWrites();
+    } finally {
+      globalThis.Date = RealDate;
+    }
+
+    const files = readdirSync(dir).filter((name) => name.endsWith('.jsonl'));
+    assert.equal(files.length, 2); // 两条记录各落自己的日期文件（23:59 与次日零点）
+    for (const file of files) {
+      const records = readFileSync(join(dir, file), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { ts: string });
+      assert.equal(records.length, 1);
+      assert.equal(file, `${records[0].ts.slice(0, 10)}.jsonl`);
+    }
+  });
+
+  it('folds stderr warning text to a single line (B-02)', () => {
+    // 一次告警可能跨行、行数不固定是缺陷本身：路径与错误详情都单行化
+    assert.equal(oneLineStderr('C:\\logs we\nird\\dir'), 'C:\\logs we ird\\dir');
+    assert.equal(
+      oneLineStderr('EIO\u2028broken\r\ncarriage\treturn'),
+      'EIO broken carriage return'
+    );
+    assert.equal(oneLineStderr('plain path stays intact'), 'plain path stays intact');
+  });
+
   it('never serializes snippet bodies into the record (LOG-03/D-12 red line)', async () => {
     const dir = join(logDir, 'no-body');
-    const bodyText =
-      'SECRET-SNIPPET-BODY-abcdefghijklmnopqrstuvwxyz-0123456789-abcdefghijklmnopqrstuvwxyz';
+    // 正文含 TAB 与引号（IN-03）：JSON.stringify 会转义它们，裸 includes 对这种
+    // 正文永远不命中（假绿）——检查必须用与记录一致的 JSON 转义形式
+    const bodyText = 'SECRET-SNIPPET-BODY\twith "quotes" and-abcdefghijklmnopqrstuvwxyz-0123456789';
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [{ url: 'https://a.example/post', title: 'A Post', snippets: [bodyText] }],
@@ -206,9 +259,24 @@ describe('createLogWriter', () => {
     await flushWrites();
 
     const serialized = readFileSync(readRecordFile(dir), 'utf8');
-    assert.ok(!serialized.includes(bodyText.slice(0, 30)), 'snippet body must never reach the log');
+    const escapedPrefix = JSON.stringify(bodyText.slice(0, 30)).slice(1, -1);
+    assert.ok(
+      !serialized.includes(escapedPrefix),
+      'snippet body must never reach the log (checked in its JSON-escaped form)'
+    );
     // 统计面照常存在：URL 与计数在，正文不在
     assert.ok(serialized.includes('https://a.example/post'));
+  });
+
+  it('catches a real leak: the escaped-form check fires on a record that embeds the body (IN-03 negative)', () => {
+    // 负例证明检查有效：同一检查逻辑作用在"真的嵌入了正文"的记录上必须命中——
+    // 夹具自身不许假绿
+    const bodyText = 'LEAKED\tBODY with "quotes" and enough length for a prefix cut';
+    const leakedRecord = JSON.stringify({ request: { query: 'q' }, snippet_body: bodyText });
+    assert.ok(
+      leakedRecord.includes(JSON.stringify(bodyText.slice(0, 30)).slice(1, -1)),
+      'the escaped-form check must detect an actual leak'
+    );
   });
 
   it('writes a record for each of the three modes (D-16)', async () => {

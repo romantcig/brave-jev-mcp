@@ -482,6 +482,48 @@ describe(`${name} (no jev key, mode on)`, () => {
   });
 });
 
+describe(`${name} (no key warning dedup, WR-02)`, () => {
+  useIsolatedFilterEnv();
+
+  const getClient = useTestClient((url) => {
+    if (url.pathname === '/res/v1/llm/context') return braveResponse;
+  });
+
+  it('warns once per process for a persistent missing key, and again after the test reset', async () => {
+    // key 变量不在 FILTER_ENV_VARS 名单（全局约定名），本用例内单独装卸
+    const savedKey = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    useFilterConfig({ mode: 'on' });
+
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      const args = {
+        query: 'brave browser',
+        intent: 'What Brave Search is and how it differs from other engines',
+      };
+      await getClient().callTool({ name, arguments: args });
+      await getClient().callTool({ name, arguments: args });
+      // 缺 key 是进程级持续配置状态：两次请求只告警一次（每次请求仍各自落
+      // no_key 日志、on 模式的未判定提示照常存在——降噪不是掩盖）
+      assert.equal(errors.length, 1, `expected one warning across two calls, got ${errors.length}`);
+
+      // 测试单例复位把告警标记一并复位：下一个进程级生命周期的首请求重新告警
+      resetFilterStateForTest();
+      await getClient().callTool({ name, arguments: args });
+      assert.equal(errors.length, 2);
+    } finally {
+      console.error = originalError;
+      if (savedKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = savedKey;
+      resetFilterStateForTest();
+    }
+  });
+});
+
 describe(`${name} (config file lifecycle)`, () => {
   useIsolatedFilterEnv();
 
@@ -576,6 +618,12 @@ describe(`${name} (tool_description_file from config)`, () => {
 describe(`${name} (malformed upstream response)`, () => {
   useIsolatedFilterEnv();
 
+  const logDir = mkdtempSync(join(tmpdir(), 'jev-schema-log-'));
+
+  after(() => {
+    rmSync(logDir, { recursive: true, force: true });
+  });
+
   const getClient = useTestClient((url) => {
     if (url.pathname === '/res/v1/llm/context') {
       // `sources` is required by the output schema; omitting it simulates
@@ -586,14 +634,35 @@ describe(`${name} (malformed upstream response)`, () => {
     }
   });
 
-  it('surfaces the validation failure as an error result', async () => {
-    const result = await getClient().callTool({
+  const call = () =>
+    getClient().callTool({
       name,
       arguments: { query: 'brave browser', intent: 'What Brave Search is' },
     });
 
+  it('surfaces the validation failure as an error result', async () => {
+    const result = await call();
+
     assert.equal(result.isError, true);
     assert.ok(JSON.stringify(result.content).includes('sources'), JSON.stringify(result.content));
+  });
+
+  it('records exactly one schema-stage error and no fabricated success stats (IN-05)', async () => {
+    useFilterConfig({ mode: 'off', log_dir: logDir });
+    await call();
+    await new Promise((resolve) => setImmediate(resolve)); // 日志串行链落盘
+
+    const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    assert.equal(files.length, 1);
+    const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1); // 恰一条记录——schema 失败不产生第二条成功账
+    const record = JSON.parse(lines[0]) as Record<string, unknown>;
+    const error = record.error as { stage: string };
+    assert.equal(error.stage, 'schema');
+    // 无伪造成功统计：错误记录没有 stats 主体（sources / output / jev 全不在）
+    for (const key of ['sources', 'output', 'jev', 'local', 'shadow_diff']) {
+      assert.ok(!(key in record), `${key} must not appear in an error record`);
+    }
   });
 });
 
