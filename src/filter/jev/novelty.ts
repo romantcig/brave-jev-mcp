@@ -60,6 +60,19 @@ export type JevSideDeletionFlags = {
 };
 
 /**
+ * novelty 删除的上报载荷（R-06）：判定当时的逐片段数值——调用方（shadow 的
+ * would 链）拿它落证据；snippet 是表行引用，pipeline 的 WorkSnippet 结构上满足
+ * （可读 part / mergedFrom 拼配对身份）。
+ */
+export type NoveltyDeletionInfo = {
+  sourceIndex: number;
+  snippet: NoveltySnippetRow & { part?: number; mergedFrom?: number };
+  /** 片段指纹总数（判定的 fp 一侧）与当时 novel 数（noveltyMin 对照侧） */
+  fpCount: number;
+  novelCount: number;
+};
+
+/**
  * 数字指纹（n:）：含货币前后缀与 k/M/B/%/x 量词——$4.2M、193x、1,000、45%。
  * `i` 标志让大小写量词同收；小数点只在后随数字时才属于数字本身。
  */
@@ -238,7 +251,8 @@ export function applyNovelty(
   judged: ReadonlyMap<string, NoveltyJudgedRow> | undefined,
   mode: FilterMode,
   thresholds: JevThresholds,
-  stats: FilterStats
+  stats: FilterStats,
+  onNoveltyDeletion?: (info: NoveltyDeletionInfo) => void
 ): ReadonlyMap<number, JevSideDeletionFlags> {
   const flags = new Map<number, JevSideDeletionFlags>();
   const byIndex = new Map(table.map((entry) => [entry.index, entry]));
@@ -315,6 +329,13 @@ export function applyNovelty(
           stats.local.novelty_removed += 1;
           mark(index, 'novelty');
           recordNoveltyDetail(index, fingerprints);
+          // 判定当时的逐片段数值只在此时可得（事后无法从聚合复原，C-02）
+          onNoveltyDeletion?.({
+            sourceIndex: index,
+            snippet,
+            fpCount: fingerprints.size,
+            novelCount,
+          });
           continue;
         }
       }
@@ -325,7 +346,8 @@ export function applyNovelty(
     }
   }
   // 明细写回（替换式，绝不 mutate 载体浅拷贝共享的 zeroLocal.novelty 空数组）；
-  // 明细条目按首次命中删除的顺序排列（Brave 序内先删先记）
+  // 条目按首次命中删除的顺序排列——off / 影子正本按 Brave 序，on / would 链按
+  // 播种序（is_primary 降序）；统计投影与输出仍按 Brave 序，不为此重排数据（C-03）
   if (noveltyDetails.length > 0) {
     stats.local.novelty = noveltyDetails;
   }

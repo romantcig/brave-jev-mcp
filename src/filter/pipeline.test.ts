@@ -985,7 +985,273 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     assert.equal(s1Row?.reason, 'off_topic');
     const s0Row = shadowRun.stats.jev?.per_source.find((row) => row.src === 's0');
     assert.equal(s0Row?.verdict, 'keep');
-    // 本地 empty 计数不被 would 链的拷贝步 8 污染（正本 4 源无一为空）    assert.equal(shadowRun.stats.local.empty_dropped, 0);
+    // 本地 empty 计数不被 would 链的拷贝步 8 污染（正本 4 源无一为空）
+    assert.equal(shadowRun.stats.local.empty_dropped, 0);
+    // would 链删除动作的逐条证据（R-06）：s1 整源裁决丢、s2 两条 score 删、
+    // s3 两条 score 删后整源 empty——按步序与表序排列；off 正本链零删除动作
+    // （矩阵片段指纹过少不判新颖度），故无 actual 条目
+    assert.deepEqual(shadowRun.stats.shadow_evidence, [
+      { chain: 'would', src: 's1', stage: 'source_verdict', reason: 'off_topic' },
+      { chain: 'would', src: 's2', snippet: '1', stage: 'snippet_score', reason: 'score' },
+      { chain: 'would', src: 's2', snippet: '2', stage: 'snippet_score', reason: 'score' },
+      { chain: 'would', src: 's3', snippet: '0', stage: 'snippet_score', reason: 'score' },
+      { chain: 'would', src: 's3', snippet: '1', stage: 'snippet_score', reason: 'score' },
+      { chain: 'would', src: 's3', stage: 'empty_source', reason: 'empty' },
+    ]);
+  });
+
+  // C-01 合成归并场景：三个来源，s2 / s3 同页归并并入 s1，归并片段的 index 与 s1
+  // 自有片段 A 的 index 同为 0——配对身份必须含 mergedFrom 才不撞键。指纹 F =
+  // {n:$4.2m, n:193x, d:march 2026, p:alpha capital, p:brave}；s0 额外带两个独有
+  // 指纹（p:beta ventures、n:77）保证 on 链殿后播种时仍 ≥ noveltyMin 幸存。
+  const mergePayload = (): BraveLlmContextResponse => ({
+    grounding: {
+      generic: [
+        {
+          url: 'https://other.example.com/a',
+          title: 'Funding Wire',
+          snippets: [
+            'At 193x speed and $4.2M in March 2026, Alpha Capital backed Brave; Beta Ventures committed 77 more.',
+          ],
+        },
+        {
+          url: 'https://example.com/post',
+          title: 'Funding Post',
+          snippets: [
+            'Brave raised $4.2M at 193x in March 2026 with Alpha Capital leading the round.',
+            'Brave maintains a public changelog for every release.',
+          ],
+        },
+        {
+          url: 'https://www.example.com/post/',
+          title: 'Funding Post (AMP)',
+          snippets: ['Brave and Alpha Capital team up for 193x speed.'],
+        },
+        {
+          url: 'https://example.com/post?utm_source=x',
+          title: 'Funding Post (tracked)',
+          snippets: ['Brave and Alpha Capital commit several more together.'],
+        },
+      ],
+      map: [],
+    },
+    sources: {},
+  });
+
+  const makeMergeClassify =
+    (counter: { calls: number }, primary: Record<string, number>): ClassifyDeps['classify'] =>
+    async ({ state }) => {
+      counter.calls += 1;
+      const answers: Record<string, JevAnswer> = {};
+      // 只定制 is_primary 控制播种序；来源级五题保持 0，来源裁决不干预本场景
+      for (const key of Object.keys(SOURCE_QUESTIONS)) {
+        answers[key] = {
+          kind: 'noul',
+          probability: key === 'is_primary' ? (primary[state.source.id] ?? 0) : 0,
+        };
+      }
+      for (const i of state.source.snippets.keys()) {
+        answers[`snip${i}`] = { kind: 'score', score: 1.5 };
+      }
+      return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
+    };
+
+  it('shadow: off-only novelty deletion of a self snippet paired by merged_from is a restore, not zero (C-01)', async () => {
+    // off 链 Brave 序 s0 先播种占 F → s1 自有片段 A（index 0，指纹全撞）novel=0
+    // 被新颖度删；归并片段 C / D 指纹 <4 不判，两链都留。on 链 s1（is_primary 0.9）
+    // 先播种 → A 全新保留。期望恢复 1 个片段（A）；旧 index+part 配对把归并片段
+    // （后写者）的 off 状态错配给 A，记 0。
+    const counter = { calls: 0 };
+    const offRun = await filterLlmContext(mergePayload(), request, offConfig);
+    const shadowRun = await filterLlmContext(
+      mergePayload(),
+      request,
+      { ...offConfig, mode: 'shadow' },
+      { classify: makeMergeClassify(counter, { s0: 0.1, s1: 0.9 }) }
+    );
+
+    // s1 的两个归并来源已并入，候选只有 s0 / s1
+    assert.equal(counter.calls, 2);
+    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, []);
+    assert.deepEqual(shadowRun.stats.shadow_diff?.would_restore, []);
+    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 0);
+    assert.equal(shadowRun.stats.shadow_diff?.would_restore_snippets, 1);
+    // 恢复类差异（would_restore_snippets=1）的解释证据在 actual 侧（F-02）：
+    // off 链判定当时 A 的逐片段数值——fp 7 ≥ min_facts 且 novel 0 < novelty_min；
+    // would 链零删除动作 → 无 would 条目
+    assert.deepEqual(shadowRun.stats.shadow_evidence, [
+      {
+        chain: 'actual',
+        src: 's1',
+        snippet: '0',
+        stage: 'novelty',
+        reason: 'novelty',
+        fp_count: 7,
+        novel_count: 0,
+      },
+    ]);
+    // 幸存内容保持 Brave 原序：shadow 输出仍与 off 逐字段相同（VERDICT-05）
+    assert.deepEqual(shadowRun.result, offRun.result);
+    // 统计投影里归并片段带 merged_from，且两个归并来源的片段不因同 index 相互覆盖
+    const merged = offRun.stats.sources[1].snippets.filter((row) => row.merged_from !== undefined);
+    assert.deepEqual(
+      merged.map((row) => [row.index, row.merged_from]),
+      [
+        [0, 2],
+        [0, 3],
+      ]
+    );
+  });
+
+  it('shadow: identical off/on snippet verdicts with merged same-index snippets stay zero-diff (C-01)', async () => {
+    // s0 is_primary 0.9 两链都先播种占 F → A 两链都删、C / D 两链都留，off/on 裁决
+    // 完全相同 → 四字段必为零差异；旧 index+part 配对会把 A 的 on 删除错配到归并
+    // 片段的 off 幸存上，凭空记 would_remove_snippets=1。
+    const counter = { calls: 0 };
+    const offRun = await filterLlmContext(mergePayload(), request, offConfig);
+    const shadowRun = await filterLlmContext(
+      mergePayload(),
+      request,
+      { ...offConfig, mode: 'shadow' },
+      { classify: makeMergeClassify(counter, { s0: 0.9, s1: 0.1 }) }
+    );
+
+    assert.equal(counter.calls, 2);
+    assert.deepEqual(shadowRun.stats.shadow_diff, {
+      would_drop: [],
+      would_remove_snippets: 0,
+      would_restore: [],
+      would_restore_snippets: 0,
+    });
+    assert.deepEqual(shadowRun.result, offRun.result);
+    // 零差异但两链都有自己的删除动作（A 两链都被新颖度删）：证据带判定当时的
+    // 逐片段数值（R-06）——fp 7 ≥ min_facts 4 且 novel 0 < novelty_min 2，与阈值
+    // 快照对照即得"该删"；两边都发生的删除各有一条，证据清单不等同差异清单
+    assert.deepEqual(shadowRun.stats.shadow_evidence, [
+      {
+        chain: 'would',
+        src: 's1',
+        snippet: '0',
+        stage: 'novelty',
+        reason: 'novelty',
+        fp_count: 7,
+        novel_count: 0,
+      },
+      {
+        chain: 'actual',
+        src: 's1',
+        snippet: '0',
+        stage: 'novelty',
+        reason: 'novelty',
+        fp_count: 7,
+        novel_count: 0,
+      },
+    ]);
+  });
+
+  it('shadow: novelty numbers stay per-source for same-index snippets and dup actions carry no numbers (F-01)', async () => {
+    // 四来源：s0 占指纹 F；s1 / s2 的 0 号片段同号但 novel 数不同（1 与 0）——
+    // 数值缓存必须按 来源+配对身份 区分（F-01：修复前全局键让 s2/0 串用 s1/0 的
+    // 数值）；s3 的 0 号与 s0 片段逐字相同 → 跨源 dup 先于指纹删除，动作不带
+    // fp/novel 数值（修复前会读到 novelty 缓存的残留值）。
+    const f01Payload = (): BraveLlmContextResponse => ({
+      grounding: {
+        generic: [
+          {
+            url: 'https://f0.example/',
+            title: 'Facts',
+            snippets: [
+              'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency overall.',
+              'Brave ships weekly notes about the browser rollout plan.',
+            ],
+          },
+          {
+            url: 'https://f1.example/',
+            title: 'Rewrite One',
+            snippets: [
+              'the Brave build costs $4.2m and runs 193x faster with 40% less at version 1.14',
+              'Brave maintains a public changelog for every release.',
+            ],
+          },
+          {
+            url: 'https://f2.example/',
+            title: 'Rewrite Two',
+            snippets: [
+              'the Brave costs run 193x faster and 40% less latency overall at version 1.13 with $4.2m',
+              'Brave publishes detailed release notes for each update.',
+            ],
+          },
+          {
+            url: 'https://f3.example/',
+            title: 'Verbatim Copy',
+            snippets: [
+              'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency overall.',
+              'Brave keeps a timeline of every beta release.',
+            ],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    });
+    const counter = { calls: 0 };
+    const offRun = await filterLlmContext(f01Payload(), request, offConfig);
+    const shadowRun = await filterLlmContext(
+      f01Payload(),
+      request,
+      { ...offConfig, mode: 'shadow' },
+      { classify: makeMergeClassify(counter, { s0: 0.9 }) }
+    );
+
+    assert.equal(counter.calls, 4);
+    // 两链判定一致 → 零差异；would 组在前、actual 组在后
+    assert.deepEqual(shadowRun.stats.shadow_diff, {
+      would_drop: [],
+      would_remove_snippets: 0,
+      would_restore: [],
+      would_restore_snippets: 0,
+    });
+    assert.deepEqual(shadowRun.result, offRun.result);
+    assert.deepEqual(shadowRun.stats.shadow_evidence, [
+      {
+        chain: 'would',
+        src: 's1',
+        snippet: '0',
+        stage: 'novelty',
+        reason: 'novelty',
+        fp_count: 5,
+        novel_count: 1,
+      },
+      {
+        chain: 'would',
+        src: 's2',
+        snippet: '0',
+        stage: 'novelty',
+        reason: 'novelty',
+        fp_count: 5,
+        novel_count: 0,
+      },
+      { chain: 'would', src: 's3', snippet: '0', stage: 'cross_source_dup', reason: 'dup' },
+      {
+        chain: 'actual',
+        src: 's1',
+        snippet: '0',
+        stage: 'novelty',
+        reason: 'novelty',
+        fp_count: 5,
+        novel_count: 1,
+      },
+      {
+        chain: 'actual',
+        src: 's2',
+        snippet: '0',
+        stage: 'novelty',
+        reason: 'novelty',
+        fp_count: 5,
+        novel_count: 0,
+      },
+      { chain: 'actual', src: 's3', snippet: '0', stage: 'cross_source_dup', reason: 'dup' },
+    ]);
   });
 
   it('on: output equals the would view applied, dropped sources absent, Brave order kept, shadow_diff null', async () => {

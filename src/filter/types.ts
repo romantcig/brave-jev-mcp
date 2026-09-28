@@ -174,7 +174,8 @@ export type JevPerSourceStats = {
   src: string;
   url: string;
   status: 'answered' | 'failed' | 'skipped' | 'breaker_open';
-  /** status `'failed'` 时的失败种类 */
+  /** status `'failed'` 时的失败种类；`'answered'` 行也可带 `'validation'`——
+   *  回答已收到但关键答案缺失/越界，来源防御式保留（T-02-03-1；A-04 状态行口径） */
   fail_kind?: JevFailKind;
   /** 生效的超限降级级别（02-05 记账） */
   ladder?: JevLadderLevel;
@@ -206,6 +207,37 @@ export type ShadowDiff = {
   would_remove_snippets: number;
   would_restore: string[];
   would_restore_snippets: number;
+};
+
+/**
+ * 链侧删除动作的证据（C-02/F-02 口径：能定位来源、片段、阶段与原因，新颖度差异
+ * 带判定当时的逐片段数值）。只存身份、原因与计数，绝不存片段正文（LOG-03）。
+ * `chain: 'would'`（on 链拷贝）解释 `would_drop` / `would_remove_snippets`；
+ * `chain: 'actual'`（shadow 的 off 正本链）解释 `would_restore` /
+ * `would_restore_snippets`——"off 当时为什么删"同样需要逐片段数值，来源级聚合
+ * 不能代回逐片段条件。两边都发生的删除各有一条，证据清单不等同差异清单。
+ */
+export type WouldActionEvidence = {
+  /** 证据所属链：would = on 链拷贝；actual = shadow 的 off 正本链 */
+  chain: 'would' | 'actual';
+  /** 探测约定 id：`s{braveIndex}` */
+  src: string;
+  /**
+   * 片段配对身份，与管道 snippetKey 同格式：`{merged_from}:{index}`（无并入来源
+   * 时省略前缀），JSON-LD 多段加 `.{part}`；来源级动作（整源丢弃）省略本键
+   */
+  snippet?: string;
+  /** 触发阶段：actual 链只可能是后三种（off 链无 Jev 来源裁决与 score 删除） */
+  stage: 'source_verdict' | 'snippet_score' | 'novelty' | 'cross_source_dup' | 'empty_source';
+  /** 原因词：来源级 SourceDropReason 或片段级 SnippetRemovalReason，键原样不变形 */
+  reason: string;
+  /**
+   * 仅 novelty 删除带：判定当时的逐片段指纹总数与 novel 数——与信封 thresholds
+   * 快照的 min_facts / novelty_min 对照即得"该删不该删"；来源级聚合数（local.
+   * novelty）不能代回逐片段条件（C-02）。跨源 dup / score / 来源级动作不带
+   */
+  fp_count?: number;
+  novel_count?: number;
 };
 
 /** 来源被整体丢弃的原因。前五个 Phase 1 可产生，其余 Phase 2。 */
@@ -277,6 +309,11 @@ export type LocalStats = {
   url_merged: number;
   snippets_prefiltered: number;
   dup_removed: number;
+  /**
+   * 步 3 付费墙截断后仍保留片段的截断动作数（D-05/IN-06 口径）：记的是步 3 的
+   * **动作**，含后来整源被丢的来源里的截断；状态行 removed 段与 sources 投影记的
+   * 是**最终幸存**来源的片段删除——两个指标分母不同、含义不同，不互相换算。
+   */
   paywall_truncated: number;
   feed_hits: number;
   blocklist_hits: number;
@@ -371,6 +408,13 @@ export type FilterStats = {
     status_line?: string;
   };
   shadow_diff: ShadowDiff | null;
+  /**
+   * 链侧删除动作的逐条证据（R-06/C-02、F-02 返修）：would 链与 shadow 正本 off
+   * 链的删除动作都在这里，chain 字段区分；两边都发生的删除各有一条——证据清单
+   * 不等同差异清单，零差异仍可有证据。两链都零删除动作时省略键；旧记录（R-06
+   * 之前）缺键，审核脚本按"证据不足"读，不得当成零差异或可完整解释的差异。
+   */
+  shadow_evidence?: WouldActionEvidence[];
 };
 
 /** `filterLlmContext` 的返回：过滤后的响应加统计对象。 */

@@ -257,6 +257,33 @@ describe('applyNovelty', () => {
     assert.equal(stats.local.novelty_removed, 0);
   });
 
+  it('aggregates per-source fp_total as the deleted-union size and novel as its diff vs the surviving union (C-04.1)', () => {
+    // 手算（C-02 复核口径）：s0 播种占 4 指纹；s1 片段 0 三个指纹被占、n:1.14 新
+    // （novel=1）删；片段 1 独有四事实 novel=4 保留（n:2.0 随幸存片段进指纹并集）；
+    // 片段 2 的 $4.2m/193x/40% 被 s0 占、2.0 被片段 1 吸收 → novel=0 删。
+    // 删除条目并集 = 两被删片段 4+4 指纹重叠 3 → fp_total=5；novel = 并集 − 幸存
+    // 指纹并集 = {n:1.14}——若没有中途幸存片段吸收 n:2.0，novel 会是 2 个。两被删
+    // 片段的逐片段 novel（1 与 0）都不能从聚合数复原（C-02）。
+    const table = [
+      source(0, [snippet(0, FACTS_A)]),
+      source(1, [
+        snippet(0, FACTS_A_NOVEL1),
+        snippet(1, 'version 2.0 costs 5.5m and runs 66x faster with 70% less latency'),
+        snippet(2, 'it costs $4.2m at version 2.0, runs 193x faster, and has 40% less latency'),
+      ]),
+    ];
+    const stats = makeStats();
+
+    applyNovelty(table, undefined, 'off', thresholds, stats);
+
+    assert.equal(table[1].snippets[0].kept, false);
+    assert.equal(table[1].snippets[1].kept, true);
+    assert.equal(table[1].snippets[2].kept, false);
+    assert.equal(stats.local.novelty_removed, 2);
+    assert.equal(stats.local.cross_source_dup_removed, 0);
+    assert.deepEqual(stats.local.novelty, [{ src: 's1', fp_total: 5, novel: ['n:1.14'] }]);
+  });
+
   it('does not exempt a source below the reasoning protect threshold', () => {
     const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_NOVEL1)])];
     const judged = judgedMap({ s1: answered({ has_original_reasoning: 0.69 }) });
