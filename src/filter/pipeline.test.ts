@@ -368,6 +368,30 @@ describe('filterLlmContext', () => {
     assert.doesNotMatch(JSON.stringify(stats), /privacy-focused/);
   });
 
+  it('records context_threshold_mode in stats.request only when the request carries it', async () => {
+    const data = payload();
+
+    // MCP 工具声明层不含 context_threshold_mode（SDK 会 strip 未知键），该参数
+    // 只能经 filterLlmContext 直调注入——条件 spread 语义在管道层锁定（D-10）
+    const withMode = await filterLlmContext(
+      data,
+      {
+        params: { query: 'brave browser', context_threshold_mode: 'strict' },
+        intent: 'What Brave Search is',
+      },
+      offConfig
+    );
+    assert.equal(withMode.stats.request.context_threshold_mode, 'strict');
+
+    const without = await filterLlmContext(
+      data,
+      { params: { query: 'brave browser' }, intent: 'What Brave Search is' },
+      offConfig
+    );
+    assert.equal(Object.hasOwn(without.stats.request, 'context_threshold_mode'), false);
+    assert.equal(Object.hasOwn(without.stats.request, 'freshness'), false);
+  });
+
   it('keeps stats independent across alternating configs in one process', async () => {
     const data = payload();
     const first = await filterLlmContext(

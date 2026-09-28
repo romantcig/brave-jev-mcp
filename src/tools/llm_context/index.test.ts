@@ -312,6 +312,79 @@ describe(`${name} (status line and JSONL log)`, () => {
     const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
     assert.equal(payload.output.status_line, statusLine);
   });
+
+  it('records freshness only when the request carries it and omits both optional request keys otherwise', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'off', log_dir: logDir });
+
+    // 带 freshness 的调用：记录 request 含该键（D-10）
+    const withFreshness = await getClient().callTool({
+      name,
+      arguments: {
+        query: 'brave browser',
+        intent: 'What Brave Search is and how it differs from other engines',
+        freshness: 'pw',
+      },
+    });
+    assert.equal(withFreshness.isError ?? false, false, JSON.stringify(withFreshness.content));
+
+    await flushWrites();
+    const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    assert.equal(files.length, 1);
+    const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    const withRecord = JSON.parse(lines[0]) as { request: Record<string, unknown> };
+    assert.equal(withRecord.request.freshness, 'pw');
+
+    // 不带的调用：记录 request 无 freshness 也无 context_threshold_mode——
+    // 条件 spread 省略 undefined 键（deepEqual 对显式 undefined 键判不等）
+    const without = await getClient().callTool({
+      name,
+      arguments: {
+        query: 'brave browser',
+        intent: 'What Brave Search is and how it differs from other engines',
+      },
+    });
+    assert.equal(without.isError ?? false, false, JSON.stringify(without.content));
+
+    await flushWrites();
+    const allLines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(allLines.length, 2);
+    const withoutRecord = JSON.parse(allLines[1]) as { request: Record<string, unknown> };
+    assert.equal(Object.hasOwn(withoutRecord.request, 'freshness'), false);
+    assert.equal(Object.hasOwn(withoutRecord.request, 'context_threshold_mode'), false);
+  });
+
+  it('books brave.latency_ms and the pre-filter est_tokens into the record', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'off', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: {
+        query: 'brave browser',
+        intent: 'What Brave Search is and how it differs from other engines',
+      },
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+
+    await flushWrites();
+    const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    assert.equal(files.length, 1);
+    const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    const record = JSON.parse(lines[0]) as {
+      brave: Record<string, unknown> & { est_tokens: number };
+      output: { est_tokens: number };
+    };
+    // 计时在适配行（D-10）：成功路径必回填且非负
+    assert.equal(Object.hasOwn(record.brave, 'latency_ms'), true);
+    assert.equal(typeof record.brave.latency_ms, 'number');
+    assert.ok((record.brave.latency_ms as number) >= 0);
+    // 过滤前 token 估算（TOOLS-04）：与 output.est_tokens 同一估算口径，过滤只删不增
+    assert.ok(record.brave.est_tokens > 0);
+    assert.ok(record.brave.est_tokens >= record.output.est_tokens);
+  });
 });
 
 describe(`${name} (missing intent)`, () => {

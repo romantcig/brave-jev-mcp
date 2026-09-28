@@ -390,8 +390,40 @@ for (const rel of listExpectedFiles()) {
       assert.equal(stats.output.n_snippets, expected.final.n_snippets);
     });
 
-    it('local counters match', () => {
-      assert.deepEqual(stats.local, { ...zeroLocal, ...expected.final.local });
+    it('local counters match (novelty details asserted separately)', () => {
+      // D-10 起零值与实际值都带 novelty 明细数组：计数断言剔除该键逐条比对，
+      // 明细的形状与覆盖由下一条用例独立锁定（期望文件不写指纹列表——零指纹污染）
+      const expectedLocal: Record<string, unknown> = {
+        ...zeroLocal,
+        ...expected.final.local,
+      };
+      const actualLocal: Record<string, unknown> = { ...stats.local };
+      delete expectedLocal.novelty;
+      delete actualLocal.novelty;
+      assert.deepEqual(actualLocal, expectedLocal);
+    });
+
+    it('novelty details cover exactly the sources that lost snippets to novelty', () => {
+      // 条目集合 == 发生 novelty 片段删除的来源集合（src 对应统计表 index）
+      const expectedSrcs = stats.sources
+        .filter((source) => source.snippets.some((row) => !row.kept && row.reason === 'novelty'))
+        .map((source) => `s${source.index}`)
+        .sort();
+      const actualSrcs = stats.local.novelty.map((entry) => entry.src).sort();
+      assert.deepEqual(actualSrcs, expectedSrcs, 'novelty detail sources');
+
+      // A3 语义：novelty_removed > 0 时条目存在、fp_total >= 1（纯重复来源触发
+      // 删除但对指纹并集零新贡献时 novel 为空数组是合法形态，不对 novel 设下限）；
+      // novelty_removed === 0 时明细为空数组
+      if (stats.local.novelty_removed > 0) {
+        assert.ok(stats.local.novelty.length > 0, 'novelty details must exist');
+        for (const entry of stats.local.novelty) {
+          assert.ok(entry.fp_total >= 1, `fp_total of ${entry.src}`);
+          assert.ok(Array.isArray(entry.novel), `novel of ${entry.src}`);
+        }
+      } else {
+        assert.deepEqual(stats.local.novelty, []);
+      }
     });
   });
 }
