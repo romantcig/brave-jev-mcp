@@ -13,8 +13,9 @@
  *   `1 stale (vs intent: "…")`；超 100 字符截断加省略号。绝不用代码从 intent
  *   抽版本号（与"版本号正则不做"同精神，零误判）；
  * - D-05：付费墙截断 > 0 时单列一项（它是片段级动作不是来源级原因）；
- * - D-06：`on` 模式统计"Jev 未判定"来源——最终 keep 且 per_source 缺行或该行
- *   status 非 answered；> 0 时追加 `N source(s) not checked by Jev (kept)`，
+ * - D-06：`on` 模式统计"Jev 未判定"来源——最终 keep 且 per_source 缺行、该行
+ *   status 非 answered、或 answered 但 fail_kind='validation'（回答已收到但未完成
+ *   有效裁决，A-04）；> 0 时追加 `N source(s) not checked by Jev (kept)`，
  *   零丢弃也附（模型要知道结果是漏网的）；off / shadow 绝不出现这一段；
  * - 单复数：主数字用英文复数规则（1 source / 2 sources、1 snippet / N snippets），
  *   原因词保持键原样不变形；
@@ -76,14 +77,18 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
   const paywallTruncated = stats.local.paywall_truncated;
 
   // Jev 未判定来源（D-06）：只在 on 模式数——最终 keep 且 per_source 缺行
-  // （如 no_key 零值对象、本地规则后未入候选）或该行 status 非 answered。
+  // （如 no_key 零值对象、本地规则后未入候选）、该行 status 非 answered，或
+  // answered 但 fail_kind='validation'（A-04：回答已收到但关键答案缺失/越界，
+  // 防御式保留——"回答已收到"不等于"已完成有效裁决"）。
   let unchecked = 0;
   if (stats.mode === 'on') {
     const bySrc = new Map((stats.jev?.per_source ?? []).map((row) => [row.src, row]));
     for (const source of stats.sources) {
       if (source.verdict !== 'keep') continue;
       const row = bySrc.get(`s${source.index}`);
-      if (row === undefined || row.status !== 'answered') unchecked += 1;
+      if (row === undefined || row.status !== 'answered' || row.fail_kind === 'validation') {
+        unchecked += 1;
+      }
     }
   }
 
@@ -117,6 +122,47 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
   return `[filter] ${parts.join('; ')}`;
 }
 
-/** intent 回显：超 100 字符截断加省略号；不抽版本号、不做任何改写（D-03）。 */
-const truncateIntent = (intent: string): string =>
-  intent.length > INTENT_ECHO_MAX ? `${intent.slice(0, INTENT_ECHO_MAX)}…` : intent;
+/**
+ * intent 回显的展示层转义（A-01/A-02）：状态行是单行英文摘要，模型传来的合法
+ * intent 可能含跨行、控制字符与引号——原 intent 照旧送给 Jev 与日志（不拒绝
+ * 搜索、不改写、不做语言识别），只在回显处：
+ * - 反斜杠与直引号转义——包裹引号边界清楚，优先转义而不是删除；
+ * - CR/LF/TAB 与其余 C0 控制、DEL、U+2028/U+2029 转成 `\n` 式可见转义，
+ *   绝不原样透传跨行/控制字符；
+ * - 孤立代理对转成 `\uXXXX`（原 intent 里就不放行）。
+ * 普通字符逐字保留——无特殊字符的 intent 外观与旧实现完全一致。
+ */
+const escapeForEcho = (intent: string): string =>
+  intent.replace(
+    /[\u0000-\u001f\u007f\u2028\u2029"\\]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+    (char) => {
+      switch (char) {
+        case '"':
+          return '\\"';
+        case '\\':
+          return '\\\\';
+        case '\n':
+          return '\\n';
+        case '\r':
+          return '\\r';
+        case '\t':
+          return '\\t';
+        default:
+          return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      }
+    }
+  );
+
+/**
+ * intent 回显：转义后超 100 字符截断加省略号（D-03）。码元截断若把合法代理对
+ * （emoji 等）劈成孤立高代理，回退一位——截断不劈代理对；转义串本身不含孤立
+ * 代理对，劈开只可能发生在截断处。不抽版本号、不做任何改写（D-03）。
+ */
+const truncateIntent = (intent: string): string => {
+  const escaped = escapeForEcho(intent);
+  if (escaped.length <= INTENT_ECHO_MAX) return escaped;
+  let cut = escaped.slice(0, INTENT_ECHO_MAX);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
+};

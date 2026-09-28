@@ -54,10 +54,14 @@ const dropSnippet = (stats: FilterStats, sourceIndex: number, snippetIndex: numb
   stats.sources[sourceIndex].snippets[snippetIndex].kept = false;
 };
 
-/** 给 on/shadow 载体挂一份 Jev 记账（per_source 行按需给 status）。 */
+/** 给 on/shadow 载体挂一份 Jev 记账（per_source 行按需给 status 与 fail_kind）。 */
 const withJev = (
   stats: FilterStats,
-  rows: Array<{ src: string; status: 'answered' | 'failed' | 'skipped' | 'breaker_open' }>
+  rows: Array<{
+    src: string;
+    status: 'answered' | 'failed' | 'skipped' | 'breaker_open';
+    fail_kind?: 'validation';
+  }>
 ): FilterStats => {
   stats.jev = {
     n_requests: rows.filter((row) => row.status === 'answered').length,
@@ -68,6 +72,7 @@ const withJev = (
       src: row.src,
       url: `https://${row.src}.example/`,
       status: row.status,
+      ...(row.fail_kind !== undefined ? { fail_kind: row.fail_kind } : {}),
     })),
   };
   return stats;
@@ -156,6 +161,15 @@ describe('buildStatusLine', () => {
     );
   });
 
+  it('attaches the status line for paywall truncation alone (A-05.1 / D-04)', () => {
+    // 只有付费墙截断、无来源丢弃与片段删除：独立验证 D-04 的一个触发条件
+    const stats = statsOf('off', {
+      sources: [{ url: 'https://a.example/', snippets: ['one', 'two'] }],
+    });
+    stats.local.paywall_truncated = 1;
+    assert.equal(buildStatusLine(stats), '[filter] 1 snippet paywall-truncated');
+  });
+
   it('echoes the intent verbatim for a stale drop', () => {
     const stats = statsOf('off', {
       intent: 'current Sanity Studio (v6, sanity.config.ts based)',
@@ -178,6 +192,46 @@ describe('buildStatusLine', () => {
     assert.equal(
       buildStatusLine(stats),
       `[filter] dropped 1 of 1 source: 1 stale (vs intent: "${'x'.repeat(100)}…")`
+    );
+  });
+
+  it('echoes control characters, line breaks and quotes as single-line escapes (A-01/A-02)', () => {
+    const build = (intent: string): string | undefined => {
+      const stats = statsOf('off', {
+        intent,
+        sources: [{ url: 'https://a.example/', snippets: ['one'] }],
+      });
+      dropSource(stats, 0, 'stale');
+      return buildStatusLine(stats);
+    };
+    // LF / CR / TAB / U+2028 / U+2029：单行转义，不跨行透传
+    assert.equal(
+      build('one\ntwo\rthree\tfour\u2028five'),
+      '[filter] dropped 1 of 1 source: 1 stale (vs intent: "one\\ntwo\\rthree\\tfour\\u2028five")'
+    );
+    // NUL 与 DEL 转成 \uXXXX 文本；直引号与反斜杠转义，包裹引号边界清楚
+    assert.equal(
+      build('a\u0000say "hi" b\\c\u007fd'),
+      '[filter] dropped 1 of 1 source: 1 stale (vs intent: "a\\u0000say \\"hi\\" b\\\\c\\u007fd")'
+    );
+    // 孤立代理对原样进来也转成 \uXXXX，不产生非法字符
+    assert.equal(
+      build('a\ud83db'),
+      '[filter] dropped 1 of 1 source: 1 stale (vs intent: "a\\ud83db")'
+    );
+  });
+
+  it('truncates without splitting a surrogate pair at the boundary', () => {
+    // 99 个 x 加一个双码元 emoji：截断落在高代理上时回退一位，不劈开 emoji
+    const intent = `${'x'.repeat(99)}😀`;
+    const stats = statsOf('off', {
+      intent,
+      sources: [{ url: 'https://a.example/', snippets: ['one'] }],
+    });
+    dropSource(stats, 0, 'stale');
+    assert.equal(
+      buildStatusLine(stats),
+      `[filter] dropped 1 of 1 source: 1 stale (vs intent: "${'x'.repeat(99)}…")`
     );
   });
 
@@ -228,6 +282,22 @@ describe('buildStatusLine', () => {
       buildStatusLine(twoFailed),
       '[filter] dropped 1 of 3 sources: 1 stale (vs intent: "test intent"); 2 sources not checked by Jev (kept)'
     );
+  });
+
+  it('counts an answered source whose validation failed as not checked (A-04)', () => {
+    // 回答已收到但关键答案缺失/越界（fail_kind='validation'）：来源防御式保留，
+    // "回答已收到"不等于"已完成有效裁决"——模型要知道它是漏网的
+    const stats = statsOf('on', {
+      sources: [
+        { url: 'https://a.example/', snippets: ['one'] },
+        { url: 'https://b.example/', snippets: ['two'] },
+      ],
+    });
+    withJev(stats, [
+      { src: 's0', status: 'answered' },
+      { src: 's1', status: 'answered', fail_kind: 'validation' },
+    ]);
+    assert.equal(buildStatusLine(stats), '[filter] 1 source not checked by Jev (kept)');
   });
 
   it('never adds the unchecked segment off or shadow, and skips it when everything is answered', () => {
