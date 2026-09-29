@@ -100,7 +100,7 @@ describe('filterLlmContext', () => {
       const { result, stats } = await filterLlmContext(data, request, { ...offConfig, mode });
 
       assert.equal(stats.mode, mode);
-      // off 模式 Jev 整段跳过（stats.jev 保持 null，A16）；on/shadow 未注入 classify
+      // off 模式 Jev 整段跳过（stats.jev 保持 null，A16）；on/test 未注入 classify
       // 时记 no_key 零值对象且零请求（SAFE-01 语义前置）
       if (mode === 'off') {
         assert.equal(stats.jev, null);
@@ -849,14 +849,14 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 三模式语义矩阵（02-03 Task 2）：同一内联夹具 × off/shadow/on，on/shadow 注入
-// 同一合成 classify——off 直通、shadow 正本走 off 链（输出与 off 同）、on 全链生效
-// （VERDICT-05）。注意：本例人造片段的数字/日期等事实指纹少于 minFacts，步 7 的
-// 指纹新颖度不触发，因此它**测不到**"shadow 正本漏跑新颖度"这类回归——那条由
-// novelty/cross-source 组与两份真实夹具的 shadow-equals-off 测试锁住。
+// 三模式语义矩阵（02-03 Task 2，04-01 迁移到 test 语义）：同一内联夹具 ×
+// off/test/on，test/on 注入同一合成 classify——off 直通、test 与 on 共用同一条链且
+// 裁决真实生效（04-CONTEXT：不维护两套易漂移的实现）。注意：本例人造片段的
+// 数字/日期等事实指纹少于 minFacts，步 7 的指纹新颖度不触发——新颖度按播种序的
+// 模式差异由 novelty 组与 pipeline.fixtures.test.ts 的 test 相对 off 差集断言锁住。
 // ---------------------------------------------------------------------------
 
-describe('three-mode semantic matrix (off / shadow / on)', () => {
+describe('three-mode semantic matrix (off / test / on)', () => {
   // 四来源覆盖矩阵四角：s0 来源级 keep 且 score 全过（三模式输出同）；s1 来源级
   // off_topic 丢弃；s2 部分片段 score 删除；s3 score 删光 → 步 8 empty 间接清空。
   // 片段都含 query 实词（brave）且短于 shingle 门槛，本地规则不误删。
@@ -958,11 +958,10 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     );
   });
 
-  it('shadow: classify called, output deep-equals the off output, would bookkeeping derived from answers', async () => {
+  it('test: classify called and verdicts really apply — dropped sources vanish, low-score snippets removed', async () => {
     const counter = { calls: 0 };
-    const offRun = await filterLlmContext(matrixPayload(), request, offConfig);
 
-    const shadowRun = await filterLlmContext(
+    const testRun = await filterLlmContext(
       matrixPayload(),
       request,
       { ...offConfig, mode: 'test' },
@@ -971,292 +970,34 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
 
     // Jev 照常调用（4 候选源各一次）并记账
     assert.equal(counter.calls, 4);
-    assert.equal(shadowRun.stats.jev?.n_requests, 4);
-    // 正本走 off 链：输出与 off 模式 deepEqual（VERDICT-05，02-FIX 批 A）
-    assert.deepEqual(shadowRun.result, offRun.result);
-    // would_drop 直接由"off keep 且 on drop"得出：s1（off_topic）+ s3（score 删光）
-    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s1', 's3']);
-    // would_remove_snippets 只数 off 与 on 都保留的来源里被 on 删掉的片段：s2 删 2；
-    // s3 整源进 would_drop，其片段不重复计
-    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 2);
-    // would 层裁决记账进 per_source，但正本输出不受影响
-    const s1Row = shadowRun.stats.jev?.per_source.find((row) => row.src === 's1');
-    assert.equal(s1Row?.verdict, 'drop');
-    assert.equal(s1Row?.reason, 'off_topic');
-    const s0Row = shadowRun.stats.jev?.per_source.find((row) => row.src === 's0');
-    assert.equal(s0Row?.verdict, 'keep');
-    // 本地 empty 计数不被 would 链的拷贝步 8 污染（正本 4 源无一为空）
-    assert.equal(shadowRun.stats.local.empty_dropped, 0);
-    // would 链删除动作的逐条证据（R-06）：s1 整源裁决丢、s2 两条 score 删、
-    // s3 两条 score 删后整源 empty——按步序与表序排列；off 正本链零删除动作
-    // （矩阵片段指纹过少不判新颖度），故无 actual 条目
-    assert.deepEqual(shadowRun.stats.shadow_evidence, [
-      { chain: 'would', src: 's1', stage: 'source_verdict', reason: 'off_topic' },
-      { chain: 'would', src: 's2', snippet: '1', stage: 'snippet_score', reason: 'score' },
-      { chain: 'would', src: 's2', snippet: '2', stage: 'snippet_score', reason: 'score' },
-      { chain: 'would', src: 's3', snippet: '0', stage: 'snippet_score', reason: 'score' },
-      { chain: 'would', src: 's3', snippet: '1', stage: 'snippet_score', reason: 'score' },
-      { chain: 'would', src: 's3', stage: 'empty_source', reason: 'empty' },
-    ]);
-  });
-
-  // C-01 合成归并场景：三个来源，s2 / s3 同页归并并入 s1，归并片段的 index 与 s1
-  // 自有片段 A 的 index 同为 0——配对身份必须含 mergedFrom 才不撞键。指纹 F =
-  // {n:$4.2m, n:193x, d:march 2026, p:alpha capital, p:brave}；s0 额外带两个独有
-  // 指纹（p:beta ventures、n:77）保证 on 链殿后播种时仍 ≥ noveltyMin 幸存。
-  const mergePayload = (): BraveLlmContextResponse => ({
-    grounding: {
-      generic: [
-        {
-          url: 'https://other.example.com/a',
-          title: 'Funding Wire',
-          snippets: [
-            'At 193x speed and $4.2M in March 2026, Alpha Capital backed Brave; Beta Ventures committed 77 more.',
-          ],
-        },
-        {
-          url: 'https://example.com/post',
-          title: 'Funding Post',
-          snippets: [
-            'Brave raised $4.2M at 193x in March 2026 with Alpha Capital leading the round.',
-            'Brave maintains a public changelog for every release.',
-          ],
-        },
-        {
-          url: 'https://www.example.com/post/',
-          title: 'Funding Post (AMP)',
-          snippets: ['Brave and Alpha Capital team up for 193x speed.'],
-        },
-        {
-          url: 'https://example.com/post?utm_source=x',
-          title: 'Funding Post (tracked)',
-          snippets: ['Brave and Alpha Capital commit several more together.'],
-        },
-      ],
-      map: [],
-    },
-    sources: {},
-  });
-
-  const makeMergeClassify =
-    (counter: { calls: number }, primary: Record<string, number>): ClassifyDeps['classify'] =>
-    async ({ state }) => {
-      counter.calls += 1;
-      const answers: Record<string, JevAnswer> = {};
-      // 只定制 is_primary 控制播种序；来源级五题保持 0，来源裁决不干预本场景
-      for (const key of Object.keys(SOURCE_QUESTIONS)) {
-        answers[key] = {
-          kind: 'noul',
-          probability: key === 'is_primary' ? (primary[state.source.id] ?? 0) : 0,
-        };
-      }
-      for (const i of state.source.snippets.keys()) {
-        answers[`snip${i}`] = { kind: 'score', score: 1.5 };
-      }
-      return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
-    };
-
-  it('shadow: off-only novelty deletion of a self snippet paired by merged_from is a restore, not zero (C-01)', async () => {
-    // off 链 Brave 序 s0 先播种占 F → s1 自有片段 A（index 0，指纹全撞）novel=0
-    // 被新颖度删；归并片段 C / D 指纹 <4 不判，两链都留。on 链 s1（is_primary 0.9）
-    // 先播种 → A 全新保留。期望恢复 1 个片段（A）；旧 index+part 配对把归并片段
-    // （后写者）的 off 状态错配给 A，记 0。
-    const counter = { calls: 0 };
-    const offRun = await filterLlmContext(mergePayload(), request, offConfig);
-    const shadowRun = await filterLlmContext(
-      mergePayload(),
-      request,
-      { ...offConfig, mode: 'test' },
-      { classify: makeMergeClassify(counter, { s0: 0.1, s1: 0.9 }) }
-    );
-
-    // s1 的两个归并来源已并入，候选只有 s0 / s1
-    assert.equal(counter.calls, 2);
-    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, []);
-    assert.deepEqual(shadowRun.stats.shadow_diff?.would_restore, []);
-    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 0);
-    assert.equal(shadowRun.stats.shadow_diff?.would_restore_snippets, 1);
-    // 恢复类差异（would_restore_snippets=1）的解释证据在 actual 侧（F-02）：
-    // off 链判定当时 A 的逐片段数值——fp 7 ≥ min_facts 且 novel 0 < novelty_min；
-    // would 链零删除动作 → 无 would 条目
-    assert.deepEqual(shadowRun.stats.shadow_evidence, [
-      {
-        chain: 'actual',
-        src: 's1',
-        snippet: '0',
-        stage: 'novelty',
-        reason: 'novelty',
-        fp_count: 7,
-        novel_count: 0,
-      },
-    ]);
-    // 幸存内容保持 Brave 原序：shadow 输出仍与 off 逐字段相同（VERDICT-05）
-    assert.deepEqual(shadowRun.result, offRun.result);
-    // 统计投影里归并片段带 merged_from，且两个归并来源的片段不因同 index 相互覆盖
-    const merged = offRun.stats.sources[1].snippets.filter((row) => row.merged_from !== undefined);
+    assert.equal(testRun.stats.jev?.n_requests, 4);
+    // 裁决真实生效（04-01 单链语义，旧 shadow"只算不丢"行为退役）：s1 来源级
+    // off_topic 丢弃、s3 片段被 score 删光后步 8 清空、s2 两条低分片段删除
     assert.deepEqual(
-      merged.map((row) => [row.index, row.merged_from]),
+      testRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
       [
-        [0, 2],
-        [0, 3],
+        ['https://s0.example/', 2],
+        ['https://s2.example/', 1],
       ]
     );
+    // per_source 的 verdict/reason 记账：s1 drop + off_topic、s0 keep；s3 来源级
+    // keep（删光它的是后续本地规则步 8，不是 Jev 裁决）
+    const rowOf = (src: string) => testRun.stats.jev?.per_source.find((row) => row.src === src);
+    assert.equal(rowOf('s1')?.verdict, 'drop');
+    assert.equal(rowOf('s1')?.reason, 'off_topic');
+    assert.equal(rowOf('s0')?.verdict, 'keep');
+    assert.equal(rowOf('s3')?.verdict, 'keep');
+    // 新记录不再产生 would 层字段（shadow_diff 恒 null、shadow_evidence 键省略，
+    // 历史字段仅为读旧记录保留）
+    assert.equal(testRun.stats.shadow_diff, null);
+    assert.equal(testRun.stats.shadow_evidence, undefined);
+    // score 删光清空的来源按 'empty' 记账（无新颖度/跨源 dup 标记，不记 rewrite）
+    assert.equal(testRun.stats.local.empty_dropped, 1);
   });
 
-  it('shadow: identical off/on snippet verdicts with merged same-index snippets stay zero-diff (C-01)', async () => {
-    // s0 is_primary 0.9 两链都先播种占 F → A 两链都删、C / D 两链都留，off/on 裁决
-    // 完全相同 → 四字段必为零差异；旧 index+part 配对会把 A 的 on 删除错配到归并
-    // 片段的 off 幸存上，凭空记 would_remove_snippets=1。
+  it('test: output equals the on run field by field under the same classify (single chain)', async () => {
     const counter = { calls: 0 };
-    const offRun = await filterLlmContext(mergePayload(), request, offConfig);
-    const shadowRun = await filterLlmContext(
-      mergePayload(),
-      request,
-      { ...offConfig, mode: 'test' },
-      { classify: makeMergeClassify(counter, { s0: 0.9, s1: 0.1 }) }
-    );
-
-    assert.equal(counter.calls, 2);
-    assert.deepEqual(shadowRun.stats.shadow_diff, {
-      would_drop: [],
-      would_remove_snippets: 0,
-      would_restore: [],
-      would_restore_snippets: 0,
-    });
-    assert.deepEqual(shadowRun.result, offRun.result);
-    // 零差异但两链都有自己的删除动作（A 两链都被新颖度删）：证据带判定当时的
-    // 逐片段数值（R-06）——fp 7 ≥ min_facts 4 且 novel 0 < novelty_min 2，与阈值
-    // 快照对照即得"该删"；两边都发生的删除各有一条，证据清单不等同差异清单
-    assert.deepEqual(shadowRun.stats.shadow_evidence, [
-      {
-        chain: 'would',
-        src: 's1',
-        snippet: '0',
-        stage: 'novelty',
-        reason: 'novelty',
-        fp_count: 7,
-        novel_count: 0,
-      },
-      {
-        chain: 'actual',
-        src: 's1',
-        snippet: '0',
-        stage: 'novelty',
-        reason: 'novelty',
-        fp_count: 7,
-        novel_count: 0,
-      },
-    ]);
-  });
-
-  it('shadow: novelty numbers stay per-source for same-index snippets and dup actions carry no numbers (F-01)', async () => {
-    // 四来源：s0 占指纹 F；s1 / s2 的 0 号片段同号但 novel 数不同（1 与 0）——
-    // 数值缓存必须按 来源+配对身份 区分（F-01：修复前全局键让 s2/0 串用 s1/0 的
-    // 数值）；s3 的 0 号与 s0 片段逐字相同 → 跨源 dup 先于指纹删除，动作不带
-    // fp/novel 数值（修复前会读到 novelty 缓存的残留值）。
-    const f01Payload = (): BraveLlmContextResponse => ({
-      grounding: {
-        generic: [
-          {
-            url: 'https://f0.example/',
-            title: 'Facts',
-            snippets: [
-              'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency overall.',
-              'Brave ships weekly notes about the browser rollout plan.',
-            ],
-          },
-          {
-            url: 'https://f1.example/',
-            title: 'Rewrite One',
-            snippets: [
-              'the Brave build costs $4.2m and runs 193x faster with 40% less at version 1.14',
-              'Brave maintains a public changelog for every release.',
-            ],
-          },
-          {
-            url: 'https://f2.example/',
-            title: 'Rewrite Two',
-            snippets: [
-              'the Brave costs run 193x faster and 40% less latency overall at version 1.13 with $4.2m',
-              'Brave publishes detailed release notes for each update.',
-            ],
-          },
-          {
-            url: 'https://f3.example/',
-            title: 'Verbatim Copy',
-            snippets: [
-              'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency overall.',
-              'Brave keeps a timeline of every beta release.',
-            ],
-          },
-        ],
-        map: [],
-      },
-      sources: {},
-    });
-    const counter = { calls: 0 };
-    const offRun = await filterLlmContext(f01Payload(), request, offConfig);
-    const shadowRun = await filterLlmContext(
-      f01Payload(),
-      request,
-      { ...offConfig, mode: 'test' },
-      { classify: makeMergeClassify(counter, { s0: 0.9 }) }
-    );
-
-    assert.equal(counter.calls, 4);
-    // 两链判定一致 → 零差异；would 组在前、actual 组在后
-    assert.deepEqual(shadowRun.stats.shadow_diff, {
-      would_drop: [],
-      would_remove_snippets: 0,
-      would_restore: [],
-      would_restore_snippets: 0,
-    });
-    assert.deepEqual(shadowRun.result, offRun.result);
-    assert.deepEqual(shadowRun.stats.shadow_evidence, [
-      {
-        chain: 'would',
-        src: 's1',
-        snippet: '0',
-        stage: 'novelty',
-        reason: 'novelty',
-        fp_count: 5,
-        novel_count: 1,
-      },
-      {
-        chain: 'would',
-        src: 's2',
-        snippet: '0',
-        stage: 'novelty',
-        reason: 'novelty',
-        fp_count: 5,
-        novel_count: 0,
-      },
-      { chain: 'would', src: 's3', snippet: '0', stage: 'cross_source_dup', reason: 'dup' },
-      {
-        chain: 'actual',
-        src: 's1',
-        snippet: '0',
-        stage: 'novelty',
-        reason: 'novelty',
-        fp_count: 5,
-        novel_count: 1,
-      },
-      {
-        chain: 'actual',
-        src: 's2',
-        snippet: '0',
-        stage: 'novelty',
-        reason: 'novelty',
-        fp_count: 5,
-        novel_count: 0,
-      },
-      { chain: 'actual', src: 's3', snippet: '0', stage: 'cross_source_dup', reason: 'dup' },
-    ]);
-  });
-
-  it('on: output equals the would view applied, dropped sources absent, Brave order kept, shadow_diff null', async () => {
-    const counter = { calls: 0 };
-    const shadowRun = await filterLlmContext(
+    const testRun = await filterLlmContext(
       matrixPayload(),
       request,
       { ...offConfig, mode: 'test' },
@@ -1271,32 +1012,14 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     );
 
     assert.ok(counter.calls > 0);
+    // 同输入、同回放桩：test 与 on 共用同一链，输出与统计投影逐字段一致（04-CONTEXT）
+    assert.deepEqual(testRun.result, onRun.result);
+    assert.deepEqual(testRun.stats.sources, onRun.stats.sources);
+    assert.deepEqual(testRun.stats.local, onRun.stats.local);
     assert.equal(onRun.stats.shadow_diff, null);
-    // on 输出 = shadow 的 would 视图应用后的结果：would_drop 来源整源移除、
-    // 低 score 片段（score < SNIPPET_MIN）按夹具 snippet_scores 推导移除
-    const dropped = new Set(shadowRun.stats.shadow_diff?.would_drop ?? []);
-    const urlOf: Record<string, string> = {
-      s0: 'https://s0.example/',
-      s1: 'https://s1.example/',
-      s2: 'https://s2.example/',
-      s3: 'https://s3.example/',
-    };
-    const expectedGeneric = shadowRun.result.grounding.generic
-      .filter((item) => ![...dropped].some((id) => urlOf[id] === item.url))
-      .map((item) => {
-        const id = Object.keys(urlOf).find((key) => urlOf[key] === item.url);
-        const scores = SNIP_SCORES[id ?? ''] ?? [];
-        return {
-          ...item,
-          snippets: item.snippets.filter(
-            (_, i) => (scores[i] ?? 0) >= DEFAULT_THRESHOLDS.snippetMin
-          ),
-        };
-      });
-    assert.deepEqual(onRun.result.grounding.generic, expectedGeneric);
     // 具体形状：s0 两段全留、s1 整源丢、s2 剩第一条、s3 整源丢
     assert.deepEqual(
-      onRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
+      testRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
       [
         ['https://s0.example/', 2],
         ['https://s2.example/', 1],
@@ -1306,7 +1029,7 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     const data = matrixPayload();
     const inputUrls = data.grounding.generic.map((item) => item.url);
     let cursor = 0;
-    for (const url of onRun.result.grounding.generic.map((item) => item.url)) {
+    for (const url of testRun.result.grounding.generic.map((item) => item.url)) {
       const found = inputUrls.indexOf(url, cursor);
       assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
       cursor = found + 1;
@@ -1468,7 +1191,7 @@ describe('novelty and cross-source dup (02-04)', () => {
     assert.equal(stats.local.empty_dropped, 0);
   });
 
-  it('three modes keep Brave order while novelty applies off/on and stays would-only in shadow', async () => {
+  it('three modes keep Brave order while novelty seeding applies off Brave-order and test/on is-primary-order', async () => {
     const judgedAnswers = (primary: number): Record<string, JevAnswer> => {
       const answers: Record<string, JevAnswer> = {};
       for (const key of [
@@ -1498,7 +1221,7 @@ describe('novelty and cross-source dup (02-04)', () => {
     };
 
     const offRun = await filterLlmContext(noveltyPayload(), request, offConfig);
-    const shadowRun = await filterLlmContext(
+    const testRun = await filterLlmContext(
       noveltyPayload(),
       request,
       { ...offConfig, mode: 'test' },
@@ -1516,22 +1239,20 @@ describe('novelty and cross-source dup (02-04)', () => {
       offRun.result.grounding.generic.map((item) => item.url),
       ['https://origin.example/', 'https://unique.example/']
     );
-    // shadow：正本走与 off 完全相同的 off 链（输出与 off deepEqual，VERDICT-05）；
-    // would 层另在拷贝上按 is_primary 播种——s1（0.9）先播种幸存、s0（0.5）被判删，
-    // 两张表对比得 would_drop ['s0']；s0 整源进 would_drop，其片段不重复计
-    assert.deepEqual(shadowRun.result, offRun.result);
-    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s0']);
-    assert.equal(shadowRun.stats.shadow_diff?.would_remove_snippets, 0);
-    // on：is_primary 播种 → s1 先播种幸存、s0 被新颖度删除
+    // test：裁决真实生效（旧 shadow 正本走 off 链、输出与 off 相同的行为退役）——
+    // is_primary 播种 s1（0.9）先播种幸存、s0（0.5）被新颖度删除后整源记 rewrite
     assert.deepEqual(
-      onRun.result.grounding.generic.map((item) => item.url),
+      testRun.result.grounding.generic.map((item) => item.url),
       ['https://rewrite.example/', 'https://unique.example/']
     );
+    // test 与 on 共用同一链：输出逐字段一致
+    assert.deepEqual(testRun.result, onRun.result);
+    assert.equal(testRun.stats.shadow_diff, null);
     // 三模式输出都是 Brave 序子序列（幸存者不重排）
     const inputUrls = noveltyPayload().grounding.generic.map((item) => item.url);
     for (const outputUrls of [
       offRun.result.grounding.generic.map((item) => item.url),
-      shadowRun.result.grounding.generic.map((item) => item.url),
+      testRun.result.grounding.generic.map((item) => item.url),
       onRun.result.grounding.generic.map((item) => item.url),
     ]) {
       let cursor = 0;
@@ -1576,7 +1297,7 @@ describe('novelty and cross-source dup (02-04)', () => {
 
 // ---------------------------------------------------------------------------
 // 批 D（02-FIX）：32k 砍尾后没砍的片段分数照常生效；score 删掉部分片段后残余
-// 一句话来源仍要进 shadow 的 would_drop。
+// 一句话来源在 test 与 on 链下被步 8 丢弃。
 // ---------------------------------------------------------------------------
 
 describe('score alignment after the 32k cut_tail downgrade (02-FIX batch D)', () => {
@@ -1733,11 +1454,10 @@ describe('score alignment after the 32k cut_tail downgrade (02-FIX batch D)', ()
   });
 });
 
-describe('one-liner sources emptied by score still land in would_drop (02-FIX batch D2)', () => {
+describe('one-liner sources emptied by score are dropped in test mode (02-FIX batch D2)', () => {
   it('reports a source that keeps only one query-term-free snippet after scoring', async () => {
     // s1 两个片段：score 删掉含 query 实词的那条，只剩一条不含实词的短片段。
-    // off 链下它照常保留（off 不看 score）；on 链下步 8 判一句话来源丢掉。
-    // shadow 的 would_drop 必须记到它——这正是"按原因白名单推断"漏记的那一类。
+    // off 链下它照常保留（off 不看 score）；test 与 on 的链下步 8 判一句话来源丢掉。
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -1774,25 +1494,25 @@ describe('one-liner sources emptied by score still land in would_drop (02-FIX ba
     };
 
     const offRun = await filterLlmContext(data, request, offConfig);
-    const onRun = await filterLlmContext(data, request, { ...offConfig, mode: 'on' }, { classify });
-    const shadowRun = await filterLlmContext(
+    const testRun = await filterLlmContext(
       data,
       request,
       { ...offConfig, mode: 'test' },
       { classify }
     );
+    const onRun = await filterLlmContext(data, request, { ...offConfig, mode: 'on' }, { classify });
 
-    // off 保留 s1；on 把 s1 丢掉（score 删掉含实词片段后只剩一句话）
+    // off 保留 s1；test 与 on 把 s1 丢掉（score 删掉含实词片段后只剩一句话）
     assert.equal(
       offRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
       true
     );
     assert.equal(
-      onRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
+      testRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
       false
     );
-    // shadow 正本与 off 一致，would_drop 里必须有 s1
-    assert.deepEqual(shadowRun.result, offRun.result);
-    assert.deepEqual(shadowRun.stats.shadow_diff?.would_drop, ['s1']);
+    // test 与 on 共用同一链：输出逐字段一致；新记录不再产生 would 层字段
+    assert.deepEqual(testRun.result, onRun.result);
+    assert.equal(testRun.stats.shadow_diff, null);
   });
 });

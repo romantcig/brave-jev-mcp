@@ -54,7 +54,7 @@ const dropSnippet = (stats: FilterStats, sourceIndex: number, snippetIndex: numb
   stats.sources[sourceIndex].snippets[snippetIndex].kept = false;
 };
 
-/** 给 on/shadow 载体挂一份 Jev 记账（per_source 行按需给 status 与 fail_kind）。 */
+/** 给 on/test 载体挂一份 Jev 记账（per_source 行按需给 status 与 fail_kind）。 */
 const withJev = (
   stats: FilterStats,
   rows: Array<{
@@ -300,18 +300,18 @@ describe('buildStatusLine', () => {
     assert.equal(buildStatusLine(stats), '[filter] 1 source not checked by Jev (kept)');
   });
 
-  it('never adds the unchecked segment off or shadow, and skips it when everything is answered', () => {
+  it('never adds the unchecked segment off, and skips it when everything is answered', () => {
     // off：即使 per_source 缺行也不数未判定
     const offStats = statsOf('off');
     withJev(offStats, []);
     dropSource(offStats, 0, 'empty');
     assert.equal(buildStatusLine(offStats), '[filter] dropped 1 of 3 sources: 1 empty');
 
-    // shadow：与 off 同样不数（would 差异只进日志）
+    // test：与 on 同口径（mode !== 'off'，04-CONTEXT）——缺行算未判定，
+    // 不假装完成 Jev 检查
     const testStats = statsOf('test');
-    withJev(testStats, []);
-    dropSource(testStats, 0, 'empty');
-    assert.equal(buildStatusLine(testStats), '[filter] dropped 1 of 3 sources: 1 empty');
+    withJev(testStats, [{ src: 's0', status: 'answered' }]);
+    assert.equal(buildStatusLine(testStats), '[filter] 2 sources not checked by Jev (kept)');
 
     // on 且全部 answered、零丢弃零删除 → 不附
     const allAnswered = statsOf('on');
@@ -323,7 +323,7 @@ describe('buildStatusLine', () => {
     assert.equal(buildStatusLine(allAnswered), undefined);
   });
 
-  it('produces a byte-identical status line for shadow and off carriers of the same verdicts', () => {
+  it('produces a byte-identical status line for test and on carriers of the same verdicts', () => {
     const build = (mode: FilterStats['mode']): string => {
       const stats = statsOf(mode, {
         intent: 'current Sanity Studio (v6, sanity.config.ts based)',
@@ -331,15 +331,21 @@ describe('buildStatusLine', () => {
           { url: 'https://a.example/', snippets: ['one', 'two'] },
           { url: 'https://b.example/', snippets: ['three'] },
           { url: 'https://c.example/', snippets: ['four'] },
+          { url: 'https://d.example/', snippets: ['five'] },
         ],
       });
       dropSource(stats, 0, 'stale');
       dropSource(stats, 1, 'merged');
       dropSource(stats, 2, 'rewrite');
       dropSnippet(stats, 0, 1);
+      // 幸存的 d 来源未入 per_source：未判定段在 test/on 出现（同一裁决载体）
+      withJev(stats, []);
       return buildStatusLine(stats) ?? '';
     };
-    // D-07：shadow 的状态行与 off 逐字相同——生成只读实际生效链，绝不读 shadow_diff
-    assert.equal(build('test'), build('off'));
+    // test 状态行与 on 同规则（04-CONTEXT，旧 D-07"shadow 与 off 逐字相同"退役）：
+    // 同原因计数、同片段删除计数、同未判定段口径
+    assert.equal(build('test'), build('on'));
+    // off 绝不带未判定段——同载体下与 test/on 的差异恰在该段
+    assert.notEqual(build('off'), build('test'));
   });
 });
