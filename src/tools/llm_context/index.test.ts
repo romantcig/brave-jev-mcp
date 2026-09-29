@@ -477,9 +477,27 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     },
   };
 
+  // 全删除夹具：两个来源都只有空白片段 → 步 3 删光片段、步 8 全部丢弃 → 输出为空
+  const sampleAllDroppedResponse = {
+    grounding: {
+      generic: [
+        { url: 'https://void.example/one', title: 'Void One', snippets: ['   '] },
+        { url: 'https://void.example/two', title: 'Void Two', snippets: ['   '] },
+      ],
+      map: [],
+    },
+    sources: {
+      'https://void.example/one': { title: 'Void One', hostname: 'void.example', age: [] },
+      'https://void.example/two': { title: 'Void Two', hostname: 'void.example', age: [] },
+    },
+  };
+
   const getClient = useTestClient((url) => {
     if (url.pathname === '/res/v1/llm/context') {
-      return url.searchParams.get('q') === 'drop case' ? sampleDropResponse : sampleCleanResponse;
+      const q = url.searchParams.get('q');
+      if (q === 'drop case') return sampleDropResponse;
+      if (q === 'all drop case') return sampleAllDroppedResponse;
+      return sampleCleanResponse;
     }
     if (url.pathname === '/v1/systemone') return jevReplay;
   });
@@ -491,6 +509,30 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
     assert.equal(lines.length, 1);
     return JSON.parse(lines[0]) as Record<string, unknown>;
+  };
+
+  /** 读 logDir 下唯一样本（samples/<日期>/<文件>）。 */
+  const readSingleSample = (
+    logDir: string
+  ): { sample: Record<string, unknown>; sampleAbsPath: string } => {
+    const samplesDir = join(logDir, 'samples');
+    const dateDirs = readdirSync(samplesDir);
+    assert.equal(dateDirs.length, 1);
+    const files = readdirSync(join(samplesDir, dateDirs[0]));
+    assert.equal(files.length, 1);
+    const sampleAbsPath = join(samplesDir, dateDirs[0], files[0]);
+    return {
+      sample: JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as Record<string, unknown>,
+      sampleAbsPath,
+    };
+  };
+
+  /** 从返回第二块剥出 sample 绝对路径（无后缀返回 undefined）。 */
+  const samplePathOf = (content: { text: string }[]): string | undefined => {
+    if (content.length < 2) return undefined;
+    const marker = ' sample: ';
+    const at = content[1].text.indexOf(marker);
+    return at === -1 ? undefined : content[1].text.slice(at + marker.length);
   };
 
   it('writes a sample the status line points to, field-equal to the actual return, correlated by request_id', async () => {
@@ -618,6 +660,115 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     );
     assert.equal('sample' in record, false, 'off records carry no sample pointer');
+  });
+
+  it('coverage: zero-removal search still writes a sample with an all-equal final_return and no status line', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'test', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'brave browser', intent: INTENT }, // clean 夹具：零删除
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const content = result.content as { text: string }[];
+    // 零删除：无状态行第二块、无 sample 后缀——但样本照落（状态行无内容不加后缀）
+    assert.equal(content.length, 1);
+    assert.equal(samplePathOf(content), undefined);
+
+    const { sample } = readSingleSample(logDir);
+    const finalReturn = sample.final_return as { payload: unknown; status_line: string | null };
+    assert.equal(finalReturn.status_line, null);
+    // final_return 与实际返回逐字段一致（payload 无 output.status_line 可言——本就无状态行）
+    assert.deepEqual(finalReturn.payload, JSON.parse(content[0].text));
+  });
+
+  it('coverage: all-removed search returns empty, still writes a sample, and maps no candidates', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'test', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'all drop case', intent: INTENT },
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const content = result.content as { text: string }[];
+    // 过滤后为空返回空（不补回），状态行第二块仍在（2 of 2 丢弃）
+    const payload = JSON.parse(content[0].text) as {
+      grounding: { generic: unknown[] };
+      sources: Record<string, unknown>;
+      output: { status_line: string };
+    };
+    assert.deepEqual(payload.grounding.generic, []);
+    assert.deepEqual(payload.sources, {});
+    assert.match(payload.output.status_line, /dropped 2 of 2 sources: 2 empty/);
+    assert.ok(samplePathOf(content) !== undefined);
+
+    const { sample, sampleAbsPath } = readSingleSample(logDir);
+    assert.ok(existsSync(sampleAbsPath));
+    const finalReturn = sample.final_return as { payload: unknown; status_line: string };
+    assert.deepEqual(finalReturn.payload, payload);
+    // pre_filter 仍含全部来源；无候选可发 → sent 空表、逐源 skipped 占位
+    const preFilter = sample.pre_filter as { grounding: { generic: unknown[] } };
+    assert.equal(preFilter.grounding.generic.length, 2);
+    const jev = sample.jev as {
+      status: string;
+      per_source: Array<{ src: string; status: string }>;
+      sent: unknown[];
+    };
+    assert.equal(jev.status, 'ok');
+    assert.ok(jev.per_source.every((row) => row.status === 'skipped'));
+    assert.deepEqual(jev.sent, []);
+  });
+
+  it('coverage: concurrent requests land distinct sample files that never cross-write', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'test', log_dir: logDir });
+
+    const results = await Promise.all([
+      getClient().callTool({ name, arguments: { query: 'drop case', intent: INTENT } }),
+      getClient().callTool({ name, arguments: { query: 'all drop case', intent: INTENT } }),
+      getClient().callTool({ name, arguments: { query: 'drop case', intent: INTENT } }),
+    ]);
+
+    // 每个返回的状态行指向自己的样本：三份路径互不相同、文件都真实存在
+    const samplePaths = results.map((result) => {
+      const path = samplePathOf(result.content as { text: string }[]);
+      assert.ok(path !== undefined, 'each concurrent test-mode return must carry a sample path');
+      assert.ok(existsSync(path), `sample file must exist: ${path}`);
+      return path as string;
+    });
+    assert.equal(new Set(samplePaths).size, 3, 'request_id filenames must be unique');
+
+    // 每份样本的 final_return 与各自的实际返回逐字段一致（互不串写）
+    const sampleRequestIds = samplePaths.map((path, index) => {
+      const sample = JSON.parse(readFileSync(path, 'utf8')) as {
+        request_id: string;
+        final_return: { payload: unknown };
+      };
+      const payload = JSON.parse((results[index].content as { text: string }[])[0].text);
+      assert.deepEqual(sample.final_return.payload, payload, `sample #${index} cross-write check`);
+      return sample.request_id;
+    });
+    assert.equal(new Set(sampleRequestIds).size, 3);
+
+    // JSONL：三条记录、request_id 与三份样本一一对应（串行链不混账）
+    await flushWrites();
+    const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    assert.equal(files.length, 1);
+    const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 3);
+    const recordIds = lines.map((line) =>
+      String((JSON.parse(line) as Record<string, unknown>).request_id)
+    );
+    assert.deepEqual(
+      [...recordIds].sort(),
+      [...sampleRequestIds].sort(),
+      'JSONL request_ids must pair with the sample files'
+    );
+
+    // 清理：本用例的样本目录随 logDirs 统一清理，无额外动作
+    void readSingleSample;
   });
 });
 

@@ -23,7 +23,10 @@
  *   - off：片段总数 = off 期望（59）；日志 jev 严格为 null；桩侧 Jev 请求数 0
  *     （stderr 无 [smoke-replay] 行；桩对 off 下的 Jev 请求直接拒绝——E-03 双层闸）；
  *   - test：完整 content 数组与 on 那次独立 spawn 的结果逐字段相同（同夹具同预加载
- *     桩，04-01 单链语义的端到端互证，含每个 text 块）；per_source 断言（恰 12 行
+ *     桩，04-01 单链语义的端到端互证，含每个 text 块；比较前剥除状态行 sample 后缀
+ *     ——CONTEXT 允许 test 多出样本定位元信息，04-02）；状态行 sample 路径指向真实
+ *     存在的样本文件、样本 request_id 与该次 JSONL 记录相同、JSONL 信封
+ *     sample.status 为 saved（SC3 全链）；per_source 断言（恰 12 行
  *     全部 answered、无 fail_kind、十题答案与 snippet_scores 对齐录制真值）与 on
  *     同口径；新记录不再产生 shadow_diff（恒 null，字段仅为读旧记录保留）；
  *   - on：片段总数 = on 期望（61，由夹具契约差集推导：59 − 删 9 + 恢复 11）；
@@ -433,6 +436,10 @@ type SmokeLogRecord = {
   mode?: string;
   model_config?: string;
   model_reported?: string[];
+  /** 04-02 信封增量：与样本文件名三处同值 */
+  request_id?: string;
+  /** 04-02 信封增量：样本相对路径与记录状态（仅 test 模式出现） */
+  sample?: { path?: string; status?: string };
   request?: { query?: string; intent?: string };
   jev?: {
     n_requests?: number;
@@ -443,6 +450,19 @@ type SmokeLogRecord = {
   sources?: Array<{ url?: string; verdict?: string; snippets?: Array<{ kept?: boolean }> }>;
   output?: unknown;
   error?: unknown;
+};
+
+/** 样本记录里冒烟要看的切片（04-02；完整契约在 src/filter/sample.ts）。 */
+type SmokeSample = {
+  format_version?: number;
+  request_id?: string;
+  pre_filter?: { grounding?: { generic?: unknown[] } };
+  final_return?: { payload?: unknown; status_line?: string | null };
+  jev?: {
+    status?: string;
+    per_source?: unknown[];
+    sent?: Array<{ src?: string; snippets?: Array<{ snippet?: string; sent?: boolean }> }>;
+  } | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -608,9 +628,10 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       'return: output.n_snippets must equal the independently counted snippets'
     );
 
-    // --- 4. 状态行（D-02 形状 + D-08 同源 + D-06）---
+    // --- 4. 状态行（D-02 形状 + D-08 同源 + D-06；04-02 sample 后缀两态）---
     // default 夹具 off 无来源丢弃（12→12）只有片段删除（76→59）：dropped 段按
-    // D-04 条件可有可无，形状断言两态都接受；片段总数段必然在
+    // D-04 条件可有可无，形状断言两态都接受；片段总数段必然在；test 模式末尾可
+    // 多出 ` sample: <绝对路径>` 后缀（CONTEXT：样本定位元信息），off/on 绝不出现
     const statusLine = content[1]?.text;
     assert.ok(
       statusLine.startsWith('[filter] '),
@@ -619,9 +640,20 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     assert.ok(!statusLine.includes('\n'), 'status line: must be a single line');
     assert.match(
       statusLine,
-      /^\[filter\] (dropped \d+ of \d+ sources: .+; )?\d+ snippets? removed(; .+)?$/,
+      /^\[filter\] (dropped \d+ of \d+ sources: .+; )?\d+ snippets? removed(; .+)?( sample: .+)?$/,
       `status line: D-02 shape mismatch — ${statusLine}`
     );
+    if (runMode === 'test') {
+      assert.ok(
+        statusLine.includes(' sample: '),
+        `status line: test mode must carry the sample suffix — ${statusLine}`
+      );
+    } else {
+      assert.ok(
+        !statusLine.includes(' sample: '),
+        `status line: ${runMode} must not carry a sample suffix — ${statusLine}`
+      );
+    }
     assert.ok(
       !statusLine.includes('not checked by Jev'),
       `status line: the unchecked segment must not appear in ${runMode} (default fixture is fully answered) — ${statusLine}`
@@ -679,6 +711,15 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       expected.intent,
       'log: record must belong to this call (intent)'
     );
+    // 04-02 信封增量：request_id 对三档模式一致（与样本文件名关联的锚）
+    assert.match(
+      record.request_id ?? '',
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      'log: record must carry a request_id (04-02 envelope increment)'
+    );
+    if (runMode !== 'test') {
+      assert.equal(record.sample, undefined, `log: ${runMode} records carry no sample pointer`);
+    }
     assert.ok(
       !recordLeaksSnippet(recordText, snippetHead),
       `log: LOG-03 red line — snippet body prefix must not appear (${JSON.stringify(snippetHead)})`
@@ -790,6 +831,65 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       // 04-01 起旧影子双链退役：新记录不再产生 shadow_diff（恒 null，字段仅为读
       // 旧记录保留）——would 链若被意外复活，这里当场红
       assert.equal(record.shadow_diff, null, 'log: new records must not carry shadow_diff');
+
+      // --- 7.5 样本断言（04-02 SC3 全链，test 模式独有）---
+      if (runMode === 'test') {
+        const marker = ' sample: ';
+        const markerAt = statusLine.indexOf(marker);
+        assert.ok(markerAt !== -1, `sample: test status line must carry the path — ${statusLine}`);
+        const sampleAbsPath = statusLine.slice(markerAt + marker.length);
+        // 先写后返（SC3）：callTool 返回时样本文件必须已经真实存在——路径不存在
+        // 或文件缺失都说明写入顺序坏了
+        assert.ok(
+          existsSync(sampleAbsPath),
+          `sample: the status-line path must exist at return time — ${sampleAbsPath}`
+        );
+        const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
+        assert.equal(sample.format_version, 1, 'sample: format_version must be 1');
+        assert.equal(
+          sample.request_id,
+          record.request_id,
+          'sample: request_id must match the JSONL record (three-way correlation)'
+        );
+        assert.equal(
+          record.sample?.status,
+          'saved',
+          'sample: the JSONL envelope must record the sample as saved'
+        );
+        assert.ok(
+          sample.final_return?.payload !== undefined,
+          'sample: final_return payload must be present'
+        );
+        // final_return 与实际返回逐字段一致（含同一条 sample 路径的状态行）
+        assert.deepEqual(
+          sample.final_return?.payload,
+          payload,
+          'sample: final_return must be field-identical to the actual return'
+        );
+        assert.equal(
+          sample.final_return?.status_line,
+          statusLine,
+          'sample: status_line must equal the second text block'
+        );
+        // pre_filter 携带完整原始响应（schema 校验前捕获，未被管道修改）
+        assert.equal(
+          sample.pre_filter?.grounding?.generic?.length,
+          nRecordedSources,
+          'sample: pre_filter must carry the full pre-filter response'
+        );
+        // 实发映射：候选恰 12（本夹具全部来源 answered），片段全部标 sent
+        assert.equal(
+          sample.jev?.sent?.length,
+          nRecordedSources,
+          'sample: sent must cover every candidate source'
+        );
+        for (const entry of sample.jev?.sent ?? []) {
+          assert.ok(
+            (entry.snippets ?? []).every((snippet) => snippet.sent === true),
+            `sample: ${entry.src ?? '(missing src)'} snippets must all be sent in the fully-answered fixture`
+          );
+        }
+      }
     }
 
     // --- 8. stderr：日志写成功 + 桩零失败标记 + 桩侧 Jev 计数对账 ---
@@ -1115,14 +1215,35 @@ try {
       console.log(`smoke ${m}: all assertions passed`);
     }
     // T-04-01-2 双载体互证：test 与 on 的完整 content 数组逐字段相同（同夹具同
-    // 预加载桩，两模式各自独立 spawn）——含每个 text 块，不是只比第一个 JSON 块
+    // 预加载桩，两模式各自独立 spawn）——含每个 text 块，不是只比第一个 JSON 块。
+    // 04-02 修订：比较前剥除 test 的 sample 后缀（CONTEXT 允许 test 多出样本定位
+    // 元信息；两载体同法归一——JSON 块重序列化、状态行截断，两侧同函数处理）
     const testRun = runs.get('test');
     const onRun = runs.get('on');
     if (testRun !== undefined && onRun !== undefined) {
+      const stripSampleSuffix = (run: ModeResult): ModeResult => {
+        const content: ContentBlock[] = run.content.map((block) => ({ ...block }));
+        const jsonBlock = content[0];
+        if (jsonBlock?.type === 'text') {
+          const parsed = JSON.parse(jsonBlock.text) as { output?: { status_line?: string } };
+          const line = parsed.output?.status_line;
+          if (typeof line === 'string') {
+            const at = line.indexOf(' sample: ');
+            if (at !== -1) parsed.output.status_line = line.slice(0, at);
+          }
+          jsonBlock.text = JSON.stringify(parsed);
+        }
+        const statusBlock = content[1];
+        if (statusBlock?.type === 'text') {
+          const at = statusBlock.text.indexOf(' sample: ');
+          if (at !== -1) statusBlock.text = statusBlock.text.slice(0, at);
+        }
+        return { content };
+      };
       assert.deepEqual(
-        testRun.content,
-        onRun.content,
-        'test: full content array must be field-identical to the on run (same fixture, same stub, independent spawns)'
+        stripSampleSuffix(testRun),
+        stripSampleSuffix(onRun),
+        'test: full content array must be field-identical to the on run after stripping the sample suffix (same fixture, same stub, independent spawns)'
       );
     }
     if (modeFilter === undefined) {
