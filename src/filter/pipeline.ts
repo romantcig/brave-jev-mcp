@@ -522,18 +522,47 @@ export async function filterLlmContext(
 }
 
 /**
+ * 片段配对身份（04-02 样本映射用）：`{merged_from}:{index}` 前缀可省（无并入来源），
+ * JSON-LD 多段加 `.{part}`——与统计表 SnippetStats 的 index/part/merged_from 同源，
+ * 与旧证据类型的 snippetKey 同格式。
+ */
+const snippetKeyOf = (snippet: WorkSnippet): string =>
+  `${snippet.mergedFrom !== undefined ? `${snippet.mergedFrom}:` : ''}${snippet.index}` +
+  `${snippet.part !== undefined ? `.${snippet.part}` : ''}`;
+
+/** 候选集里的一条片段：配对身份 + 当前文本（04-02 样本实发映射的消费形状）。 */
+export type JevCandidateSnippetIdentity = { key: string; text: string };
+
+/** 候选集的带身份形状：02-01 的候选口径 + 片段配对身份（04-02）。 */
+export type JevCandidateDetailed = {
+  id: string;
+  url: string;
+  title: string;
+  snippets: JevCandidateSnippetIdentity[];
+};
+
+/** 带身份候选 → 纯文本候选（探测/重录与步 5 派发的既有消费形状）。 */
+const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
+  detailed.map(({ id, url, title, snippets }) => ({
+    id,
+    url,
+    title,
+    snippets: snippets.map((snippet) => snippet.text),
+  }));
+
+/**
  * 工作表 → Jev 候选集：`verdict === 'keep'` 且幸存片段 ≥ 1 的来源。`id` 取
  * `s{source.index}`（与探测脚本 `s0..s11` 约定一致），`url` / `title` 用工作表
- * 原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段），
- * 顺序即表序（Brave 原序）。只读表，不翻标记、不重排（RULES-08）。
+ * 原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段）
+ * 及其配对身份，顺序即表序（Brave 原序）。只读表，不翻标记、不重排（RULES-08）。
  */
-const jevCandidatesFromTable = (table: WorkSource[]): JevCandidate[] => {
-  const candidates: JevCandidate[] = [];
+const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => {
+  const candidates: JevCandidateDetailed[] = [];
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
     const snippets = source.snippets
       .filter((snippet) => snippet.kept)
-      .map((snippet) => snippet.text);
+      .map((snippet) => ({ key: snippetKeyOf(snippet), text: snippet.text }));
     if (snippets.length < 1) continue;
     candidates.push({ id: `s${source.index}`, url: source.url, title: source.title, snippets });
   }
@@ -575,7 +604,7 @@ const runJevStage = async (
     per_source: [],
   };
   const sourceKeys = Object.keys(SOURCE_QUESTIONS);
-  const candidates = jevCandidatesFromTable(table);
+  const candidates = toPlainCandidates(jevCandidatesFromTable(table));
 
   // 先按表序给每个 keep 来源立 skipped 占位行，候选来源派发后覆盖——per_source
   // 天然保持 Brave 原序（RULES-08），顺序由 Map 的插入序保证
@@ -641,6 +670,11 @@ const runJevStage = async (
         input_tokens: outcome.input_tokens,
         latency_ms: latencyMs,
         ...(outcome.ladder !== undefined ? { ladder: outcome.ladder } : {}),
+        // 升降级生效时记录实际发送的片段数（04-02 样本映射对齐用；与 ladder 同
+        // 条件出现——snippet_scores 缺失时它是对齐实发范围的唯一依据）
+        ...(outcome.ladder !== undefined && outcome.sent_snippets !== undefined
+          ? { sent_snippets: outcome.sent_snippets }
+          : {}),
       });
     } else if (outcome.kind === 'breaker_open') {
       // 熔断短路：不发真实请求，不计 n_requests（SAFE-02 记账口径）
@@ -720,13 +754,28 @@ const runOffChain = (
  * `jevCandidatesFromTable`）。
  *
  * 纯函数：`buildWorkTable` 建工作表、一次性 stats 只作步 1–4 计数载体（用后即弃，
- * 不返回）、不改输入。
+ * 不返回）、不改输入。04-02 起样本记录经 `collectJevCandidatesDetailed` 取同一
+ * 口径的带身份版本（片段配对身份只有工作表知道，字符串数组签名给不出）。
  */
 export function collectJevCandidates(
   data: BraveLlmContextResponse,
   request: { params: FilterRequest; intent: string },
   config: FilterConfig
 ): JevCandidate[] {
+  return toPlainCandidates(collectJevCandidatesDetailed(data, request, config));
+}
+
+/**
+ * 带身份版候选集收集（04-02）：与 `collectJevCandidates` 完全同一口径（同一纯函数
+ * 链、同一输入），只是片段带 `key` 配对身份（`{merged_from}:{index}` 前缀可省、
+ * JSON-LD 多段加 `.{part}`）。样本记录用它构建实发 state 映射——与步 5 同一纯函数
+ * 同一输入，天然同口径。
+ */
+export function collectJevCandidatesDetailed(
+  data: BraveLlmContextResponse,
+  request: { params: FilterRequest; intent: string },
+  config: FilterConfig
+): JevCandidateDetailed[] {
   const table = buildWorkTable(data);
   const stats = createFilterStats('off', toStatsRequest(request, config), data);
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);

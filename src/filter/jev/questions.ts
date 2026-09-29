@@ -13,6 +13,7 @@
  * （阈值与兜底初值）、02-RESEARCH.md「题库 v3」。
  */
 
+import { createHash } from 'node:crypto';
 import type { JevQuestion, JevState, JevThresholds } from '../types.js';
 
 /**
@@ -89,6 +90,18 @@ export const DEFAULT_JEV_TIMEOUT_MS = 15000;
 
 /** 进程级并发闸初值（JEV-04；02-05 的 createJevClassifier 闭包消费，一波全发）。 */
 export const DEFAULT_JEV_CONCURRENCY = 12;
+
+/**
+ * 题库版本标识（04-02 样本记录）：对总指令、十道来源级题与片段级三档 legend 的
+ * 规范化 JSON（数组包裹、对象键固定序——模块求值顺序即序列化顺序）做 SHA-256，
+ * 取前 12 个十六进制字符。题库任何改动（题干、键名、legend、总指令）都会让本值
+ * 变化——样本里记下它，配合 git 历史即可取得该版本完整题目；改题目必须重调 Jev
+ * 不能沿用旧回答冒充新题结果，本值就是对账锚。
+ */
+export const QUESTION_SET_ID = createHash('sha256')
+  .update(JSON.stringify([GLOBAL_INSTRUCTION, SOURCE_QUESTIONS, SNIPPET_LEVELS]))
+  .digest('hex')
+  .slice(0, 12);
 
 /**
  * 构造单来源 state：官方"context rot"规则——state 里只放问题需要的东西

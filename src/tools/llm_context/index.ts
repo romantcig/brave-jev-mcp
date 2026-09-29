@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { TextContent, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import API from '../../BraveAPI/index.js';
@@ -14,6 +15,7 @@ import {
   applyOverfetch,
   createJevClassifier,
   createLogWriter,
+  createSampleWriter,
   filterLlmContext,
   hasJevKey,
   loadFilterConfig,
@@ -22,13 +24,16 @@ import {
   withAdjustments,
 } from '../../filter/index.js';
 import type {
+  AllocatedSamplePath,
   ClassifyDeps,
   FilterConfig,
   FilterDeps,
   FilteredResponse,
   FilterResult,
   FilterStats,
+  LogWriteMeta,
   LogWriter,
+  SampleWriter,
 } from '../../filter/index.js';
 
 export const name = 'brave_llm_context';
@@ -108,14 +113,27 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
 // 生命周期。
 let logWriter: LogWriter | undefined;
 
+// 进程级样本写入器惰性单例（04-02，test 模式独有）：off / on 完全不创建、不分配
+// 路径、不写样本。与 logWriter 同生命周期——路径分配（allocatePath）在请求内
+// 完成，进程级状态（程序版本号）住 createSampleWriter 闭包。
+let sampleWriter: SampleWriter | undefined;
+
+const sampleWriterFor = (config: FilterConfig): SampleWriter | undefined => {
+  if (config.mode !== 'test') return undefined;
+  sampleWriter ??= createSampleWriter(config);
+  return sampleWriter;
+};
+
 /**
- * 仅供测试：清掉配置、分类器、日志写入器的进程级惰性单例与缺 key 告警标记，
- * 让下一次调用重新读环境 / 配置。生产代码不得调用（"读一次"语义靠不清除保证）。
+ * 仅供测试：清掉配置、分类器、日志与样本写入器的进程级惰性单例与缺 key 告警
+ * 标记，让下一次调用重新读环境 / 配置。生产代码不得调用（"读一次"语义靠不清除
+ * 保证）。
  */
 export const resetFilterStateForTest = (): void => {
   filterConfig = undefined;
   jevClassifier = undefined;
   logWriter = undefined;
+  sampleWriter = undefined;
   noKeyWarned = false;
 };
 
@@ -129,6 +147,15 @@ export const execute = async (params: QueryParams) => {
   // 逐请求 JSONL 日志（D-16 三档模式都写，错误请求也落账）：写入失败 fail-open，
   // 绝不影响搜索返回（D-14）。
   const writer = (logWriter ??= createLogWriter(config));
+
+  // 样本写入器（04-02，test 模式独有）：off / on 不创建单例、不分配路径、不捕获。
+  const samples = sampleWriterFor(config);
+  // 每请求唯一 request_id：样本文件名、JSONL 信封、（test 模式的）状态行路径
+  // 三处同值——样本与常规 JSONL 日志以同一 request_id 关联（SC3）。
+  const requestId = randomUUID();
+  // 先分配路径（PRD 写入顺序第一步）；allocatePath 捕获的锚点 Date 同时锚定样本
+  // ts 与目录日期（B-01）。
+  const samplePath: AllocatedSamplePath | undefined = samples?.allocatePath(requestId);
 
   // Brave 请求计时（D-10）：计时点在适配行——API.issueRequest 前后，差值回填进
   // stats.brave.latency_ms；Brave 报错时不回填（无 stats，走错误记录）。
@@ -144,10 +171,14 @@ export const execute = async (params: QueryParams) => {
       message: requestError instanceof Error ? requestError.message : String(requestError),
       query: params.query,
       intent: params.intent,
+      requestId,
     });
     throw requestError;
   }
   const braveLatencyMs = Date.now() - braveStartedAt;
+  // 捕获点（SC2）：JSON 解析之后、schema 校验之前对响应做 structuredClone 快照——
+  // 此后无人改写 response，克隆只为所有权隔离；off / on 不捕获（undefined）。
+  const preFilter: unknown = samples !== undefined ? structuredClone(response) : undefined;
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
   // 成功时接住统计对象：状态行第二块与 JSONL 日志都从它出（LOG-01/LOG-02）；
   // 失败（zod 校验失败，stage 'schema'）无 stats。
@@ -161,15 +192,61 @@ export const execute = async (params: QueryParams) => {
       jevDepsFor(config)
     );
     filtered.stats.brave.latency_ms = braveLatencyMs;
+    // test 模式状态行末尾追加 sample 后缀（SC3）：路径已分配、文件即将先写后返；
+    // status_line 尚无内容（零删除）时不加后缀——样本照落。第二块与 JSON 块内
+    // output.status_line 都从 stats.output.status_line 出（D-08 同源不破）。
+    const sampleSuffix =
+      samplePath !== undefined ? ` sample: ${samplePath.absolute}` : '';
+    if (
+      sampleSuffix !== '' &&
+      typeof filtered.stats.output.status_line === 'string'
+    ) {
+      filtered.stats.output.status_line += sampleSuffix;
+    }
     // 第一个 JSON 块在过滤结果之上附加统计摘要（stats.output，含 status_line）：
     // 状态行第二块与 JSON 块内 output.status_line 逐字同源（D-08/LOG-03 红线），
-    // 模型也能直接读到幸存规模与 token 估算。
-    const enriched: FilteredResponse & { output: FilterStats['output'] } = {
-      ...filtered.result,
-      output: filtered.stats.output,
-    };
-    payload = withAdjustments(enriched, raised);
-    writer.write(filtered.stats);
+    // 模型也能直接读到幸存规模与 token 估算。闭包封装：写入失败剥后缀后重建。
+    const buildPayload = (): unknown =>
+      withAdjustments(
+        {
+          ...filtered!.result,
+          output: filtered!.stats.output,
+        } as FilteredResponse & { output: FilterStats['output'] },
+        raised
+      );
+    payload = buildPayload();
+    // 先写后返（SC3）：样本写成功才带着 sample 后缀返回；写失败剥后缀照常返回
+    // 搜索内容、stderr 一行、JSONL 记 failed——绝不返回仿佛文件已存在的路径。
+    if (samples !== undefined && samplePath !== undefined) {
+      const outcome = samples.save({
+        requestId,
+        path: samplePath,
+        originalParams: { ...params } as Record<string, unknown>,
+        braveParams: { ...braveParams } as Record<string, unknown>,
+        filterParams: parsedParams,
+        intent: params.intent,
+        preFilter,
+        stats: filtered.stats,
+        payload,
+        statusLine: filtered.stats.output.status_line ?? null,
+      });
+      if (outcome.status === 'failed') {
+        // 剥后缀：第二块与 JSON 块同源剥除（D-08 不破），返回内容不含 sample 路径
+        const line = filtered.stats.output.status_line;
+        if (sampleSuffix !== '' && typeof line === 'string' && line.endsWith(sampleSuffix)) {
+          filtered.stats.output.status_line = line.slice(0, line.length - sampleSuffix.length);
+        }
+        payload = buildPayload();
+      }
+      // JSONL 信封：request_id + 样本指针（saved / failed 都如实记）
+      const meta: LogWriteMeta = {
+        requestId,
+        sample: { path: samplePath.relative, status: outcome.status },
+      };
+      writer.write(filtered.stats, meta);
+    } else {
+      writer.write(filtered.stats, { requestId });
+    }
   } else {
     payload = z.treeifyError(error);
     writer.writeError({
@@ -177,6 +254,7 @@ export const execute = async (params: QueryParams) => {
       message: error instanceof Error ? error.message : String(error),
       query: params.query,
       intent: params.intent,
+      requestId,
     });
   }
 

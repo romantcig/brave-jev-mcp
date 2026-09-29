@@ -187,6 +187,12 @@ export type JevPerSourceStats = {
   answers?: Record<string, number>;
   /** 片段 score，snip0..snipN 顺序，与 state 片段序对齐 */
   snippet_scores?: number[];
+  /**
+   * 升降级生效时实际带片段题发送的片段数（与 ladder 同条件出现；未降级省略——
+   * 片段题数即候选全长）。样本记录（04-02）在 snippet_scores 缺失时（回答收到
+   * 但分数不全）用它对齐实发片段范围——绝不让样本映射靠原始序号猜。
+   */
+  sent_snippets?: number;
   /** 来源级裁决（02-03 落地；test 与 on 同一记账形状） */
   verdict?: 'keep' | 'drop';
   reason?: SourceDropReason;

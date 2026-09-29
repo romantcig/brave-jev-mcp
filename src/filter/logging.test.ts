@@ -296,4 +296,47 @@ describe('createLogWriter', () => {
       assert.equal(records[0].mode, mode);
     }
   });
+
+  it('carries request_id and the sample pointer in the envelope when meta is given (04-02)', async () => {
+    const dir = join(logDir, 'sample-pointer');
+    const writer = createLogWriter(configOf('test', dir));
+    writer.write(statsOf('test'), {
+      requestId: 'aaaaaaaa-1111-2222-3333-444444444444',
+      sample: { path: 'samples/2026-09-29/aaaaaaaa-1111-2222-3333-444444444444.json', status: 'saved' },
+    });
+    await flushWrites();
+
+    const record = readRecords(dir).at(-1) as Record<string, unknown>;
+    assert.equal(record.request_id, 'aaaaaaaa-1111-2222-3333-444444444444');
+    assert.deepEqual(record.sample, {
+      path: 'samples/2026-09-29/aaaaaaaa-1111-2222-3333-444444444444.json',
+      status: 'saved',
+    });
+  });
+
+  it('omits request_id and sample keys for legacy-style calls without meta', async () => {
+    const dir = join(logDir, 'legacy-envelope');
+    createLogWriter(configOf('off', dir)).write(statsOf('off'));
+    await flushWrites();
+
+    const record = readRecords(dir).at(-1) as Record<string, unknown>;
+    assert.equal('request_id' in record, false);
+    assert.equal('sample' in record, false);
+  });
+
+  it('carries request_id on error records when provided (04-02)', async () => {
+    const dir = join(logDir, 'error-request-id');
+    createLogWriter(configOf('test', dir)).writeError({
+      stage: 'brave',
+      message: '500 Internal Server Error',
+      query: 'test query',
+      intent: 'test intent',
+      requestId: 'bbbbbbbb-1111-2222-3333-444444444444',
+    });
+    await flushWrites();
+
+    const record = readRecords(dir).at(-1) as Record<string, unknown>;
+    assert.equal(record.request_id, 'bbbbbbbb-1111-2222-3333-444444444444');
+    assert.equal((record.error as { stage: string }).stage, 'brave');
+  });
 });

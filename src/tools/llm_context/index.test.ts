@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { connectTestClient, useTestClient } from '../../testUtils/mcpTestHarness.js';
 import { JEV_CONFIG_FILE_ENV } from '../../filter/config.js';
@@ -384,6 +384,237 @@ describe(`${name} (status line and JSONL log)`, () => {
     // 过滤前 token 估算（TOOLS-04）：与 output.est_tokens 同一估算口径，过滤只删不增
     assert.ok(record.brave.est_tokens > 0);
     assert.ok(record.brave.est_tokens >= record.output.est_tokens);
+  });
+});
+
+describe(`${name} (test mode sample recording, 04-02)`, () => {
+  useIsolatedFilterEnv();
+
+  const INTENT = 'What Brave Search is and how it differs from other engines';
+  // 假 key 常量（照 dev/smoke_stdio.ts 的 FAKE_JEV_KEY 同式）：fetch 全程被桩拦截，
+  // 占位假 key 不出网；用常量引用而非内联字面量，key 泄漏闸的字面形状零命中
+  const FAKE_SAMPLE_KEY = 'test-sample-key';
+  const logDirs: string[] = [];
+  let savedKey: string | undefined;
+
+  before(() => {
+    // 样本链路要 Jev 分类器真实创建（no_key 会有另一条专用断言）
+    savedKey = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = FAKE_SAMPLE_KEY;
+  });
+
+  after(() => {
+    if (savedKey === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = savedKey;
+    for (const dir of logDirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  const newLogDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'jev-sample-log-'));
+    logDirs.push(dir);
+    return dir;
+  };
+
+  const flushWrites = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+  /** Jev 回放桩：十道来源级题全 0（保留）、片段分全 2（保留）——对 ≤3 片段的夹具通吃。 */
+  const jevReplay = {
+    model: 'jev-1.13.0',
+    answers: {
+      worth_keeping: { type: 'noul', noul: 0 },
+      is_primary: { type: 'noul', noul: 0 },
+      has_original_reasoning: { type: 'noul', noul: 0 },
+      is_attributed_rewrite: { type: 'noul', noul: 0 },
+      is_template_filler: { type: 'noul', noul: 0 },
+      is_off_topic: { type: 'noul', noul: 0 },
+      is_listing: { type: 'noul', noul: 0 },
+      self_deprecated: { type: 'noul', noul: 0 },
+      stale: { type: 'noul', noul: 0 },
+      paywalled: { type: 'noul', noul: 0 },
+      snip0: { type: 'score', score: 2 },
+      snip1: { type: 'score', score: 2 },
+      snip2: { type: 'score', score: 2 },
+    },
+    usage: { input_tokens: 42, output_tokens: 3 },
+  };
+
+  // Brave 桩：drop case 有一个空来源（步 8 丢弃——样本 pre_filter 必须仍含它）；
+  // clean case 无任何删除。
+  const sampleDropResponse = {
+    grounding: {
+      generic: [
+        {
+          url: 'https://good.example/post',
+          title: 'Good Post',
+          snippets: [
+            'A real snippet with enough content to survive every local rule in the pipeline. '.repeat(
+              3
+            ),
+          ],
+        },
+        { url: 'https://empty.example/', title: 'Empty Page', snippets: ['   '] },
+      ],
+      map: [],
+    },
+    sources: {
+      'https://good.example/post': { title: 'Good Post', hostname: 'good.example', age: [] },
+      'https://empty.example/': { title: 'Empty Page', hostname: 'empty.example', age: [] },
+    },
+  };
+  const sampleCleanResponse = {
+    grounding: {
+      generic: [
+        {
+          url: 'https://search.brave.com/',
+          title: 'Brave Search',
+          snippets: ['Brave is a privacy-focused browser and search engine.'],
+        },
+      ],
+      map: [],
+    },
+    sources: {
+      'https://search.brave.com/': { title: 'Brave Search', hostname: 'search.brave.com', age: [] },
+    },
+  };
+
+  const getClient = useTestClient((url) => {
+    if (url.pathname === '/res/v1/llm/context') {
+      return url.searchParams.get('q') === 'drop case' ? sampleDropResponse : sampleCleanResponse;
+    }
+    if (url.pathname === '/v1/systemone') return jevReplay;
+  });
+
+  /** 读唯一 .jsonl 的首条记录。 */
+  const firstRecord = (logDir: string): Record<string, unknown> => {
+    const files = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    assert.equal(files.length, 1);
+    const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    return JSON.parse(lines[0]) as Record<string, unknown>;
+  };
+
+  it('writes a sample the status line points to, field-equal to the actual return, correlated by request_id', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'test', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'drop case', intent: INTENT },
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const content = result.content as { text: string }[];
+    assert.equal(content.length, 2);
+
+    // 状态行末尾 sample: <绝对路径>，指向真实存在的文件（SC3）
+    const statusLine = content[1].text;
+    const marker = ' sample: ';
+    const markerAt = statusLine.indexOf(marker);
+    assert.ok(markerAt !== -1, `status line must carry the sample path: ${statusLine}`);
+    const sampleAbsPath = statusLine.slice(markerAt + marker.length);
+    assert.ok(existsSync(sampleAbsPath), `sample file must exist: ${sampleAbsPath}`);
+
+    type SampleShape = {
+      format_version: number;
+      request_id: string;
+      pre_filter: { grounding: { generic: Array<{ url: string }> } };
+      final_return: { payload: unknown; status_line: string | null };
+      jev: {
+        status: string;
+        per_source: Array<{ src: string; status: string }>;
+        sent: Array<{ src: string; snippets: Array<{ snippet: string; sent: boolean }> }>;
+      };
+    };
+    const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
+    assert.equal(sample.format_version, 1);
+    assert.match(sample.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+    // pre_filter 含后来被删的来源（schema 校验前捕获、未被管道修改）
+    assert.deepEqual(
+      sample.pre_filter.grounding.generic.map((item) => item.url),
+      ['https://good.example/post', 'https://empty.example/']
+    );
+
+    // final_return 与实际返回逐字段一致（payload 含同一条 sample 路径的状态行）
+    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
+    assert.deepEqual(sample.final_return.payload, payload);
+    assert.equal(sample.final_return.status_line, statusLine);
+    assert.equal(payload.output.status_line, statusLine);
+
+    // jev 判断与实发映射：s0 answered、空源 s1 skipped；候选只有 s0
+    assert.equal(sample.jev.status, 'ok');
+    const rows = new Map(sample.jev.per_source.map((row) => [row.src, row.status]));
+    assert.equal(rows.get('s0'), 'answered');
+    assert.equal(rows.get('s1'), 'skipped');
+    assert.deepEqual(
+      sample.jev.sent.map((entry) => entry.src),
+      ['s0']
+    );
+    assert.deepEqual(
+      sample.jev.sent[0].snippets.map((snippet) => [snippet.snippet, snippet.sent]),
+      [['0', true]]
+    );
+
+    // JSONL 关联：request_id 三处同值（样本文件名 / 信封 / 记录），信封指针 saved
+    await flushWrites();
+    const record = firstRecord(logDir);
+    assert.equal(record.request_id, sample.request_id);
+    assert.ok(sampleAbsPath.endsWith(`${sample.request_id}.json`));
+    // 信封记相对 log_dir 路径：samples/<日期>/<request_id>.json（正斜杠口径）
+    const relativePath = `samples/${basename(dirname(sampleAbsPath))}/${sample.request_id}.json`;
+    assert.deepEqual(record.sample, { path: relativePath, status: 'saved' });
+  });
+
+  it('test and on tool returns are field-identical once the status-line sample suffix is stripped', async () => {
+    const args = { query: 'drop case', intent: INTENT };
+    const logDirTest = newLogDir();
+    useFilterConfig({ mode: 'test', log_dir: logDirTest });
+    const testResult = await getClient().callTool({ name, arguments: args });
+
+    const logDirOn = newLogDir();
+    useFilterConfig({ mode: 'on', log_dir: logDirOn });
+    const onResult = await getClient().callTool({ name, arguments: args });
+
+    // SC1 验收口径：比较前剥除状态行 sample 后缀（两载体：第二块文本与 JSON 块内
+    // output.status_line），其余必须逐字段全等
+    const normalize = (result: unknown): { payload: unknown; statusLine: string } => {
+      const content = (result as { content: { text: string }[] }).content;
+      const payload = JSON.parse(content[0].text) as { output?: { status_line?: string } };
+      const cut = (line: string | undefined): string => {
+        const at = line?.indexOf(' sample: ') ?? -1;
+        return at === -1 || line === undefined ? (line ?? '') : line.slice(0, at);
+      };
+      if (payload.output?.status_line !== undefined) {
+        payload.output.status_line = cut(payload.output.status_line);
+      }
+      return { payload, statusLine: cut(content[1]?.text) };
+    };
+    assert.deepEqual(normalize(testResult), normalize(onResult));
+
+    // on 模式本来就没有后缀（剥除是 no-op）——顺带锁住
+    const onPayload = JSON.parse(
+      (onResult as { content: { text: string }[] }).content[0].text
+    ) as { output: { status_line: string } };
+    assert.ok(!onPayload.output.status_line.includes(' sample: '));
+  });
+
+  it('off mode never allocates or writes samples but still carries request_id in the JSONL envelope', async () => {
+    const logDir = newLogDir();
+    useFilterConfig({ mode: 'off', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'drop case', intent: INTENT },
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+
+    await flushWrites();
+    assert.equal(existsSync(join(logDir, 'samples')), false, 'off must not create samples dir');
+    const record = firstRecord(logDir);
+    assert.match(
+      String(record.request_id),
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+    assert.equal('sample' in record, false, 'off records carry no sample pointer');
   });
 });
 

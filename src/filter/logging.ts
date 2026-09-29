@@ -18,7 +18,14 @@
  * 旧记录仍可复现裁决）。`mode` 已在 stats 里，成功记录的信封不重复。
  *
  * 红线（LOG-03/D-12）：绝不写片段正文——只存 URL、标题、指纹、概率、分数、计数
- * 与标记；FilterStats 类型不含正文即证明，信封也不得加任何片段字段。
+ * 与标记；FilterStats 类型不含正文即证明，信封也不得加任何片段字段。test 模式
+ * 的完整样本（04-02）是**另一载体、另有契约**——正文只进 log_dir/samples/ 下的
+ * 独立 JSON 文件，绝不经由本写入器进 JSONL；JSONL 信封只记样本的相对路径与
+ * 记录状态（`sample` 指针）。
+ *
+ * 关联（04-02）：`write` / `writeError` 的信封带调用方生成的 `request_id`，
+ * 与样本文件名三处同值——样本与常规 JSONL 日志以同一 request_id 关联；`sample`
+ * 指针仅 test 模式且适配行传入时出现。旧记录缺这两个键，读取按缺省处理。
  *
  * 写入（D-13，Windows 多进程实测口径，03-RESEARCH 六问 2）：
  * - 文件按**本地**日期滚动 `YYYY-MM-DD.jsonl`（必须用本地 getter，UTC 系列差时区）；
@@ -42,31 +49,51 @@ import type { FilterConfig, FilterStats } from './types.js';
 /** 错误请求记录的 stage：Brave 请求层失败 / 响应 schema 校验失败。 */
 export type LogErrorStage = 'brave' | 'schema';
 
+/** 样本指针（04-02）：JSONL 信封里的样本相对路径与记录状态；仅 test 模式出现。 */
+export type LogSamplePointer = { path: string; status: 'saved' | 'failed' };
+
+/** write 的可选第二参数：request_id 与样本指针（旧调用缺省——记录不产这两个键）。 */
+export type LogWriteMeta = { requestId: string; sample?: LogSamplePointer };
+
 /** 日志写入器：成功请求与错误请求两种落账入口，共用同一条串行写入链。 */
 export type LogWriter = {
   /**
    * 成功请求：信封 + FilterStats 整体展开（D-09）。所有权约定（B-03）：落盘走
    * 异步串行链、序列化发生在链回调里——`write` 返回后调用方不得再修改 stats
    * （浅拷贝不隔离嵌套对象）；当前适配行在入队后不再改写任何字段。
+   * `meta` 缺省时不产 `request_id` / `sample` 键（兼容旧调用形状）。
    */
-  write(stats: FilterStats): void;
-  /** 错误请求（无 stats 主体）：信封 + request + error 标记。 */
-  writeError(entry: { stage: LogErrorStage; message: string; query: string; intent: string }): void;
+  write(stats: FilterStats, meta?: LogWriteMeta): void;
+  /** 错误请求（无 stats 主体）：信封 + request + error 标记；requestId 缺省不产键。 */
+  writeError(entry: {
+    stage: LogErrorStage;
+    message: string;
+    query: string;
+    intent: string;
+    requestId?: string;
+  }): void;
 };
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
+/**
+ * 本地日期戳 `YYYY-MM-DD`（本地 getter，UTC 系列会差时区）。JSONL 按天滚动文件名
+ * 与样本按日期子目录（04-02）共用同一构造，不复制粘贴。
+ */
+export const localDateStamp = (now: Date): string =>
+  `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+
 /** 本地日期文件名 `YYYY-MM-DD.jsonl`：本地 getter（UTC 系列会差时区）。 */
-const logFileName = (now: Date): string =>
-  `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}.jsonl`;
+const logFileName = (now: Date): string => `${localDateStamp(now)}.jsonl`;
 
 /**
  * 带时区偏移的本地 ISO 时间戳 `YYYY-MM-DDTHH:mm:ss.sss±HH:MM`（D-11）。
  * 本地 get* 系列 + `getTimezoneOffset`（03-RESEARCH 六问 6.2 实测构造，
  * `Date.parse` 可回解析）。`now` 由调用方传入——同一条记录的 ts 与文件名
  * 必须取自同一个 Date（B-01：两次独立取时跨午夜会把 ts 写进另一天的文件）。
+ * 04-02 起样本记录的 ts 复用本构造（不复制粘贴）。
  */
-const localIsoWithOffset = (now: Date): string => {
+export const localIsoWithOffset = (now: Date): string => {
   const offsetMinutes = -now.getTimezoneOffset();
   const sign = offsetMinutes >= 0 ? '+' : '-';
   const abs = Math.abs(offsetMinutes);
@@ -85,8 +112,9 @@ const localIsoWithOffset = (now: Date): string => {
 export const oneLineStderr = (text: string): string =>
   text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ');
 
-/** 十一项阈值快照：THRESHOLD_SPECS 投影（snake_case 键），绝不手写键名（D-11）。 */
-const thresholdSnapshot = (config: FilterConfig): Record<string, number> =>
+/** 十一项阈值快照：THRESHOLD_SPECS 投影（snake_case 键），绝不手写键名（D-11）。
+ * 04-02 起样本记录的 config_snapshot.thresholds 复用本构造（不复制粘贴）。 */
+export const thresholdSnapshot = (config: FilterConfig): Record<string, number> =>
   Object.fromEntries(THRESHOLD_SPECS.map((spec) => [spec.key, config.thresholds[spec.configKey]]));
 
 /** 错误消息截断（03-RESEARCH Open Question 3 落定口径 200 字符）。 */
@@ -134,13 +162,16 @@ export function createLogWriter(config: FilterConfig): LogWriter {
   };
 
   return {
-    write(stats: FilterStats): void {
+    write(stats: FilterStats, meta?: LogWriteMeta): void {
       enqueue((now) => ({
         ts: localIsoWithOffset(now),
         backend: 'typesafe',
         model_config: config.jev.model,
         model_reported: modelReported(stats),
         thresholds: thresholdSnapshot(config),
+        // request_id 与样本指针（04-02）：meta 缺省不产键，旧记录按缺省读取
+        ...(meta !== undefined ? { request_id: meta.requestId } : {}),
+        ...(meta?.sample !== undefined ? { sample: meta.sample } : {}),
         ...stats,
       }));
     },
@@ -149,6 +180,7 @@ export function createLogWriter(config: FilterConfig): LogWriter {
       message: string;
       query: string;
       intent: string;
+      requestId?: string;
     }): void {
       enqueue((now) => ({
         ts: localIsoWithOffset(now),
@@ -156,6 +188,8 @@ export function createLogWriter(config: FilterConfig): LogWriter {
         model_config: config.jev.model,
         thresholds: thresholdSnapshot(config),
         mode: config.mode,
+        // request_id（04-02）：错误记录与样本同 request_id 关联；缺省不产键
+        ...(entry.requestId !== undefined ? { request_id: entry.requestId } : {}),
         request: { query: entry.query, intent: entry.intent },
         error: { stage: entry.stage, message: truncateMessage(entry.message) },
       }));

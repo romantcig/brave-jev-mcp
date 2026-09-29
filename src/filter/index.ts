@@ -22,10 +22,26 @@ export {
   type ConfigWarn,
 } from './config.js';
 export { createJevClassifier, hasJevKey } from './jev/client.js';
+export { QUESTION_SET_ID } from './jev/questions.js';
 export { resolveToolDescription } from './description.js';
 export { createLogWriter } from './logging.js';
-export type { LogErrorStage, LogWriter } from './logging.js';
+export type { LogErrorStage, LogSamplePointer, LogWriteMeta, LogWriter } from './logging.js';
 export { filterLlmContext, trimSourceMeta } from './pipeline.js';
+export { createSampleWriter } from './sample.js';
+export type {
+  AllocatedSamplePath,
+  SampleConfigSnapshot,
+  SampleFinalReturn,
+  SampleInput,
+  SampleJev,
+  SampleJevSentSnippet,
+  SampleJevSentSource,
+  SampleMissingFinalReturn,
+  SampleOutcome,
+  SampleRecord,
+  SampleWriteStatus,
+  SampleWriter,
+} from './sample.js';
 export { createFilterStats, zeroLocal } from './stats.js';
 export { buildStatusLine } from './statusline.js';
 export type {
