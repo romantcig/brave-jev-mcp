@@ -461,7 +461,15 @@ type SmokeSample = {
   jev?: {
     status?: string;
     per_source?: unknown[];
-    sent?: Array<{ src?: string; snippets?: Array<{ snippet?: string; sent?: boolean }> }>;
+    sent?: Array<{
+      src?: string;
+      snippets?: Array<{
+        snippet?: string;
+        in_state?: boolean;
+        score_question_sent?: boolean;
+        scored?: boolean;
+      }>;
+    }>;
   } | null;
 };
 
@@ -845,7 +853,8 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `sample: the status-line path must exist at return time — ${sampleAbsPath}`
         );
         const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
-        assert.equal(sample.format_version, 1, 'sample: format_version must be 1');
+        // 04-04 R1 返修：format_version 2（实发派发捕获口径）；v1 是阶梯前重建口径
+        assert.equal(sample.format_version, 2, 'sample: format_version must be 2');
         assert.equal(
           sample.request_id,
           record.request_id,
@@ -877,7 +886,8 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           nRecordedSources,
           'sample: pre_filter must carry the full pre-filter response'
         );
-        // 实发映射：候选恰 12（本夹具全部来源 answered），片段全部标 sent
+        // 实发映射（04-04 R1 v2 捕获口径）：keep 来源恰 12（本夹具全部来源
+        // answered），片段三维全 true（无阶梯降级、分数收齐、全部进入实发 state）
         assert.equal(
           sample.jev?.sent?.length,
           nRecordedSources,
@@ -885,8 +895,13 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
         );
         for (const entry of sample.jev?.sent ?? []) {
           assert.ok(
-            (entry.snippets ?? []).every((snippet) => snippet.sent === true),
-            `sample: ${entry.src ?? '(missing src)'} snippets must all be sent in the fully-answered fixture`
+            (entry.snippets ?? []).every(
+              (snippet) =>
+                snippet.in_state === true &&
+                snippet.score_question_sent === true &&
+                snippet.scored === true
+            ),
+            `sample: ${entry.src ?? '(missing src)'} snippets must all be dispatched and scored in the fully-answered fixture`
           );
         }
       }
