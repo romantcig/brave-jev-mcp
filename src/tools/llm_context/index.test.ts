@@ -526,7 +526,10 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
     assert.equal(sample.format_version, 1);
-    assert.match(sample.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.match(
+      sample.request_id,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
 
     // pre_filter 含后来被删的来源（schema 校验前捕获、未被管道修改）
     assert.deepEqual(
@@ -591,9 +594,9 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.deepEqual(normalize(testResult), normalize(onResult));
 
     // on 模式本来就没有后缀（剥除是 no-op）——顺带锁住
-    const onPayload = JSON.parse(
-      (onResult as { content: { text: string }[] }).content[0].text
-    ) as { output: { status_line: string } };
+    const onPayload = JSON.parse((onResult as { content: { text: string }[] }).content[0].text) as {
+      output: { status_line: string };
+    };
     assert.ok(!onPayload.output.status_line.includes(' sample: '));
   });
 
@@ -615,6 +618,115 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     );
     assert.equal('sample' in record, false, 'off records carry no sample pointer');
+  });
+});
+
+describe(`${name} (test mode error-path samples, 04-02)`, () => {
+  useIsolatedFilterEnv();
+
+  const INTENT = 'What Brave Search is';
+
+  /** 从 logDir 读唯一错误样本（samples/<日期>/<request_id>.json），带回文件名对账。 */
+  const readOnlySample = (
+    logDir: string
+  ): { sample: Record<string, unknown>; fileName: string } => {
+    const samplesDir = join(logDir, 'samples');
+    const dateDirs = readdirSync(samplesDir);
+    assert.equal(dateDirs.length, 1);
+    const files = readdirSync(join(samplesDir, dateDirs[0]));
+    assert.equal(files.length, 1);
+    const sample = JSON.parse(
+      readFileSync(join(samplesDir, dateDirs[0], files[0]), 'utf8')
+    ) as Record<string, unknown>;
+    return { sample, fileName: files[0] };
+  };
+
+  it('coverage: a Brave 500 writes a failure sample with an explicit missing marker and the shared request_id', async () => {
+    const logDir = mkdtempSync(join(tmpdir(), 'jev-sample-brave-error-'));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('{"error":"boom"}', {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch;
+    try {
+      useFilterConfig({ mode: 'test', log_dir: logDir });
+      const client = await connectTestClient();
+      try {
+        const result = await client.callTool({
+          name,
+          arguments: { query: 'brave browser', intent: INTENT },
+        });
+        assert.equal(result.isError, true);
+
+        // 失败样本：final_return null + 显式缺失标记（绝不当零来源成功）
+        const { sample, fileName } = readOnlySample(logDir);
+        assert.equal(sample.final_return, null);
+        const missing = sample.final_return_missing as { stage: string; message: string };
+        assert.equal(missing.stage, 'brave');
+        assert.match(missing.message, /500/);
+        assert.equal(sample.pre_filter, null);
+        assert.equal(
+          (sample.request as { params: { query: string } }).params.query,
+          'brave browser'
+        );
+
+        // JSONL 错误记录带同一 request_id（三处同值：文件名 / 信封 / 记录）
+        await new Promise((resolve) => setImmediate(resolve));
+        const jsonlFiles = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+        assert.equal(jsonlFiles.length, 1);
+        const lines = readFileSync(join(logDir, jsonlFiles[0]), 'utf8').split('\n').filter(Boolean);
+        assert.equal(lines.length, 1);
+        const record = JSON.parse(lines[0]) as Record<string, unknown>;
+        assert.equal(record.request_id, sample.request_id);
+        assert.equal((record.error as { stage: string }).stage, 'brave');
+        // 样本文件名 = request_id.json（多进程唯一性的落点）
+        assert.equal(fileName, `${sample.request_id}.json`);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(logDir, { recursive: true, force: true });
+    }
+  });
+
+  // schema 失败的桩：200 但形状坏（`sources` 必填但缺失）——safeParse 失败（stage 'schema'）
+  const getClient = useTestClient((url) => {
+    if (url.pathname === '/res/v1/llm/context') {
+      return { grounding: { generic: [], map: [] } };
+    }
+  });
+
+  it('coverage: a schema-failing upstream keeps the raw response in the sample and marks the missing return', async () => {
+    const logDir = mkdtempSync(join(tmpdir(), 'jev-sample-schema-error-'));
+
+    useFilterConfig({ mode: 'test', log_dir: logDir });
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'brave browser', intent: INTENT },
+    });
+    assert.equal(result.isError, true);
+
+    const { sample } = readOnlySample(logDir);
+    // 可用原始响应保留（safeParse 前的快照原样）
+    assert.deepEqual(sample.pre_filter, { grounding: { generic: [], map: [] } });
+    assert.equal(sample.final_return, null);
+    const missing = sample.final_return_missing as { stage: string; message: string };
+    assert.equal(missing.stage, 'schema');
+    assert.ok(missing.message.length > 0 && missing.message.length <= 200);
+
+    // JSONL 错误记录带同一 request_id
+    await new Promise((resolve) => setImmediate(resolve));
+    const jsonlFiles = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+    assert.equal(jsonlFiles.length, 1);
+    const lines = readFileSync(join(logDir, jsonlFiles[0]), 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    const record = JSON.parse(lines[0]) as Record<string, unknown>;
+    assert.equal(record.request_id, sample.request_id);
+    assert.equal((record.error as { stage: string }).stage, 'schema');
+
+    rmSync(logDir, { recursive: true, force: true });
   });
 });
 

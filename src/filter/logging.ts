@@ -117,8 +117,9 @@ export const oneLineStderr = (text: string): string =>
 export const thresholdSnapshot = (config: FilterConfig): Record<string, number> =>
   Object.fromEntries(THRESHOLD_SPECS.map((spec) => [spec.key, config.thresholds[spec.configKey]]));
 
-/** 错误消息截断（03-RESEARCH Open Question 3 落定口径 200 字符）。 */
-const truncateMessage = (message: string): string =>
+/** 错误消息截断（03-RESEARCH Open Question 3 落定口径 200 字符）。
+ * 04-02 起样本错误路径的缺失标记复用同一口径（不复制粘贴）。 */
+export const truncateMessage = (message: string): string =>
   message.length > 200 ? message.slice(0, 200) : message;
 
 /**

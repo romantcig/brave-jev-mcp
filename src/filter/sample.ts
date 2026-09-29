@@ -6,7 +6,10 @@
  *
  * 形状：`createSampleWriter` 是工厂——库不持模块级可变状态（stats.ts 不变式），
  * 程序版本号等进程级只读量住闭包；适配行持惰性单例，先 `allocatePath` 再 `save`
- * （"先分配路径、写入成功后再返回"的顺序契约，实施计划第三节 B）。
+ * （"先分配路径、写入成功后再返回"的顺序契约，实施计划第三节 B）。错误路径走
+ * `saveError`：Brave 请求失败存请求与失败信息（pre_filter null）；schema 校验失败
+ * 保留可用原始响应与失败阶段；两者的 final_return 都是 null 加显式缺失标记——
+ * 绝不当零来源成功、绝不当完整成功样本。
  *
  * 身份口径（实施计划第三节 C）：来源身份 = Brave 原始索引 `s{n}`（与
  * per_source.src 同源）；片段身份 = `{merged_from}:{index}` 前缀可省、JSON-LD
@@ -39,7 +42,13 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { buildState, QUESTION_SET_ID } from './jev/questions.js';
-import { localDateStamp, localIsoWithOffset, oneLineStderr, thresholdSnapshot } from './logging.js';
+import {
+  localDateStamp,
+  localIsoWithOffset,
+  oneLineStderr,
+  thresholdSnapshot,
+  truncateMessage,
+} from './logging.js';
 import { collectJevCandidatesDetailed } from './pipeline.js';
 import type {
   BraveLlmContextResponse,
@@ -210,12 +219,38 @@ export type SampleInput = {
 /** save / saveError 的返回：适配行据此决定状态行后缀去留与 JSONL 信封指针。 */
 export type SampleWriteStatus = { status: 'saved' | 'failed' };
 
+/** saveError 的输入：错误路径样本（Brave 失败 / schema 失败）。 */
+export type SampleErrorInput = {
+  requestId: string;
+  path: AllocatedSamplePath;
+  /** 模型给的原始参数（钳位前） */
+  originalParams: Record<string, unknown>;
+  /** 补齐与 overfetch 后实际发给 Brave 的参数 */
+  braveParams: Record<string, unknown>;
+  intent: string;
+  /** 失败阶段：Brave 请求层 / 响应 schema 校验（与 JSONL 错误记录同口径） */
+  stage: 'brave' | 'schema';
+  /** 失败原因（saveError 内截断到 200 字符，与 writeError 同口径） */
+  message: string;
+  /** schema 失败时保留的可用原始响应快照（safeParse 前克隆）；Brave 失败为 null */
+  preFilter: unknown;
+};
+
+/** 测试注入点（照 createJevClassifier 的 hooks 先例）：缺省直连 node:fs 实现。
+ * `writeFile` 抛错 = 写中途失败；`rename` 抛错 = 已写完整临时文件但原子替换失败。 */
+export type SampleWriterHooks = {
+  writeFile?: (path: string, data: string) => void;
+  rename?: (from: string, to: string) => void;
+};
+
 /** 样本写入器：路径分配 + 成功/错误两种落盘入口。 */
 export type SampleWriter = {
   /** 分配样本路径（"先分配路径"顺序契约的第一步）。 */
   allocatePath(requestId: string): AllocatedSamplePath;
   /** 成功请求：构建完整样本并原子落盘。 */
   save(input: SampleInput): SampleWriteStatus;
+  /** 错误路径：缺失标记样本（final_return null + final_return_missing）。 */
+  saveError(input: SampleErrorInput): SampleWriteStatus;
 };
 
 /** 读过滤程序版本（package.json version）：src/ 与 dist/ 相对深度一致，两种布局
@@ -296,7 +331,11 @@ const buildJevSection = (config: FilterConfig, input: SampleInput): SampleJev | 
 };
 
 /** 成功样本记录构建：字段顺序即序列化顺序，保持稳定。 */
-const buildRecord = (config: FilterConfig, input: SampleInput, programVersion: string): SampleRecord => ({
+const buildRecord = (
+  config: FilterConfig,
+  input: SampleInput,
+  programVersion: string
+): SampleRecord => ({
   format_version: 1,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
@@ -331,6 +370,43 @@ const buildRecord = (config: FilterConfig, input: SampleInput, programVersion: s
   filter_program_version: programVersion,
 });
 
+/** 错误路径样本记录构建：final_return null + 显式缺失标记，无 outcome、jev null。 */
+const buildErrorRecord = (
+  config: FilterConfig,
+  input: SampleErrorInput,
+  programVersion: string
+): SampleRecord => ({
+  format_version: 1,
+  request_id: input.requestId,
+  ts: localIsoWithOffset(input.path.capturedAt),
+  mode: config.mode,
+  request: {
+    params: { ...input.originalParams },
+    brave_params: { ...input.braveParams },
+    intent: input.intent,
+  },
+  pre_filter: input.preFilter === null ? null : structuredClone(input.preFilter),
+  final_return: null,
+  final_return_missing: {
+    stage: input.stage,
+    message: truncateMessage(input.message),
+  },
+  jev: null,
+  config_snapshot: {
+    thresholds: thresholdSnapshot(config),
+    jev: {
+      model: config.jev.model,
+      timeout_ms: config.jev.timeoutMs,
+      concurrency: config.jev.concurrency,
+    },
+    overfetch_factor: config.overfetchFactor,
+    mode: config.mode,
+    blocklist: [...config.blocklist].sort(),
+  },
+  question_set_id: QUESTION_SET_ID,
+  filter_program_version: programVersion,
+});
+
 /** 样本序列化：UTF-8、两空格缩进、文件末尾换行、字段顺序稳定、正文原样。 */
 const serializeRecord = (record: SampleRecord): string => `${JSON.stringify(record, null, 2)}\n`;
 
@@ -339,12 +415,20 @@ const serializeRecord = (record: SampleRecord): string => `${JSON.stringify(reco
  * 任何一步失败：尽力清掉临时文件（清不掉就留着——`.tmp` 后缀不会被误读为完整
  * 样本）、stderr 恰一行可定位告警（oneLineStderr 先例）、返回 failed，绝不抛错。
  */
-const writeSampleFile = (path: AllocatedSamplePath, content: string): SampleWriteStatus => {
+const writeSampleFile = (
+  path: AllocatedSamplePath,
+  content: string,
+  hooks: SampleWriterHooks
+): SampleWriteStatus => {
   const tmpPath = `${path.absolute}.tmp`;
+  // 缺省实现包一层箭头：统一两参签名（writeFileSync 的 options 重载不外泄）
+  const writeFile =
+    hooks.writeFile ?? ((filePath: string, data: string) => writeFileSync(filePath, data, 'utf8'));
+  const rename = hooks.rename ?? ((from: string, to: string) => renameSync(from, to));
   try {
     mkdirSync(dirname(path.absolute), { recursive: true });
-    writeFileSync(tmpPath, content, 'utf8');
-    renameSync(tmpPath, path.absolute);
+    writeFile(tmpPath, content);
+    rename(tmpPath, path.absolute);
     return { status: 'saved' };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -361,14 +445,16 @@ const writeSampleFile = (path: AllocatedSamplePath, content: string): SampleWrit
 };
 
 /**
- * 创建样本写入器（04-02）：`allocatePath` 先分配路径并捕获锚点 Date，`save`
- * 构建完整记录（深拷贝所有权隔离）后经临时文件 + rename 原子落盘。写入失败
- * fail-open（stderr 一行 + status 'failed'），搜索返回不受影响——适配行据此剥掉
- * 状态行后缀再返回，绝不假装样本已存在。
+ * 创建样本写入器（04-02）：`allocatePath` 先分配路径并捕获锚点 Date，`save` 构建
+ * 完整记录（深拷贝所有权隔离）、`saveError` 构建缺失标记样本，都经临时文件 +
+ * rename 原子落盘。写入失败 fail-open（stderr 一行 + status 'failed'），搜索返回
+ * 不受影响——适配行据此剥掉状态行后缀再返回，绝不假装样本已存在。
  * @param config 过滤配置（取 logDir、模式、阈值、jev 组与黑名单；适配行持单例）
+ * @param hooks 测试注入的文件写入 / 重命名（缺省直连 node:fs）
  */
-export function createSampleWriter(config: FilterConfig): SampleWriter {
+export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHooks): SampleWriter {
   const programVersion = readProgramVersion();
+  const resolvedHooks: SampleWriterHooks = hooks ?? {};
 
   return {
     allocatePath(requestId: string): AllocatedSamplePath {
@@ -377,7 +463,18 @@ export function createSampleWriter(config: FilterConfig): SampleWriter {
       return { absolute: join(config.logDir, relative), relative, capturedAt };
     },
     save(input: SampleInput): SampleWriteStatus {
-      return writeSampleFile(input.path, serializeRecord(buildRecord(config, input, programVersion)));
+      return writeSampleFile(
+        input.path,
+        serializeRecord(buildRecord(config, input, programVersion)),
+        resolvedHooks
+      );
+    },
+    saveError(input: SampleErrorInput): SampleWriteStatus {
+      return writeSampleFile(
+        input.path,
+        serializeRecord(buildErrorRecord(config, input, programVersion)),
+        resolvedHooks
+      );
     },
   };
 }

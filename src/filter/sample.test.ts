@@ -244,10 +244,7 @@ describe('createSampleWriter', () => {
     ]);
     assert.equal(sample.format_version, 1);
     assert.equal(sample.request_id, requestId);
-    assert.match(
-      String(sample.ts),
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/
-    );
+    assert.match(String(sample.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
     assert.equal(sample.mode, 'test');
     assert.deepEqual(sample.request, {
       params: { query: QUERY, count: 3 },
@@ -395,7 +392,10 @@ describe('createSampleWriter', () => {
       source: { id: string; snippets: string[] };
     };
     assert.equal(state.source.id, 's0');
-    assert.deepEqual(state.source.snippets, s0.snippets.map((snippet) => snippet.text));
+    assert.deepEqual(
+      state.source.snippets,
+      s0.snippets.map((snippet) => snippet.text)
+    );
     assert.equal(state.intent, INTENT);
     // s2：页内重复删掉第二片段，候选只有幸存第一片段
     const s2 = sample.jev.sent[1];
@@ -486,7 +486,10 @@ describe('createSampleWriter', () => {
     assert.deepEqual(sample.jev.per_source, []);
     for (const entry of sample.jev.sent) {
       assert.ok(entry.snippets.length > 0);
-      assert.ok(entry.snippets.every((snippet) => snippet.sent === false), entry.src);
+      assert.ok(
+        entry.snippets.every((snippet) => snippet.sent === false),
+        entry.src
+      );
     }
   });
 
@@ -589,9 +592,117 @@ describe('createSampleWriter', () => {
       statusLine: null,
     });
     assert.deepEqual(outcome, { status: 'saved' });
-    // 原子形状：目标目录里只有最终文件，无 .tmp 残留（中途失败的注入在错误路径
-    // 任务补 hooks 后加）
+    // 原子形状：目标目录里只有最终文件，无 .tmp 残留
     const dateDir = join(logDir, 'samples', path.relative.split('/')[1]);
     assert.deepEqual(readdirSync(dateDir), [`${requestId}.json`]);
+  });
+
+  it('leaves no parseable half record when the write fails midway (hooks injection)', async () => {
+    const logDir = join(root, 'half-file', 'logs');
+    const config = configOf(logDir);
+    const stats = await runPipeline(config);
+    const writer = createSampleWriter(config, {
+      // 故障注入：临时文件写一半（不可能解析成完整 JSON）再抛——rename 永不发生
+      writeFile: (tmpPath, data) => {
+        writeFileSync(tmpPath, data.slice(0, 20), 'utf8');
+        throw new Error('injected mid-write failure');
+      },
+    });
+    const requestId = '88888888-2222-3333-4444-555555555555';
+    const path = writer.allocatePath(requestId);
+
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    let outcome: { status: string };
+    try {
+      outcome = writer.save({
+        requestId,
+        path,
+        originalParams: { query: QUERY },
+        braveParams: { query: QUERY },
+        filterParams: { query: QUERY },
+        intent: INTENT,
+        preFilter: richResponse,
+        stats,
+        payload: {},
+        statusLine: null,
+      });
+    } finally {
+      console.error = originalError;
+    }
+    assert.deepEqual(outcome, { status: 'failed' });
+    // 防护断言：目录里既无最终 .json 也无半截 .tmp（fail 路径尽力清理）——
+    // 绝无可误读为完整成功记录的半截 JSON 落盘
+    const dateDir = join(logDir, 'samples', path.relative.split('/')[1]);
+    assert.ok(existsSync(dateDir), 'the date dir is created before the write');
+    assert.deepEqual(readdirSync(dateDir), []);
+    assert.equal(existsSync(path.absolute), false);
+    // stderr 恰一行可定位
+    assert.equal(errors.length, 1);
+    assert.ok(
+      errors[0].some((arg) => String(arg).includes(path.absolute)),
+      JSON.stringify(errors[0])
+    );
+  });
+
+  it('records degraded jev bodies verbatim (fail_kind, breaker_open) without pretending completion', async () => {
+    const logDir = join(root, 'degraded', 'logs');
+    const config = configOf(logDir);
+    const stats = emptyStats('test');
+    stats.jev = {
+      n_requests: 2,
+      input_tokens: 10,
+      latency_ms_total: 20,
+      status: 'degraded',
+      per_source: [
+        {
+          src: 's0',
+          url: 'https://a.example/post',
+          status: 'failed',
+          fail_kind: 'timeout',
+          latency_ms: 15,
+        },
+        { src: 's2', url: 'https://b.example/', status: 'breaker_open', latency_ms: 0 },
+      ],
+    };
+
+    const writer = createSampleWriter(config);
+    const requestId = '99999999-2222-3333-4444-555555555555';
+    const path = writer.allocatePath(requestId);
+    writer.save({
+      requestId,
+      path,
+      originalParams: { query: QUERY },
+      braveParams: { query: QUERY },
+      filterParams: { query: QUERY },
+      intent: INTENT,
+      preFilter: richResponse,
+      stats,
+      payload: { output: stats.output },
+      statusLine: stats.output.status_line ?? null,
+    });
+
+    const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
+      jev: {
+        status: string;
+        per_source: Array<{ src: string; status: string; fail_kind?: string }>;
+        sent: Array<{ src: string; snippets: Array<{ sent: boolean }> }>;
+      };
+    };
+    // 降级记账原样：failed kind 与熔断行都进样本，不伪装成完成检查
+    assert.equal(sample.jev.status, 'degraded');
+    const rows = new Map(sample.jev.per_source.map((row) => [row.src, row]));
+    assert.equal(rows.get('s0')?.fail_kind, 'timeout');
+    assert.equal(rows.get('s2')?.status, 'breaker_open');
+    // failed / breaker_open 行没有可对齐的片段级判断：映射全部标未发送
+    for (const entry of sample.jev.sent) {
+      assert.ok(
+        entry.snippets.every((snippet) => snippet.sent === false),
+        entry.src
+      );
+    }
   });
 });

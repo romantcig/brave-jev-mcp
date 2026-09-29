@@ -302,7 +302,10 @@ describe('createLogWriter', () => {
     const writer = createLogWriter(configOf('test', dir));
     writer.write(statsOf('test'), {
       requestId: 'aaaaaaaa-1111-2222-3333-444444444444',
-      sample: { path: 'samples/2026-09-29/aaaaaaaa-1111-2222-3333-444444444444.json', status: 'saved' },
+      sample: {
+        path: 'samples/2026-09-29/aaaaaaaa-1111-2222-3333-444444444444.json',
+        status: 'saved',
+      },
     });
     await flushWrites();
 

@@ -164,11 +164,26 @@ export const execute = async (params: QueryParams) => {
   try {
     response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
   } catch (requestError) {
+    const message = requestError instanceof Error ? requestError.message : String(requestError);
+    // 错误路径样本（04-02）：test 模式存请求与失败信息，final_return 显式标缺失——
+    // 绝不当零来源成功。写入失败 fail-open（stderr 一行），不影响原样上抛。
+    if (samples !== undefined && samplePath !== undefined) {
+      samples.saveError({
+        requestId,
+        path: samplePath,
+        originalParams: { ...params } as Record<string, unknown>,
+        braveParams: { ...braveParams } as Record<string, unknown>,
+        intent: params.intent,
+        stage: 'brave',
+        message,
+        preFilter: null,
+      });
+    }
     // Brave 报错（抛错 / 非 2xx 由 issueRequest 统一转 Error）：写一条带 error
     // 标记的日志再原样上抛，保持既有失败行为（stage 'brave'）。
     writer.writeError({
       stage: 'brave',
-      message: requestError instanceof Error ? requestError.message : String(requestError),
+      message,
       query: params.query,
       intent: params.intent,
       requestId,
@@ -195,12 +210,8 @@ export const execute = async (params: QueryParams) => {
     // test 模式状态行末尾追加 sample 后缀（SC3）：路径已分配、文件即将先写后返；
     // status_line 尚无内容（零删除）时不加后缀——样本照落。第二块与 JSON 块内
     // output.status_line 都从 stats.output.status_line 出（D-08 同源不破）。
-    const sampleSuffix =
-      samplePath !== undefined ? ` sample: ${samplePath.absolute}` : '';
-    if (
-      sampleSuffix !== '' &&
-      typeof filtered.stats.output.status_line === 'string'
-    ) {
+    const sampleSuffix = samplePath !== undefined ? ` sample: ${samplePath.absolute}` : '';
+    if (sampleSuffix !== '' && typeof filtered.stats.output.status_line === 'string') {
       filtered.stats.output.status_line += sampleSuffix;
     }
     // 第一个 JSON 块在过滤结果之上附加统计摘要（stats.output，含 status_line）：
@@ -249,9 +260,24 @@ export const execute = async (params: QueryParams) => {
     }
   } else {
     payload = z.treeifyError(error);
+    const message = error instanceof Error ? error.message : String(error);
+    // 错误路径样本（04-02）：schema 校验失败保留可用原始响应（safeParse 前快照）
+    // 与失败阶段；final_return 显式标缺失，不当零来源成功。
+    if (samples !== undefined && samplePath !== undefined) {
+      samples.saveError({
+        requestId,
+        path: samplePath,
+        originalParams: { ...params } as Record<string, unknown>,
+        braveParams: { ...braveParams } as Record<string, unknown>,
+        intent: params.intent,
+        stage: 'schema',
+        message,
+        preFilter,
+      });
+    }
     writer.writeError({
       stage: 'schema',
-      message: error instanceof Error ? error.message : String(error),
+      message,
       query: params.query,
       intent: params.intent,
       requestId,

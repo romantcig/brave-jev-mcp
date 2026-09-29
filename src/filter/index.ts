@@ -31,6 +31,7 @@ export { createSampleWriter } from './sample.js';
 export type {
   AllocatedSamplePath,
   SampleConfigSnapshot,
+  SampleErrorInput,
   SampleFinalReturn,
   SampleInput,
   SampleJev,
@@ -41,6 +42,7 @@ export type {
   SampleRecord,
   SampleWriteStatus,
   SampleWriter,
+  SampleWriterHooks,
 } from './sample.js';
 export { createFilterStats, zeroLocal } from './stats.js';
 export { buildStatusLine } from './statusline.js';
