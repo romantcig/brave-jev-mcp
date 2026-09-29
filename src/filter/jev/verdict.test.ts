@@ -6,7 +6,7 @@
  * per_source 行，status/answers/snippet_scores 参与判定），judged Map 与
  * per_source 行共享同一对象引用——回写记账可断言。
  *
- * 依据：PLAN §3.3 固定顺序、notes/shadow-mode-logging.md 阈值判据方向、
+ * 依据：PLAN §3.3 固定顺序、notes/test-mode-logging.md 阈值判据方向、
  * 02-03-PLAN.md behavior 块。
  */
 

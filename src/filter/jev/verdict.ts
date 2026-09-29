@@ -10,7 +10,7 @@
  * 最小行类型照 `budget.ts` 先例：pipeline 的工作表结构上满足、又不产生
  * pipeline → verdict → pipeline 的循环导入（本文件不 import pipeline.ts）。
  *
- * 依据：PLAN §3.3、notes/shadow-mode-logging.md（阈值判据方向）、
+ * 依据：PLAN §3.3、notes/test-mode-logging.md（阈值判据方向）、
  * 02-RESEARCH.md「裁决链实现」。
  */
 

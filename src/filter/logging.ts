@@ -14,14 +14,14 @@
  * 信封字段（D-11）：`ts` 带时区偏移的本地 ISO（`toISOString()` 是 UTC 不满足）；
  * `backend` 常量 `'typesafe'`；`model_config` 是配置钉的模型 ID；`model_reported`
  * 是 Jev 实际回报的模型 ID（per_source answered 行去重，常态单元素）；`thresholds`
- * 是 THRESHOLD_SPECS 投影的十一项 snake_case 快照（绝不手写键名——影子期改阈值后
+ * 是 THRESHOLD_SPECS 投影的十一项 snake_case 快照（绝不手写键名——测试模式改阈值后
  * 旧记录仍可复现裁决）。`mode` 已在 stats 里，成功记录的信封不重复。
  *
- * 红线（LOG-03/D-12）：绝不写片段正文——只存 URL、标题、指纹、概率、分数、计数
- * 与标记；FilterStats 类型不含正文即证明，信封也不得加任何片段字段。test 模式
- * 的完整样本（04-02）是**另一载体、另有契约**——正文只进 log_dir/samples/ 下的
- * 独立 JSON 文件，绝不经由本写入器进 JSONL；JSONL 信封只记样本的相对路径与
- * 记录状态（`sample` 指针）。
+ * 红线（LOG-03/D-12）：JSONL 日志绝不写片段正文——只存 URL、标题、指纹、概率、
+ * 分数、计数与标记；FilterStats 类型不含正文即证明，信封也不得加任何片段字段。
+ * 测试样本文件是**另一载体、另有契约（PRD 决策，04-02）**——正文只进
+ * log_dir/samples/ 下的独立 JSON 文件，绝不经由本写入器进 JSONL；JSONL 信封只记
+ * 样本的相对路径与记录状态（`sample` 指针）。
  *
  * 关联（04-02）：`write` / `writeError` 的信封带调用方生成的 `request_id`，
  * 与样本文件名三处同值——样本与常规 JSONL 日志以同一 request_id 关联；`sample`
@@ -36,7 +36,7 @@
  *
  * 失败（D-14）：整体 try/catch fail-open——stderr 恰一行 `[jev-filter]` 告警，
  * 搜索返回不受影响；**绝不写 stdout**（stdout 是 stdio 协议通道，Pitfall 4）。
- * 不设保留天数、不自动清理日志（D-15，影子期审核要用）。
+ * 不设保留天数、不自动清理日志（D-15，测试模式审核要用）。
  *
  * 依据：03-RESEARCH.md 六问 2 / 六问 6、config.ts 的 `[jev-filter]` 告警先例。
  */

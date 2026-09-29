@@ -15,7 +15,7 @@
  * 坏值一律回落默认值而不是抛错：过滤层永远不能让服务器启动失败（EMBED-02）。
  * 只能用 console.error——stdout 是 stdio 传输的协议通道（description.ts 先例）。
  *
- * 依据：PLAN.md §5「配置载体」、notes/shadow-mode-logging.md、02-RESEARCH.md
+ * 依据：PLAN.md §5「配置载体」、notes/test-mode-logging.md、02-RESEARCH.md
  * 「环境变量清单」、02-FIX-PLAN 批 B。
  */
 
@@ -129,7 +129,7 @@ const configFileRecord = (raw: unknown): Record<string, unknown> => (isRecord(ra
  * 取 >= 1 的**整数**。max 为 Infinity 表示只有下限。
  *
  * logging.ts 的日志信封复用本表投影阈值快照（`key` 即日志键名）——绝不手写
- * 11 个键名，影子期改阈值后旧记录仍可复现裁决（D-11）。
+ * 11 个键名，测试模式改阈值后旧记录仍可复现裁决（D-11）。
  */
 export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly key: string;

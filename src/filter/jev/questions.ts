@@ -9,7 +9,7 @@
  * 本表都是投影；questions.test.ts 用两份 `.jev.json` 夹具的顶层 questions 做
  * 深比较，probe 与生产任何一侧改动都会在那里红。
  *
- * 依据：notes/jev-question-writing.md（v3 题库）、notes/shadow-mode-logging.md
+ * 依据：notes/jev-question-writing.md（v3 题库）、notes/test-mode-logging.md
  * （阈值与兜底初值）、02-RESEARCH.md「题库 v3」。
  */
 
@@ -59,7 +59,7 @@ export const SNIPPET_LEVELS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * 十一项阈值默认值（notes/shadow-mode-logging.md 权威初值，全部待 Phase 4 测试模式
+ * 十一项阈值默认值（notes/test-mode-logging.md 权威初值，全部待测试模式
  * 修订）。判据方向：来源级五道丢弃门槛是概率 >= 门槛即丢（含等号）；片段
  * `score < snippetMin` 严格小于才删（score = 1.0 保留）；CJK 占比 > cjkShare 时
  * 五道丢弃门槛各加 cjkBonus。概率是 API 侧两位小数值，客户端不再舍入。

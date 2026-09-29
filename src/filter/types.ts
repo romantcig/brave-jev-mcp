@@ -5,7 +5,7 @@
  * zod 推导出的 `data` 结构兼容即可直接传入。字段命名规则：镜像 Brave 线上字段
  * 与要进 JSONL 日志的计数键用 snake_case，库内部自己的字段用 camelCase。
  *
- * 依据：PLAN.md §3.2、notes/shadow-mode-logging.md、01-RESEARCH.md「统计对象」一节。
+ * 依据：PLAN.md §3.2、notes/test-mode-logging.md、01-RESEARCH.md「统计对象」一节。
  */
 
 /**

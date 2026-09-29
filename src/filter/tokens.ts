@@ -11,13 +11,13 @@
  * 依据：notes/jev-api.md、01-RESEARCH.md「规则 9（步 9）」。
  */
 
-/** 其余字符（标点、CJK 等）每个的 token 权重。可按影子期实测调整。 */
+/** 其余字符（标点、CJK 等）每个的 token 权重。可按测试模式实测调整。 */
 export const TOKEN_WEIGHT_OTHER = 0.9;
 
-/** 数字每位的 token 权重。可按影子期实测调整。 */
+/** 数字每位的 token 权重。可按测试模式实测调整。 */
 export const TOKEN_WEIGHT_DIGIT = 0.5;
 
-/** 每满这么多字母加 1 个 token（单词本身已有 1 个）。可按影子期实测调整。 */
+/** 每满这么多字母加 1 个 token（单词本身已有 1 个）。可按测试模式实测调整。 */
 export const TOKEN_LATIN_PER_EXTRA_CHARS = 6;
 
 /**
@@ -47,7 +47,7 @@ export function estimateTokens(text: string): number {
       // 数字每位 0.5（notes/jev-api.md）
       total += segment.length * TOKEN_WEIGHT_DIGIT;
     } else {
-      // 其余任何符号（含每个 CJK 字符）0.9（notes/jev-api.md；影子期用中文样本再校）
+      // 其余任何符号（含每个 CJK 字符）0.9（notes/jev-api.md；测试模式用中文样本再校）
       total += segment.length * TOKEN_WEIGHT_OTHER;
     }
   }

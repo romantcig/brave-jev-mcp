@@ -41,7 +41,7 @@ SNIPPET_LEVELS = [
  "Mentions the subject of `query` but adds no specific information",
  "States specific information or analysis that directly serves `intent`",
 ]
-# 十一项权威初值（notes/shadow-mode-logging.md，全部待影子期修订）
+# 十一项权威初值（notes/test-mode-logging.md，全部待测试模式修订）
 THRESHOLDS = {"off_topic_drop":0.85,"listing_drop":0.80,"self_deprecated":0.70,"stale_drop":0.85,"filler_drop":0.80,"reasoning_protect":0.70,"snippet_min":1.0,"min_facts":4,"novelty_min":2,"cjk_bonus":0.10,"cjk_share":0.5}
 
 def build_questions(n_snips):

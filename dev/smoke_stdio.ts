@@ -755,7 +755,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       );
     }
 
-    // --- 7. Jev 记账（R-11 #1/#2；字段层级见 notes/shadow-mode-logging.md）---
+    // --- 7. Jev 记账（R-11 #1/#2；字段层级见 notes/test-mode-logging.md）---
     if (runMode === 'off') {
       // E-03 记账侧：off 的 jev 严格为 null（不是缺键、不是零值对象）
       assert.equal(record.jev, null, 'log: off must record jev exactly null (zero Jev requests)');
