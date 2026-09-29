@@ -23,7 +23,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { after, describe, it } from 'node:test';
 import {
   DEFAULT_JEV_MODEL,
@@ -1118,6 +1118,45 @@ describe('createSampleWriter', () => {
     assert.equal(s2.dispatched, false);
     assert.equal(s2.state, null);
     assert.equal(s2.not_dispatched_reason, 'breaker_open');
+  });
+
+  it('resolves a relative log_dir to an absolute allocated path that matches the real file (review R5)', () => {
+    // 相对 log_dir（配置允许的合法输入）：allocatePath 必须按写文件的解析基准
+    // （进程工作目录）给出绝对路径——v1 用 join 返回相对路径（审查复现
+    // isAbsolute=false），审核 AI 拿着它无法跨工作目录定位文件。
+    const relativeDir = join('test-relative-log-dir', 'sample-writer');
+    const config = configOf(relativeDir);
+    const writer = createSampleWriter(config);
+    const requestId = 'aaaaaaa4-2222-3333-4444-555555555555';
+    const path = writer.allocatePath(requestId);
+    try {
+      assert.equal(isAbsolute(path.absolute), true);
+      assert.equal(path.absolute, resolve(process.cwd(), relativeDir, path.relative));
+      // JSONL 信封的相对指针不受影响：仍相对日志目录（正斜杠口径）
+      assert.match(
+        path.relative,
+        /^samples\/\d{4}-\d{2}-\d{2}\/aaaaaaa4-2222-3333-4444-555555555555\.json$/
+      );
+
+      const outcome = writer.save({
+        requestId,
+        path,
+        originalParams: {},
+        braveParams: {},
+        filterParams: { query: QUERY },
+        intent: INTENT,
+        preFilter: { grounding: { generic: [] }, sources: {} },
+        stats: emptyStats('test'),
+        jevDispatch: [],
+        payload: {},
+        statusLine: null,
+      });
+      assert.deepEqual(outcome, { status: 'saved' });
+      // 返回路径与实际文件位置一致：absolute 指向的文件真实存在
+      assert.equal(existsSync(path.absolute), true);
+    } finally {
+      rmSync(resolve(process.cwd(), 'test-relative-log-dir'), { recursive: true, force: true });
+    }
   });
 
   it('distinguishes filter implementations by the rules version under the same question set (review R4)', () => {

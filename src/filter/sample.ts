@@ -1,5 +1,5 @@
 /**
- * test 模式样本落盘（04-02 / SC2+SC3；04-04 R1+R4 返修）：每次 test 搜索一份独立
+ * test 模式样本落盘（04-02 / SC2+SC3；04-04 R1+R4+R5 返修）：每次 test 搜索一份独立
  * JSON 样本——过滤前完整响应（schema 校验前克隆）+ 最终实际返回 + 过程映射 + Jev
  * 判断与实发派发映射 + 生效配置快照。写入器住纯过滤库（不引任何 MCP 类型），适配层
  * 只交数据。
@@ -45,11 +45,11 @@
  * 路径），绝不抛错、绝不假装成功；不设自动清理（与 JSONL 日志同策略）。
  *
  * 依据：测试模式与搜索样本记录实施计划.md 第三节、04-CONTEXT.md 落盘契约四节、
- * 测试模式与搜索样本记录审查报告.md R1/R4。
+ * 测试模式与搜索样本记录审查报告.md R1/R4/R5。
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { FILTER_RULES_VERSION } from './version.js';
 import { QUESTION_SET_ID } from './jev/questions.js';
 import {
@@ -508,8 +508,13 @@ const writeSampleFile = (
  * 完整记录（深拷贝所有权隔离）、`saveError` 构建缺失标记样本，都经临时文件 +
  * rename 原子落盘。写入失败 fail-open（stderr 一行 + status 'failed'），搜索返回
  * 不受影响——适配行据此剥掉状态行后缀再返回，绝不假装样本已存在。
+ * R5（04-04）：相对 log_dir 时 `allocatePath.absolute` 用 `path.resolve` 按**进程
+ * 工作目录**基准转绝对（与写入时的解析基准一致——相对路径的 writeFileSync 同以
+ * cwd 解析）；JSONL 信封的相对指针（`relative`）继续相对日志目录保存。
+ *
  * @param config 过滤配置（取 logDir、模式、阈值、jev 组与黑名单；适配行持单例）
- * @param hooks 测试注入的文件写入 / 重命名（缺省直连 node:fs）
+ * @param hooks 测试注入的文件写入 / 重命名 / 规则版本读取（缺省直连 node:fs 与
+ *   version.ts 的 FILTER_RULES_VERSION）
  */
 export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHooks): SampleWriter {
   const programVersion = readProgramVersion();
@@ -520,7 +525,7 @@ export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHoo
     allocatePath(requestId: string): AllocatedSamplePath {
       const capturedAt = new Date();
       const relative = `samples/${localDateStamp(capturedAt)}/${requestId}.json`;
-      return { absolute: join(config.logDir, relative), relative, capturedAt };
+      return { absolute: resolve(config.logDir, relative), relative, capturedAt };
     },
     save(input: SampleInput): SampleWriteStatus {
       return writeSampleFile(
