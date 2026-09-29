@@ -28,6 +28,7 @@ export { createLogWriter } from './logging.js';
 export type { LogErrorStage, LogSamplePointer, LogWriteMeta, LogWriter } from './logging.js';
 export { filterLlmContext, trimSourceMeta } from './pipeline.js';
 export { createSampleWriter } from './sample.js';
+export { FILTER_RULES_VERSION } from './version.js';
 export type {
   AllocatedSamplePath,
   SampleConfigSnapshot,

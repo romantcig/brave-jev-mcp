@@ -1,5 +1,5 @@
 /**
- * test 模式样本落盘（04-02 / SC2+SC3；04-04 R1 返修）：每次 test 搜索一份独立
+ * test 模式样本落盘（04-02 / SC2+SC3；04-04 R1+R4 返修）：每次 test 搜索一份独立
  * JSON 样本——过滤前完整响应（schema 校验前克隆）+ 最终实际返回 + 过程映射 + Jev
  * 判断与实发派发映射 + 生效配置快照。写入器住纯过滤库（不引任何 MCP 类型），适配层
  * 只交数据。
@@ -45,11 +45,12 @@
  * 路径），绝不抛错、绝不假装成功；不设自动清理（与 JSONL 日志同策略）。
  *
  * 依据：测试模式与搜索样本记录实施计划.md 第三节、04-CONTEXT.md 落盘契约四节、
- * 测试模式与搜索样本记录审查报告.md R1。
+ * 测试模式与搜索样本记录审查报告.md R1/R4。
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { FILTER_RULES_VERSION } from './version.js';
 import { QUESTION_SET_ID } from './jev/questions.js';
 import {
   localDateStamp,
@@ -216,6 +217,9 @@ export type SampleRecord = {
   question_set_id: string;
   /** 过滤程序版本（package.json version——包版本，跨实现变更不变） */
   filter_program_version: string;
+  /** 过滤规则版本（version.ts 的 FILTER_RULES_VERSION——可定位真实过滤实现，
+   * 04-04 R4；v1 记录无此键） */
+  filter_rules_version: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -283,10 +287,12 @@ export type SampleErrorInput = {
 };
 
 /** 测试注入点（照 createJevClassifier 的 hooks 先例）：缺省直连 node:fs 实现。
- * `writeFile` 抛错 = 写中途失败；`rename` 抛错 = 已写完整临时文件但原子替换失败。 */
+ * `writeFile` 抛错 = 写中途失败；`rename` 抛错 = 已写完整临时文件但原子替换失败；
+ * `readFilterRulesVersion` 覆盖过滤规则版本读取（04-04 R4 区分能力测试注入）。 */
 export type SampleWriterHooks = {
   writeFile?: (path: string, data: string) => void;
   rename?: (from: string, to: string) => void;
+  readFilterRulesVersion?: () => string;
 };
 
 /** 样本写入器：路径分配 + 成功/错误两种落盘入口。 */
@@ -383,7 +389,8 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
 const buildRecord = (
   config: FilterConfig,
   input: SampleInput,
-  programVersion: string
+  programVersion: string,
+  rulesVersion: string
 ): SampleRecord => ({
   format_version: 2,
   request_id: input.requestId,
@@ -417,13 +424,15 @@ const buildRecord = (
   },
   question_set_id: QUESTION_SET_ID,
   filter_program_version: programVersion,
+  filter_rules_version: rulesVersion,
 });
 
 /** 错误路径样本记录构建：final_return null + 显式缺失标记，无 outcome、jev null。 */
 const buildErrorRecord = (
   config: FilterConfig,
   input: SampleErrorInput,
-  programVersion: string
+  programVersion: string,
+  rulesVersion: string
 ): SampleRecord => ({
   format_version: 2,
   request_id: input.requestId,
@@ -454,6 +463,7 @@ const buildErrorRecord = (
   },
   question_set_id: QUESTION_SET_ID,
   filter_program_version: programVersion,
+  filter_rules_version: rulesVersion,
 });
 
 /** 样本序列化：UTF-8、两空格缩进、文件末尾换行、字段顺序稳定、正文原样。 */
@@ -503,6 +513,7 @@ const writeSampleFile = (
  */
 export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHooks): SampleWriter {
   const programVersion = readProgramVersion();
+  const rulesVersion = hooks?.readFilterRulesVersion?.() ?? FILTER_RULES_VERSION;
   const resolvedHooks: SampleWriterHooks = hooks ?? {};
 
   return {
@@ -514,14 +525,14 @@ export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHoo
     save(input: SampleInput): SampleWriteStatus {
       return writeSampleFile(
         input.path,
-        serializeRecord(buildRecord(config, input, programVersion)),
+        serializeRecord(buildRecord(config, input, programVersion, rulesVersion)),
         resolvedHooks
       );
     },
     saveError(input: SampleErrorInput): SampleWriteStatus {
       return writeSampleFile(
         input.path,
-        serializeRecord(buildErrorRecord(config, input, programVersion)),
+        serializeRecord(buildErrorRecord(config, input, programVersion, rulesVersion)),
         resolvedHooks
       );
     },

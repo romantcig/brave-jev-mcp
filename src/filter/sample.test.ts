@@ -38,6 +38,7 @@ import { createJevClassifier } from './jev/client.js';
 import { filterLlmContext } from './pipeline.js';
 import { createSampleWriter } from './sample.js';
 import { createNoKeyJevStats } from './stats.js';
+import { FILTER_RULES_VERSION } from './version.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
@@ -268,7 +269,7 @@ describe('createSampleWriter', () => {
     // pretty 格式：两空格缩进 + 末尾换行（整份重序列化逐字一致即证明）
     assert.equal(raw, `${JSON.stringify(sample, null, 2)}\n`);
 
-    // 记录形状：语义字段齐备、顺序稳定
+    // 记录形状：语义字段齐备、顺序稳定（04-04 R4：新增 filter_rules_version）
     assert.deepEqual(Object.keys(sample), [
       'format_version',
       'request_id',
@@ -282,6 +283,7 @@ describe('createSampleWriter', () => {
       'config_snapshot',
       'question_set_id',
       'filter_program_version',
+      'filter_rules_version',
     ]);
     assert.equal(sample.format_version, 2);
     assert.equal(sample.request_id, requestId);
@@ -337,9 +339,10 @@ describe('createSampleWriter', () => {
     assert.equal(snapshot.mode, 'test');
     assert.deepEqual(snapshot.blocklist, ['a.farm.example', 'farm.example']);
 
-    // 版本锚：题库哈希 + 包版本
+    // 版本锚：题库哈希 + 包版本 + 过滤规则版本（04-04 R4：三者各司其职）
     assert.match(String(sample.question_set_id), /^[0-9a-f]{12}$/);
     assert.equal(sample.filter_program_version, '2.1.4');
+    assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
   });
 
   it('carries stable snippet identities: URL merge (mergedFrom), JSON-LD split (.part), in-page dup and empty-source exclusion', async () => {
@@ -1115,5 +1118,50 @@ describe('createSampleWriter', () => {
     assert.equal(s2.dispatched, false);
     assert.equal(s2.state, null);
     assert.equal(s2.not_dispatched_reason, 'breaker_open');
+  });
+
+  it('distinguishes filter implementations by the rules version under the same question set (review R4)', () => {
+    // 同题库（QUESTION_SET_ID 不变）、同阈值，两个不同的过滤实现常量 → 记录里的
+    // filter_rules_version 必须不同——回放时能确认某次裁决用的是哪一版规则。
+    const logDir = join(root, 'rules-version', 'logs');
+    const config = configOf(logDir);
+    const requestId = 'aaaaaaa5-2222-3333-4444-555555555555';
+    const readVersionA = createSampleWriter(config, { readFilterRulesVersion: () => 'rules-A' });
+    const readVersionB = createSampleWriter(config, { readFilterRulesVersion: () => 'rules-B' });
+    const pathA = readVersionA.allocatePath(requestId);
+    const pathB = readVersionB.allocatePath(`${requestId}-b`);
+
+    const baseInput = {
+      originalParams: {} as Record<string, unknown>,
+      braveParams: {} as Record<string, unknown>,
+      filterParams: { query: QUERY },
+      intent: INTENT,
+      preFilter: { grounding: { generic: [] }, sources: {} },
+      stats: emptyStats('test'),
+      jevDispatch: [] as JevDispatchRecord[],
+      payload: {},
+      statusLine: null,
+    };
+    assert.deepEqual(readVersionA.save({ requestId, path: pathA, ...baseInput }), {
+      status: 'saved',
+    });
+    assert.deepEqual(readVersionB.save({ requestId, path: pathB, ...baseInput }), {
+      status: 'saved',
+    });
+
+    const sampleA = JSON.parse(readFileSync(pathA.absolute, 'utf8')) as {
+      question_set_id: string;
+      config_snapshot: Record<string, unknown>;
+      filter_rules_version: string;
+    };
+    const sampleB = JSON.parse(readFileSync(pathB.absolute, 'utf8')) as {
+      filter_rules_version: string;
+    };
+    // 同题库同阈值：question_set_id 与 config_snapshot 全等
+    assert.equal(sampleA.question_set_id, QUESTION_SET_ID);
+    // 不同过滤实现：规则版本可区分——包版本无法提供的定位能力
+    assert.notEqual(sampleA.filter_rules_version, sampleB.filter_rules_version);
+    assert.equal(sampleA.filter_rules_version, 'rules-A');
+    assert.equal(sampleB.filter_rules_version, 'rules-B');
   });
 });
