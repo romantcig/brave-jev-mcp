@@ -857,8 +857,9 @@ const runOffChain = (
  * `jevCandidatesFromTable`）。
  *
  * 纯函数：`buildWorkTable` 建工作表、一次性 stats 只作步 1–4 计数载体（用后即弃，
- * 不返回）、不改输入。04-02 起样本记录经 `collectJevCandidatesDetailed` 取同一
- * 口径的带身份版本（片段配对身份只有工作表知道，字符串数组签名给不出）。
+ * 不返回）、不改输入。04-02 v1 曾经 `collectJevCandidatesDetailed` 供样本层重建
+ * 实发映射（片段配对身份只有工作表知道，字符串数组签名给不出）；04-04 R1 起样本层
+ * 只信管道交来的 JevDispatchRecord，不再重建候选。
  */
 export function collectJevCandidates(
   data: BraveLlmContextResponse,
@@ -871,8 +872,9 @@ export function collectJevCandidates(
 /**
  * 带身份版候选集收集（04-02）：与 `collectJevCandidates` 完全同一口径（同一纯函数
  * 链、同一输入），只是片段带 `key` 配对身份（`{merged_from}:{index}` 前缀可省、
- * JSON-LD 多段加 `.{part}`）。样本记录用它构建实发 state 映射——与步 5 同一纯函数
- * 同一输入，天然同口径。
+ * JSON-LD 多段加 `.{part}`）。04-02 v1 曾供样本层重建实发 state 映射；04-04 R1 起
+ * 样本层只信管道交来的 JevDispatchRecord（重建会得到阶梯前 state，与实发不符），
+ * 本函数现无样本层消费方，仅作内部 plain 版包装与候选口径核对备用。
  */
 export function collectJevCandidatesDetailed(
   data: BraveLlmContextResponse,
