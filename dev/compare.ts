@@ -1,15 +1,13 @@
 /**
- * 过滤前后对比工具（TOOLS-01）：对一份 Brave 夹具跑 off / shadow / on 模式过滤，
+ * 过滤前后对比工具（TOOLS-01）：对一份 Brave 夹具跑 off / test / on 模式过滤，
  * 打印来源数、片段数、字符数的过滤前后对比与逐来源裁决表——人工抽查过滤行为的
- * 日常工具，也是"on 模式裁决可见"的最直接证明。
+ * 日常工具，也是"test/on 模式裁决可见"的最直接证明（04-01 单链语义：test 与 on
+ * 共用同一过滤实现，Jev 裁决真实生效）。
  *
- * 用法：node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|shadow|on]
+ * 用法：node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|test|on]
  * mode 缺省 off；其他值 stderr 一行并以退出码 1 结束。
  *
- * shadow 模式额外打印 off 与 shadow 是否逐字段一致（VERDICT-05：shadow 正本走
- * off 链，输出必须等于同输入的 off）与 `shadow_diff`；它同时跑一遍 off 作对照。
- *
- * shadow / on 模式是回放：读夹具同目录的 <stem>.jev.json 录制，内联 replayClassifier
+ * test / on 模式是回放：读夹具同目录的 <stem>.jev.json 录制，内联 replayClassifier
  * （与 02-02 回放测试同形：按 state.source.id 取 results 条目，http 200 走生产
  * 同一条 parseJevResponse 路径，否则 failed kind network——单来源失败按"留"）。
  * 候选集经 collectJevCandidates 与管道步 5 同源核对，录制里缺的候选 id 打一行
@@ -38,24 +36,24 @@ import type {
 } from '../src/filter/types.js';
 
 // ---------------------------------------------------------------------------
-// argv：夹具路径必填；--mode 只认 off|shadow|on（缺省 off）
+// argv：夹具路径必填；--mode 只认 off|test|on（缺省 off）
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
 const fxPath = args[0];
 if (!fxPath) {
   console.error(
-    'usage: node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|shadow|on]'
+    'usage: node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|test|on]'
   );
   process.exit(2);
 }
 
-let mode: 'off' | 'shadow' | 'on' = 'off';
+let mode: 'off' | 'test' | 'on' = 'off';
 const modeIndex = args.indexOf('--mode');
 if (modeIndex !== -1) {
   const value = args[modeIndex + 1];
-  if (value !== 'off' && value !== 'shadow' && value !== 'on') {
-    console.error(`--mode 只认 off|shadow|on，收到：${value ?? '(缺值)'}`);
+  if (value !== 'off' && value !== 'test' && value !== 'on') {
+    console.error(`--mode 只认 off|test|on，收到：${value ?? '(缺值)'}`);
     process.exit(1);
   }
   mode = value;
@@ -70,7 +68,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 // ---------------------------------------------------------------------------
-// 装载：三形状加载器 + 期望文件 + （on 模式）录制
+// 装载：三形状加载器 + 期望文件 + （test/on 模式）录制
 // ---------------------------------------------------------------------------
 
 /** 三形状加载器（wrapped / bare / noise），与 src/filter/pipeline.fixtures.test.ts 同逻辑。 */
@@ -153,7 +151,7 @@ const loadRecording = (): Record<string, RecordedEntry> => {
   try {
     parsed = JSON.parse(readFileSync(recPath, 'utf8'));
   } catch {
-    die(`读不到录制 ${recPath}——on 模式需先重录：python dev/jev_probe.py ${fxPath} "<intent>"`);
+    die(`读不到录制 ${recPath}——test/on 模式需先重录：python dev/jev_probe.py ${fxPath} "<intent>"`);
   }
   if (!isRecord(parsed) || !isRecord(parsed.results)) {
     die(`录制缺 results 表：${recPath}——先重录：python dev/jev_probe.py ${fxPath} "<intent>"`);
@@ -184,7 +182,7 @@ const replayClassifier =
   };
 
 // ---------------------------------------------------------------------------
-// 跑过滤：off 直接跑；shadow / on 回放（先核对候选覆盖）；shadow 另跑一遍 off 作对照
+// 跑过滤：off 直接跑；test / on 回放（先核对候选覆盖）
 // ---------------------------------------------------------------------------
 
 const config = parseFilterConfigObject(mode === 'off' ? {} : { mode });
@@ -200,11 +198,6 @@ if (results !== undefined) {
   }
 }
 
-const offRun: FilterResult | undefined =
-  mode === 'shadow'
-    ? await filterLlmContext(data, request, parseFilterConfigObject({}))
-    : undefined;
-
 const { result, stats }: FilterResult = await filterLlmContext(
   data,
   request,
@@ -214,7 +207,7 @@ const { result, stats }: FilterResult = await filterLlmContext(
 void result;
 
 // ---------------------------------------------------------------------------
-// 输出：首行 + 逐来源对比表 + 汇总行（+ on 模式的 stats.jev 一行）
+// 输出：首行 + 逐来源对比表 + 汇总行（+ test/on 模式的 stats.jev 一行）
 // ---------------------------------------------------------------------------
 
 const hostOf = (url: string): string => {
@@ -269,18 +262,5 @@ console.log(
 if (stats.jev !== null) {
   console.log(
     `jev: n_requests=${stats.jev.n_requests} input_tokens=${stats.jev.input_tokens} status=${stats.jev.status}`
-  );
-}
-if (mode === 'shadow' && offRun !== undefined) {
-  // VERDICT-05：shadow 正本走 off 链——result / stats.local / stats.sources 必须等于
-  // 同输入的 off（stats.mode / stats.jev / stats.shadow_diff 三项除外）
-  const resultSame = JSON.stringify(result) === JSON.stringify(offRun.result);
-  const localSame = JSON.stringify(stats.local) === JSON.stringify(offRun.stats.local);
-  const sourcesSame = JSON.stringify(stats.sources) === JSON.stringify(offRun.stats.sources);
-  console.log(
-    `shadow vs off: result ${resultSame ? 'identical' : 'DIFFERENT'} | local ${localSame ? 'identical' : 'DIFFERENT'} | sources ${sourcesSame ? 'identical' : 'DIFFERENT'}`
-  );
-  console.log(
-    `shadow_diff: would_drop=[${(stats.shadow_diff?.would_drop ?? []).join(', ')}] would_remove_snippets=${stats.shadow_diff?.would_remove_snippets ?? 0} would_restore=[${(stats.shadow_diff?.would_restore ?? []).join(', ')}] would_restore_snippets=${stats.shadow_diff?.would_restore_snippets ?? 0}`
   );
 }

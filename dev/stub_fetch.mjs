@@ -30,7 +30,7 @@
  * 片段之间隔着剥样板与 JSON-LD 转换，对照会误报（审计口径里的"可选"项，不做）。
  *
  * stderr 约定：`[smoke-stub] ` 前缀 = 失败标记（smoke 断言其不出现）；
- * `[smoke-replay] ` 前缀 = 每次成功回放的记账行（smoke 按模式数：shadow/on 恰 12、
+ * `[smoke-replay] ` 前缀 = 每次成功回放的记账行（smoke 按模式数：test/on 恰 12、
  * off 恰 0）。桩在服务器进程内，stderr 不是协议通道（stdout 才是），不会污染
  * stdio 分帧。本文件不 import 任何 src 模块（预加载时序在应用求值之前）。
  */
@@ -63,7 +63,7 @@ const expectedModel = process.env.SMOKE_JEV_MODEL ?? '';
 const expectedEndpoint = process.env.SMOKE_JEV_ENDPOINT ?? '';
 
 /** 配置 mode（① 的判据）：与 src/filter/config.ts 同口径读 JEV_FILTER_CONFIG_FILE
- * 指向的 JSON——BOM 容忍、trim + 小写后只认 off|shadow|on；未设 / 读不到 / 坏 JSON /
+ * 指向的 JSON——BOM 容忍、trim + 小写后只认 off|test|on；未设 / 读不到 / 坏 JSON /
  * 集合外的值一律按 'off'（与生产缺省一致），off 下 Jev 请求会被响亮拒绝。 */
 const resolveConfigMode = () => {
   const file = process.env.JEV_FILTER_CONFIG_FILE;
@@ -71,7 +71,7 @@ const resolveConfigMode = () => {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
     const text = typeof parsed?.mode === 'string' ? parsed.mode.trim().toLowerCase() : '';
-    return text === 'off' || text === 'shadow' || text === 'on' ? text : 'off';
+    return text === 'off' || text === 'test' || text === 'on' ? text : 'off';
   } catch {
     return 'off';
   }

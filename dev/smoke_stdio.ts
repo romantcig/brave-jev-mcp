@@ -4,31 +4,31 @@
  * tools/list → tools/call 全程，零网络确定性地验证返回形状与状态行——切到
  * ~/.claude.json（03-04）之前的最后一道自动闸，冒烟通过是切换任务的硬前置。
  *
- * 用法：node --import tsx dev/smoke_stdio.ts [--mode off|shadow|on] [--live]
- *   不带 --mode 跑三模式全量（off → shadow → on，每模式各自 spawn 一次服务器、
+ * 用法：node --import tsx dev/smoke_stdio.ts [--mode off|test|on] [--live]
+ *   不带 --mode 跑三模式全量（off → test → on，每模式各自 spawn 一次服务器、
  *   各自临时配置与临时 log_dir——mode 在配置文件里、服务器启动读一次）；单独
- *   --mode shadow 时自动先跑一遍 off 作逐字对照（dev/compare.ts 先例）；单独
- *   --mode on 不需要 off——on 的期望全部来自固定夹具契约。--live 是真实网络
+ *   --mode test 或 --mode on 时自动先跑另一个模式作逐字段对照（test==on 互证
+ *   需要两份独立 spawn 的结果）。--live 是真实网络
  *   手动开关（D-18，不进自动验证，切换前跑一次确认 key 与代理通），与 --mode 互斥。
  *
  * 三模式行为断言（R-11，E 包假绿缺口的收口；期望全部来自固定发布夹具契约）：
  *   - 三模式共同：返回 content 恰两个 text 块（本夹具必有删除 → 状态行必在）；
  *     content[0] JSON 里 grounding.generic[] 的片段扁平总数独立清点（不信任
  *     output.n_snippets 自报值，同时断言两者一致）；幸存来源 URL 序与逐 URL 幸存
- *     片段索引身份（位置级文本形态匹配——off/shadow 对照期望文件 final 节、on 对照
+ *     片段索引身份（位置级文本形态匹配——off/test 对照期望文件 final 节、on 对照
  *     ON_KEPT_SNIPPETS 常数，F-05）；日志 sources 裁决表与 content 逐 URL 对账；
  *     临时 log_dir 恰一条
  *     成功记录（无 error 字段、有 stats 主体），mode / model_config / request 与
  *     本次调用一致；
  *   - off：片段总数 = off 期望（59）；日志 jev 严格为 null；桩侧 Jev 请求数 0
  *     （stderr 无 [smoke-replay] 行；桩对 off 下的 Jev 请求直接拒绝——E-03 双层闸）；
- *   - shadow：完整 content 数组与 off 那次独立 spawn 的结果逐字相同（D-07，含每个
- *     text 块，不是只比第一块字符串）；日志 per_source 恰 12 行全部 answered、无
- *     fail_kind、十题答案与 snippet_scores 对齐录制真值；shadow_diff 四字段等于
- *     已复核常数；
- *   - on：片段总数 = on 期望（61，由 off − would_remove + would_restore 推导）；
+ *   - test：完整 content 数组与 on 那次独立 spawn 的结果逐字段相同（同夹具同预加载
+ *     桩，04-01 单链语义的端到端互证，含每个 text 块）；per_source 断言（恰 12 行
+ *     全部 answered、无 fail_kind、十题答案与 snippet_scores 对齐录制真值）与 on
+ *     同口径；新记录不再产生 shadow_diff（恒 null，字段仅为读旧记录保留）；
+ *   - on：片段总数 = on 期望（61，由夹具契约差集推导：59 − 删 9 + 恢复 11）；
  *     逐 URL 幸存索引身份对照 ON_KEPT_SNIPPETS 常数（独立运行固化，9 删/11 恢复以
- *     身份差集互钉）；per_source 断言同 shadow——no_key 静默短路、空回答、
+ *     身份差集互钉）；per_source 断言同 test——no_key 静默短路、空回答、
  *     validation 兜底都在这里现形（E-01/E-02 的直接防线）。
  *
  * --live（D-18，R-09 合并 E-04/IN-01，F-03/F-04）：真实网络手动开关，目标是确认
@@ -59,7 +59,7 @@
  * 两个关键坑（RESEARCH 六问 3/4）：
  *   - SDK spawn 的 env 白名单 12 变量不含 TYPESAFE_API_KEY / JEV_FILTER_CONFIG_FILE，
  *     冒烟需要的每个变量必须显式放进 serverParams.env；
- *   - on/shadow 不设假 key 会走 no_key 静默短路（Pitfall 2 假绿）——off 也统一传假值。
+ *   - on/test 不设假 key 会走 no_key 静默短路（Pitfall 2 假绿）——off 也统一传假值。
  *
  * dev/ 不进 tsc / prettier 门禁；相对导入带 .js 后缀（NodeNext ESM 直跑约定）。
  */
@@ -77,7 +77,7 @@ import { JEVI_ENDPOINT } from '../src/filter/jev/client.js';
 import { DEFAULT_JEV_MODEL } from '../src/filter/jev/questions.js';
 
 // ---------------------------------------------------------------------------
-// argv：--mode off|shadow|on（缺省三模式全量）；--live 真实网络手动开关（互斥）
+// argv：--mode off|test|on（缺省三模式全量）；--live 真实网络手动开关（互斥）
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
@@ -86,7 +86,7 @@ const die = (message: string): never => {
   process.exit(1);
 };
 
-const MODES = ['off', 'shadow', 'on'] as const;
+const MODES = ['off', 'test', 'on'] as const;
 type SmokeMode = (typeof MODES)[number];
 
 let modeFilter: SmokeMode | undefined;
@@ -94,7 +94,7 @@ const modeIndex = args.indexOf('--mode');
 if (modeIndex !== -1) {
   const value = args[modeIndex + 1] ?? '';
   if (!(MODES as readonly string[]).includes(value)) {
-    die(`--mode 只认 off|shadow|on，收到：${value || '(缺值)'}`);
+    die(`--mode 只认 off|test|on，收到：${value || '(缺值)'}`);
   }
   modeFilter = value as SmokeMode;
 }
@@ -112,7 +112,7 @@ const stubPath = join(repoRoot, 'dev', 'stub_fetch.mjs');
 const distIndexJs = join(repoRoot, 'dist', 'index.js');
 const toolName = 'brave_llm_context';
 
-// 假 key（T-03-06）：值非空即可让 on/shadow 走真分类器路径，桩会截住全部请求。
+// 假 key（T-03-06）：值非空即可让 on/test 走真分类器路径，桩会截住全部请求。
 // BRAVE_API_KEY 是上游 CLI 的启动硬前置（缺了直接退出），桩模式同样传假值——
 // 零网络由桩保证，不依赖 key 真实性。两个 key 都写成常量再引用——不把 key 名与
 // 引号字面量相邻，保持 key 泄漏闸 grep 形态干净。
@@ -139,23 +139,17 @@ const expected = JSON.parse(
 // 固定夹具契约常数（R-11）：改动必须与 pipeline.fixtures.test.ts 同步
 // ---------------------------------------------------------------------------
 
-// shadow_diff 已复核常数：来源 pipeline.fixtures.test.ts 的
-// SHADOW_DIFF_EXPECTED.jev_release_default（E 包独立复核一致）。注意口径：
-// would_restore_snippets=11 是 on 救回的片段数，61−59=2 只是净增——不能称为"只救回 2 条"。
-const SHADOW_DIFF_EXPECTED = {
-  would_drop: [] as string[],
-  would_remove_snippets: 9,
-  would_restore: [] as string[],
-  would_restore_snippets: 11,
-};
+// on 相对 off 的片段差集计数（夹具契约，与 pipeline.fixtures.test.ts 的差集真值
+// 同源）：off − on 删 9 条、on − off 恢复 11 条（逐条身份清单见 ON_KEPT_SNIPPETS
+// 注释），净增 2。旧 shadow_diff 四字段随双链退役（04-01）不再产生，这里只保留
+// 差集计数作 on 期望推导与身份差集互钉。
+const ON_DELTA_REMOVED = 9;
+const ON_DELTA_RESTORED = 11;
 
-// off 幸存片段总数来自期望文件 final.n_snippets；on 期望按 shadow_diff 推导
+// off 幸存片段总数来自期望文件 final.n_snippets；on 期望按夹具契约差集推导
 // （59 − 9 + 11 = 61），与夹具测试同口径，不另立硬编码
 const OFF_N_SNIPPETS = expected.final.n_snippets;
-const ON_N_SNIPPETS =
-  OFF_N_SNIPPETS -
-  SHADOW_DIFF_EXPECTED.would_remove_snippets +
-  SHADOW_DIFF_EXPECTED.would_restore_snippets;
+const ON_N_SNIPPETS = OFF_N_SNIPPETS - ON_DELTA_REMOVED + ON_DELTA_RESTORED;
 
 // on 侧逐 URL 幸存片段索引（F-05，R-11 身份验收的 on 半边；键与 off 期望文件同式，
 // "i" 或 "i.p"，幸存序）。导出方法：2026-09-29 一次性脚本 import src/filter 的
@@ -163,7 +157,8 @@ const ON_N_SNIPPETS =
 // jev.json 录制 + 夹具答案回放）跑 off 与 on 各一次——off 先对期望文件逐条核对
 // （URL 序 / 逐 URL 幸存索引 / 总数 59）通过后，才取 on 的 stats.sources 幸存键。
 // 期望不由冒烟自身的被测运行反推；夹具或过滤语义改动时必须重跑导出并与
-// pipeline.fixtures.test.ts 同步。差集身份（与 SHADOW_DIFF_EXPECTED 的 9/11 互钉）：
+// pipeline.fixtures.test.ts 同步。差集身份（与 ON_DELTA_REMOVED / ON_DELTA_RESTORED
+// 的 9/11 互钉）：
 // off − on 删 9 = typesafe.ai#4/#5/#6/#7、ua.news#1/#4/#6、mezha#0/#2；
 // on − off 恢复 11 = theregister#7、explainx#1.0/#1.4、flowtivity#1/#3.0/#3.1/#3.3、
 // datacamp#0、typesafe.ai#0/#2、mezha#4。
@@ -260,8 +255,8 @@ const SNIPPET_WITNESS_TEXTS: Record<string, Record<string, string>> = {
 };
 
 // 9 删 / 11 恢复从计数升级为身份清单（F-05）：差集只从两份常数推导（off 期望文件
-// 与 ON_KEPT_SNIPPETS，都不由被测运行产生），与 SHADOW_DIFF_EXPECTED 的计数互钉——
-// 任一常数漂移或两者失配，冒烟还没 spawn 服务器就当场红。
+// 与 ON_KEPT_SNIPPETS，都不由被测运行产生），与 ON_DELTA_REMOVED / ON_DELTA_RESTORED
+// 互钉——任一常数漂移或两者失配，冒烟还没 spawn 服务器就当场红。
 const keptIdentitySet = (kept: Record<string, (number | string)[]>): Set<string> =>
   new Set(Object.entries(kept).flatMap(([url, keys]) => keys.map((key) => `${url}#${key}`)));
 const offIdentity = keptIdentitySet(expected.final.kept_snippets);
@@ -270,13 +265,13 @@ const removedIdentities = [...offIdentity].filter((key) => !onIdentity.has(key))
 const restoredIdentities = [...onIdentity].filter((key) => !offIdentity.has(key));
 assert.equal(
   removedIdentities.length,
-  SHADOW_DIFF_EXPECTED.would_remove_snippets,
-  `fixture contract: off−on removed identities must be ${SHADOW_DIFF_EXPECTED.would_remove_snippets}, got ${removedIdentities.length} — ${removedIdentities.join(', ')}`
+  ON_DELTA_REMOVED,
+  `fixture contract: off−on removed identities must be ${ON_DELTA_REMOVED}, got ${removedIdentities.length} — ${removedIdentities.join(', ')}`
 );
 assert.equal(
   restoredIdentities.length,
-  SHADOW_DIFF_EXPECTED.would_restore_snippets,
-  `fixture contract: on−off restored identities must be ${SHADOW_DIFF_EXPECTED.would_restore_snippets}, got ${restoredIdentities.length} — ${restoredIdentities.join(', ')}`
+  ON_DELTA_RESTORED,
+  `fixture contract: on−off restored identities must be ${ON_DELTA_RESTORED}, got ${restoredIdentities.length} — ${restoredIdentities.join(', ')}`
 );
 assert.equal(
   onIdentity.size,
@@ -574,18 +569,20 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       expected.final.urls,
       'return: surviving source URLs must equal the fixture final.urls in Brave order'
     );
-    const expectedCount = runMode === 'on' ? ON_N_SNIPPETS : OFF_N_SNIPPETS;
+    // 04-01 单链语义：test 与 on 共用 runOnChain，裁决真实生效——test 的期望与 on
+    // 同源（ON_N_SNIPPETS / ON_KEPT_SNIPPETS），off 独用期望文件
+    const expectedCount = runMode === 'off' ? OFF_N_SNIPPETS : ON_N_SNIPPETS;
     assert.equal(
       counted,
       expectedCount,
       `return: counted snippets must be ${expectedCount} in ${runMode} (fixture contract), got ${counted}`
     );
     // 逐 URL 幸存片段身份（F-05，把 R-11 的计数对账升级为位置级索引身份）：三模式
-    // 各自对照自己的契约——off/shadow 对照期望文件 final.kept_snippets，on 对照
-    // ON_KEPT_SNIPPETS（9 删/11 恢复的身份差集已在顶部与两份常数互钉）。同 URL
+    // 各自对照自己的契约——off 对照期望文件 final.kept_snippets，test/on 对照
+    // ON_KEPT_SNIPPETS（9 删/11 恢复的身份差集已在顶部与差集常数互钉）。同 URL
     // 等数量换成已删片段（总数、URL 序、日志计数全不变）在这里红。
     const expectedKept: Record<string, (number | string)[]> =
-      runMode === 'on' ? ON_KEPT_SNIPPETS : expected.final.kept_snippets;
+      runMode === 'off' ? expected.final.kept_snippets : ON_KEPT_SNIPPETS;
     for (const item of generic) {
       const keys = expectedKept[item.url];
       assert.ok(
@@ -627,7 +624,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     );
     assert.ok(
       !statusLine.includes('not checked by Jev'),
-      `status line: the on-only unchecked segment must not appear in ${runMode} (D-06) — ${statusLine}`
+      `status line: the unchecked segment must not appear in ${runMode} (default fixture is fully answered) — ${statusLine}`
     );
     assert.equal(
       payload.output?.status_line,
@@ -790,15 +787,9 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
         [DEFAULT_JEV_MODEL],
         `log: ${runMode} model_reported must be the recorded model`
       );
-      if (runMode === 'shadow') {
-        assert.deepEqual(
-          record.shadow_diff,
-          SHADOW_DIFF_EXPECTED,
-          'log: shadow_diff must equal the reviewed fixture contract (删9/恢复11，来源级两数组空) — would 链没跑或跑错在这里红'
-        );
-      } else {
-        assert.equal(record.shadow_diff, null, 'log: on must record shadow_diff null');
-      }
+      // 04-01 起旧影子双链退役：新记录不再产生 shadow_diff（恒 null，字段仅为读
+      // 旧记录保留）——would 链若被意外复活，这里当场红
+      assert.equal(record.shadow_diff, null, 'log: new records must not carry shadow_diff');
     }
 
     // --- 8. stderr：日志写成功 + 桩零失败标记 + 桩侧 Jev 计数对账 ---
@@ -811,7 +802,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       !stderrText.includes('[smoke-stub]'),
       `stderr: the stub must accept every request identity (R-12 markers absent) — ${stderrText}`
     );
-    // 桩侧 Jev 请求数（R-11 #1 的桩侧计数 / #8 的记账对账）：off 恰 0，shadow/on 恰 12。
+    // 桩侧 Jev 请求数（R-11 #1 的桩侧计数 / #8 的记账对账）：off 恰 0，test/on 恰 12。
     // 日志 n_requests 是服务器自报，这里以桩的独立计数交叉验证
     const replays = [...stderrText.matchAll(/\[smoke-replay\] jev /g)].length;
     assert.equal(
@@ -949,7 +940,7 @@ const runLiveMode = async (): Promise<void> => {
   const configMode = liveConfig.mode;
   if (configMode === 'off') {
     die(
-      'live: 生效配置 mode=off——Jev 永远不会被调用，仅 Brave 成功不能确认 Brave + Jev 链路（R-09）。把配置改为 shadow/on 后再跑。'
+      'live: 生效配置 mode=off——Jev 永远不会被调用，仅 Brave 成功不能确认 Brave + Jev 链路（R-09）。把配置改为 test/on 后再跑。'
     );
   }
 
@@ -1101,7 +1092,7 @@ const runLiveMode = async (): Promise<void> => {
 };
 
 // ---------------------------------------------------------------------------
-// 主流程：三模式循环（shadow 与 off 逐字对照）或 --live；汇总行便于 verify grep
+// 主流程：三模式循环（test 与 on 逐字段对照）或 --live；汇总行便于 verify grep
 // ---------------------------------------------------------------------------
 
 try {
@@ -1111,25 +1102,28 @@ try {
     const runs = new Map<SmokeMode, ModeResult>();
     const modes: SmokeMode[] = modeFilter ? [modeFilter] : [...MODES];
     for (const m of modes) {
-      // 单独 --mode shadow：先静默跑一遍 off 作对照——D-07 逐字断言需要两份
-      // 独立 spawn 的结果（dev/compare.ts 的"同时跑一遍 off 作对照"先例）
-      if (m === 'shadow' && !runs.has('off')) {
-        runs.set('off', await runStubbedMode('off'));
+      // 单独 --mode test / --mode on：先静默跑另一个模式作对照——test==on 逐字段
+      // 断言需要两份独立 spawn 的结果（同夹具同预加载桩，dev/compare.ts 先例）
+      if (modeFilter !== undefined && m === 'test' && !runs.has('on')) {
+        runs.set('on', await runStubbedMode('on'));
+      }
+      if (modeFilter !== undefined && m === 'on' && !runs.has('test')) {
+        runs.set('test', await runStubbedMode('test'));
       }
       const run = await runStubbedMode(m);
       runs.set(m, run);
-      if (m === 'shadow') {
-        const offRun = runs.get('off');
-        assert.ok(offRun !== undefined, 'shadow: off baseline missing');
-        // R-11 #3：完整 content 数组逐字相同（D-07）——含每个 text 块，
-        // 不是只比第一个 JSON 块的字符串
-        assert.deepEqual(
-          run.content,
-          offRun.content,
-          'shadow: full content array must be verbatim-identical to the off run (D-07, every text block)'
-        );
-      }
       console.log(`smoke ${m}: all assertions passed`);
+    }
+    // T-04-01-2 双载体互证：test 与 on 的完整 content 数组逐字段相同（同夹具同
+    // 预加载桩，两模式各自独立 spawn）——含每个 text 块，不是只比第一个 JSON 块
+    const testRun = runs.get('test');
+    const onRun = runs.get('on');
+    if (testRun !== undefined && onRun !== undefined) {
+      assert.deepEqual(
+        testRun.content,
+        onRun.content,
+        'test: full content array must be field-identical to the on run (same fixture, same stub, independent spawns)'
+      );
     }
     if (modeFilter === undefined) {
       console.log('smoke all: 3 modes passed');
