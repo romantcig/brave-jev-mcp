@@ -4,8 +4,8 @@
  * 只消费单来源的 judged 答案与阈值——输入没有跨来源数据结构，Jev 裁决绝不越权做
  * 跨来源比较、重排或补回（PLAN §3.3）；工作表上只翻 `verdict` / `reason` /
  * `kept` 标记，不 sort、不 filter 出新数组（RULES-08）。裁决结果回写
- * `stats.jev.per_source` 对应行（Phase 3 状态行的共同来源；shadow 模式在拷贝表上
- * 跑本链时，per_source 记的就是 would 层裁决，正本不动）。
+ * `stats.jev.per_source` 对应行（Phase 3 状态行的共同来源；test 与 on 的记账形状
+ * 一致——单链语义，04-CONTEXT）。
  *
  * 最小行类型照 `budget.ts` 先例：pipeline 的工作表结构上满足、又不产生
  * pipeline → verdict → pipeline 的循环导入（本文件不 import pipeline.ts）。

@@ -9,10 +9,13 @@
  * 步 8，01-04 填了步 9（裁回预算，实现在 budget.ts）；02-02 把 `filterLlmContext`
  * 改为 async 并接线步 5（全候选并发派发 + 逐源记账），`runJevStage` 是私有编排件，
  * 不进 barrel。02-03 填了步 6/7 前半（来源级裁决与片段 score），02-04 填了步 7 后半
- * （指纹新颖度与跨源逐字去重，实现在 novelty.ts）；步 10（shadow 状态行）留待
- * Phase 3。末尾做输出重建与 `sources` 精简。后续计划往空位填实现，不改这里的顺序与签名。
+ * （指纹新颖度与跨源逐字去重，实现在 novelty.ts）；步 10（状态行）在 Phase 3 落地。
+ * 04-01 起单链化：test 与 on 共用同一条 Jev 过滤链（runJevStage + runOnChain，裁决
+ * 真实生效），off 短路走本地链；旧影子双链（would 层、shadow_diff / shadow_evidence）
+ * 退役，历史字段仅为读旧记录保留。
  *
- * 依据：PLAN.md §3.2、notes/local-rules-design.md、01-RESEARCH.md「纯库布局」一节。
+ * 依据：PLAN.md §3.2、notes/local-rules-design.md、04-CONTEXT.md「模式与兼容」、
+ * 测试模式与搜索样本记录实施计划.md 第二节。
  */
 
 import { parseFilterConfigObject } from './config.js';
@@ -40,16 +43,12 @@ import {
 } from './prefilter.js';
 import { buildQuestions, buildState, SOURCE_QUESTIONS } from './jev/questions.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
-import {
-  applyNovelty,
-  type JevSideDeletionFlags,
-  type NoveltyDeletionInfo,
-} from './jev/novelty.js';
+import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { buildStatusLine } from './statusline.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
-import { createFilterStats, createNoKeyJevStats, zeroLocal } from './stats.js';
+import { createFilterStats, createNoKeyJevStats } from './stats.js';
 import type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,
@@ -66,13 +65,11 @@ import type {
   JevPerSourceStats,
   JevStats,
   JevThresholds,
-  ShadowDiff,
   SnippetRemovalReason,
   SnippetStats,
   SourceDropReason,
   SourceMetadata,
   SourceStats,
-  WouldActionEvidence,
 } from './types.js';
 
 /** `age` 元素的 ISO 日期判定：前缀匹配，不数字符（EMBED-01/encoding）。 */
@@ -459,17 +456,16 @@ const toStatsRequest = (
  * 自 02-02 起异步（步 5 要 `await` 注入的 classify），仍不发任何网络请求——
  * 网络只发生在注入的 classify 实现里。`config` 省略时取全默认（不读文件、不看
  * 环境——配置载体是单一 JSON 文件，读一次的责任在适配行）。
- * 模式分叉：off 整段跳过 Jev（`stats.jev` 保持 null）；on/shadow 注入 classify 后
- * 对全部候选来源并发派发（步 5），未注入时记 no_key 零值对象且零请求（SAFE-01
- * 语义前置）；on 在正本上跑 on 链（步 6 → 步 7 → 步 8）；shadow 的**正本走与 off
- * 完全相同的 off 链**（输出因此与同输入的 off 逐字段相同），另在深拷贝上跑 on 链
- * 得到 `shadow_diff`（VERDICT-05）。调用方不 `await` 会在 tsc 处报类型错——tsx
- * 不查类型，`npm run build` 是唯一漏改闸（Pitfall 1）。
+ * 模式分叉（04-01 单链语义）：off 整段跳过 Jev（`stats.jev` 保持 null）；test 与
+ * on 注入 classify 后**共用同一条过滤链**——runJevStage 并发派发（步 5）接
+ * runOnChain（步 6 → 步 7 → 步 8），裁决真实生效，不维护两套实现；未注入 classify
+ * 时记 no_key 零值对象且零请求（SAFE-01 语义前置）。调用方不 `await` 会在 tsc 处
+ * 报类型错——tsx 不查类型，`npm run build` 是唯一漏改闸（Pitfall 1）。
  *
  * @param data Brave LLM Context 响应（已过上游 zod 校验）
  * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带
  * @param config 过滤配置；省略时为全默认配置（mode off）
- * @param deps Phase 2 注入点：`classify` 缺省时 on/shadow 记 no_key
+ * @param deps Phase 2 注入点：`classify` 缺省时 on/test 记 no_key
  * @returns `{ result, stats }` 的 Promise；`result` 与输入同形，`stats` 是本次调用新建的对象
  */
 export async function filterLlmContext(
@@ -485,38 +481,19 @@ export async function filterLlmContext(
 
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
   if (config.mode === 'off') {
-    // off：整段跳过 Jev（stats.jev 保持 null），正本走 off 链
+    // off：整段跳过 Jev（stats.jev 保持 null），只跑本地链
     runOffChain(table, undefined, 'off', config.thresholds, stats, queryTerms);
   } else if (deps?.classify === undefined) {
-    // no_key（on/shadow 未注入 classify）：全部来源未判定 → Brave 序播种、无 Jev
+    // no_key（on/test 未注入 classify）：全部来源未判定 → Brave 序播种、无 Jev
     // 答案即无论证段保护（PLAN §3.2 明文设计，用户已定决策 3——off 期望文件的重
     // 标注是设计意图不是回归；no_key 等价 off 口径，SAFE-01 前置语义）
     stats.jev = createNoKeyJevStats();
     runOffChain(table, undefined, config.mode, config.thresholds, stats, queryTerms);
   } else {
     // 步 5 Jev 每源一次请求：全候选一波并发派发（进程级并发闸住 02-05 的
-    // createJevClassifier，管道编排层不持状态与限流）
+    // createJevClassifier，管道编排层不持状态与限流）——test 与 on 共用此分支
     const judged = await runJevStage(table, request, deps.classify, stats);
-    if (config.mode === 'on') {
-      runOnChain(table, judged, config.thresholds, stats, queryTerms);
-    } else {
-      // shadow：先在深拷贝上跑 on 链（would 层，计数走一次性载体，不发回正本
-      // stats.local；per_source 的 verdict/reason 照常记账），正本再走 off 链——
-      // 两条链同一份实现，`shadow_diff` 直接由比两张表得出（VERDICT-05）
-      const onTable = cloneWorkTable(table);
-      // 一次性载体：local 全零且 novelty 数组另行新建——would 链的明细（若有）落
-      // 在这里，绝不混入正本 stats.local（正本只记实际生效链 off 链的明细，02-FIX
-      // 教训：shadow 输出必须与 off 相同）
-      const throwawayStats: FilterStats = { ...stats, local: { ...zeroLocal, novelty: [] } };
-      // R-06/F-02：两链删除动作的逐条证据（定位 + 判定当时数值）——would 侧解释
-      // would_drop / would_remove_snippets，actual 侧（正本 off 链）解释恢复差异；
-      // 两链都零删除动作时省略键，审核脚本对缺键的旧记录按"证据不足"读
-      const wouldEvidence: WouldActionEvidence[] = [];
-      runOnChain(onTable, judged, config.thresholds, throwawayStats, queryTerms, wouldEvidence);
-      runOffChain(table, undefined, 'off', config.thresholds, stats, queryTerms, wouldEvidence);
-      stats.shadow_diff = diffShadow(table, onTable);
-      if (wouldEvidence.length > 0) stats.shadow_evidence = wouldEvidence;
-    }
+    runOnChain(table, judged, config.thresholds, stats, queryTerms);
   }
   // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
   // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
@@ -539,7 +516,6 @@ export async function filterLlmContext(
   finalizeStats(stats, table);
   // 步 10 状态行：从最终统计对象投影（D-01..D-08）。落点必须在 finalizeStats
   // 之后——它整体替换 stats.output，写在之前会被吞掉（03-RESEARCH Pitfall 1）。
-  // shadow 的正本走 off 链，生成只读实际生效链的结果，绝不读 shadow_diff（D-07）。
   stats.output.status_line = buildStatusLine(stats);
 
   return { result, stats };
@@ -583,7 +559,7 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidate[] => {
  *   `'breaker_open'` → `'breaker_open'`，否则任一 failed → `'degraded'`，否则 `'ok'`。
  *
  * @returns 逐源 judged 结果映射（键 = src id `s{index}`，值 = per_source 行对象
- * 引用）——步 6/7 的裁决消费入口；shadow 的 would 层共用同一映射。
+ * 引用）——步 6/7 的裁决消费入口。
  */
 const runJevStage = async (
   table: WorkSource[],
@@ -701,158 +677,29 @@ const runJevStage = async (
 };
 
 /**
- * 工作表深拷贝（来源逐个展开、`snippets` 逐条展开，其余字段只读共享）：shadow 的
- * would 链在拷贝上跑，正本不动；两条链只翻拷贝上的标记，不重排。
- */
-const cloneWorkTable = (table: WorkSource[]): WorkSource[] =>
-  table.map((source) => ({
-    ...source,
-    snippets: source.snippets.map((snippet) => ({ ...snippet })),
-  }));
-
-/**
- * 片段配对键：原来源（`mergedFrom`）+ 片段 `index` + 可选 JSON-LD `part`。
- * 三段缺一不可——归并片段的 `index` 是它在**原来源**里的片段索引，与持有来源
- * 自有片段的 index 天然可能相同，只按 index+part 配对会撞键（C-01：归并后同键
- * 片段的 kept 状态被 Map 覆盖，凭空制造或吞掉 would 差异）。无并入来源时省略
- * 前缀，`evidence` 的片段身份（shadow-mode-logging.md）用同一格式。
- */
-const snippetKey = (snippet: WorkSnippet): string => {
-  const merged = snippet.mergedFrom === undefined ? '' : `${snippet.mergedFrom}:`;
-  return `${merged}${snippet.index}${snippet.part === undefined ? '' : `.${snippet.part}`}`;
-};
-
-/** 步前轻量快照：来源 verdict 与逐片段 kept（配对身份 → 布尔），不含正文。 */
-type StepSnapshot = Map<number, { verdict: 'keep' | 'drop'; snippets: Map<string, boolean> }>;
-
-const snapshotChain = (table: WorkSource[]): StepSnapshot =>
-  new Map(
-    table.map((source) => [
-      source.index,
-      {
-        verdict: source.verdict,
-        snippets: new Map(source.snippets.map((snippet) => [snippetKey(snippet), snippet.kept])),
-      },
-    ])
-  );
-
-/** novelty 判定当时的逐片段数值；键 = `${来源 index}:${片段配对身份}`（F-01：跨来源同号片段不串用）。 */
-type NoveltyNumbers = Map<string, { fpCount: number; novelCount: number }>;
-
-const noveltyCollector =
-  (noveltyNumbers: NoveltyNumbers) =>
-  (info: NoveltyDeletionInfo): void => {
-    noveltyNumbers.set(`${info.sourceIndex}:${snippetKey(info.snippet)}`, {
-      fpCount: info.fpCount,
-      novelCount: info.novelCount,
-    });
-  };
-
-/**
- * 步后对照：与步前快照比对新翻掉的 verdict / kept，删除动作落逐条证据。
- * 仅 reason 'novelty' 的片段附加判定当时数值——跨源 dup 等其他动作不带（F-01）。
- */
-const collectStep = (
-  table: WorkSource[],
-  before: StepSnapshot,
-  stage: WouldActionEvidence['stage'],
-  chain: WouldActionEvidence['chain'],
-  noveltyNumbers: NoveltyNumbers,
-  evidence: WouldActionEvidence[]
-): void => {
-  for (const source of table) {
-    const prior = before.get(source.index);
-    if (prior === undefined) continue;
-    if (prior.verdict === 'keep' && source.verdict === 'drop') {
-      evidence.push({ chain, src: `s${source.index}`, stage, reason: source.reason ?? 'empty' });
-      continue;
-    }
-    if (source.verdict !== 'keep' || prior.verdict !== 'keep') continue;
-    for (const snippet of source.snippets) {
-      const key = snippetKey(snippet);
-      if (snippet.kept || prior.snippets.get(key) !== true) continue;
-      const numbers =
-        snippet.reason === 'novelty' ? noveltyNumbers.get(`${source.index}:${key}`) : undefined;
-      evidence.push({
-        chain,
-        src: `s${source.index}`,
-        snippet: key,
-        stage: snippet.reason === 'novelty' ? 'novelty' : stage,
-        reason: snippet.reason ?? 'dup',
-        ...(numbers !== undefined
-          ? { fp_count: numbers.fpCount, novel_count: numbers.novelCount }
-          : {}),
-      });
-    }
-  }
-};
-
-/**
  * on 链：步 6 来源级裁决 → 步 7 前半 score 删除 → 步 7 后半跨源 dup 与指纹新颖度
- * → 步 8 空来源/一句话来源。on 正本与 shadow 的 would 拷贝共用这一份实现（不许
- * 写平行版本）。
+ * → 步 8 空来源/一句话来源。test 与 on 共用这一份实现（04-01 单链语义，不许写
+ * 平行版本）；裁决真实生效——drop 的来源从输出消失、低分片段被删。
  *
- * `stats` 只作计数与 per_source 回写的载体：shadow 传一次性载体（`local` 归零、
- * `jev` 引用沿用正本）——would 层的裁决仍落 `stats.jev.per_source`，本地计数不
- * 污染正本 `stats.local`（正本随后自己跑 off 链）。
- *
- * `evidence` 传入时（shadow 的 would 链，R-06）：每步前快照、步后对照，删除动作
- * 落逐条证据（chain 'would'）；novelty 通道的判定当时数值由 applyNovelty 的回调
- * 补齐。on 正本不传——行为与收集路径逐位一致，生产零开销。
+ * `stats` 承载计数与 per_source 回写（test 与 on 的过滤统计一致）。
  */
 const runOnChain = (
   table: WorkSource[],
   judged: ReadonlyMap<string, JevPerSourceStats>,
   thresholds: JevThresholds,
   stats: FilterStats,
-  queryTerms: ReadonlySet<string>,
-  evidence?: WouldActionEvidence[]
+  queryTerms: ReadonlySet<string>
 ): void => {
-  if (evidence === undefined) {
-    applySourceVerdicts(table, judged, thresholds, stats);
-    applySnippetScores(table, judged, thresholds, stats);
-    const jevSideDeletions = applyNovelty(table, judged, 'on', thresholds, stats);
-    dropEmptySources(table, stats, queryTerms, jevSideDeletions);
-    return;
-  }
-
-  // novelty 数值仅判定当时可得：回调按 来源+配对身份 暂存，步后对照时并入证据
-  const noveltyNumbers: NoveltyNumbers = new Map();
-  const collect = (before: StepSnapshot, stage: WouldActionEvidence['stage']): void =>
-    collectStep(table, before, stage, 'would', noveltyNumbers, evidence);
-
-  let before = snapshotChain(table);
   applySourceVerdicts(table, judged, thresholds, stats);
-  collect(before, 'source_verdict');
-
-  before = snapshotChain(table);
   applySnippetScores(table, judged, thresholds, stats);
-  collect(before, 'snippet_score');
-
-  before = snapshotChain(table);
-  const jevSideDeletions = applyNovelty(
-    table,
-    judged,
-    'on',
-    thresholds,
-    stats,
-    noveltyCollector(noveltyNumbers)
-  );
-  collect(before, 'cross_source_dup'); // reason 'novelty' 的条目按通道分流为 novelty
-
-  before = snapshotChain(table);
+  const jevSideDeletions = applyNovelty(table, judged, 'on', thresholds, stats);
   dropEmptySources(table, stats, queryTerms, jevSideDeletions);
-  collect(before, 'empty_source');
 };
 
 /**
  * off 链：步 7 后半（Brave 序播种的新颖度与跨源逐字去重）→ 步 8。off 模式与
- * shadow 正本走的就是这条链——shadow 的输出因此与同输入的 off 逐字段相同
- * （VERDICT-05）。no_key（on/shadow 未注入 classify）等价 off 口径，同样走这里。
- *
- * `evidence` 传入时（shadow 的正本链，F-02 返修）：同样在判定当时收集，chain
- * 'actual'——恢复类差异（would_restore / would_restore_snippets）的"off 当时
- * 为什么删"需要逐片段数值，来源级聚合（local.novelty）不能代回逐片段条件。
+ * no_key（on/test 未注入 classify）等价 off 口径时走这条链；test 与 on 的正式
+ * 过滤走 runOnChain——两者不再共用一条链下的双分支（04-01 起旧影子正本路径退役）。
  */
 const runOffChain = (
   table: WorkSource[],
@@ -860,85 +707,10 @@ const runOffChain = (
   mode: FilterMode,
   thresholds: JevThresholds,
   stats: FilterStats,
-  queryTerms: ReadonlySet<string>,
-  evidence?: WouldActionEvidence[]
+  queryTerms: ReadonlySet<string>
 ): void => {
-  if (evidence === undefined) {
-    const jevSideDeletions = applyNovelty(table, judged, mode, thresholds, stats);
-    dropEmptySources(table, stats, queryTerms, jevSideDeletions);
-    return;
-  }
-
-  const noveltyNumbers: NoveltyNumbers = new Map();
-  const collect = (before: StepSnapshot, stage: WouldActionEvidence['stage']): void =>
-    collectStep(table, before, stage, 'actual', noveltyNumbers, evidence);
-
-  let before = snapshotChain(table);
-  const jevSideDeletions = applyNovelty(
-    table,
-    judged,
-    mode,
-    thresholds,
-    stats,
-    noveltyCollector(noveltyNumbers)
-  );
-  collect(before, 'cross_source_dup'); // reason 'novelty' 的条目按通道分流为 novelty
-
-  before = snapshotChain(table);
+  const jevSideDeletions = applyNovelty(table, judged, mode, thresholds, stats);
   dropEmptySources(table, stats, queryTerms, jevSideDeletions);
-  collect(before, 'empty_source');
-};
-
-/**
- * shadow_diff：直接对比 off 链结果与 on 链结果两张表，不再按原因白名单与"间接
- * 清空"快照推断（VERDICT-05）。
- *
- * - `would_drop`：off 结果 keep、on 结果 drop 的来源 src id（Brave 序）。
- * - `would_remove_snippets`：在 off 与 on **都保留**的来源里，off 保留、on 删除的
- *   片段数——整源被 would_drop 的来源不重复计。
- * - `would_restore`：off 结果 drop、on 结果 keep 的来源 src id（Brave 序）——on 按
- *   is_primary 播种、保护原创论证段会救回 off 删掉的来源。
- * - `would_restore_snippets`：在两边都保留的来源里，off 删除、on 保留的片段数。
- *
- * 两张表按 `source.index` / 片段 `mergedFrom`+`index`+`part` 配对（C-01：归并片段
- * 与自有片段同 index 不撞键）；步 9 裁剪在两侧之后，故超量预算造成的差异不会混入
- * 本对比。
- */
-const diffShadow = (offTable: WorkSource[], onTable: WorkSource[]): ShadowDiff => {
-  const offByIndex = new Map(offTable.map((source) => [source.index, source]));
-  const wouldDrop: string[] = [];
-  let wouldRemoveSnippets = 0;
-  const wouldRestore: string[] = [];
-  let wouldRestoreSnippets = 0;
-
-  for (const onSource of onTable) {
-    const offSource = offByIndex.get(onSource.index);
-    if (offSource === undefined) continue;
-
-    if (offSource.verdict === 'keep' && onSource.verdict === 'drop') {
-      wouldDrop.push(`s${onSource.index}`);
-      continue;
-    }
-    if (offSource.verdict === 'drop' && onSource.verdict === 'keep') {
-      wouldRestore.push(`s${onSource.index}`);
-      continue;
-    }
-    if (offSource.verdict !== 'keep' || onSource.verdict !== 'keep') continue;
-
-    const offSnippets = new Map(offSource.snippets.map((row) => [snippetKey(row), row]));
-    for (const onSnippet of onSource.snippets) {
-      const offKept = offSnippets.get(snippetKey(onSnippet))?.kept;
-      if (!onSnippet.kept && offKept === true) wouldRemoveSnippets += 1;
-      if (onSnippet.kept && offKept === false) wouldRestoreSnippets += 1;
-    }
-  }
-
-  return {
-    would_drop: wouldDrop,
-    would_remove_snippets: wouldRemoveSnippets,
-    would_restore: wouldRestore,
-    would_restore_snippets: wouldRestoreSnippets,
-  };
 };
 
 /**

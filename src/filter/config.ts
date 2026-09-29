@@ -34,8 +34,20 @@ import type { FilterConfig, FilterMode, JevThresholds } from './types.js';
 /** 指向配置文件的唯一配置类环境变量；未设 → 全部默认（mode off）。 */
 export const JEV_CONFIG_FILE_ENV = 'JEV_FILTER_CONFIG_FILE';
 
-/** 合法模式集合；集合外的值（含未设）一律回落 'off'。 */
-const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'shadow', 'on']);
+/**
+ * 合法模式三值集合（04-CONTEXT 模式与兼容节）；旧配置值 'shadow' 作 test 的别名
+ * 映射为 'test' 并发一次迁移诊断，其余集合外的值（含未设）一律回落 'off'。
+ * 别名绝不能落成 off——别名回落会静默改变过滤强度（T-04-01-1）。
+ */
+const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'test', 'on']);
+
+/** 旧别名到新值的映射（配置键 mode 不变；'shadow' 语义重定义为实际应用裁决的 test）。 */
+const LEGACY_MODE_ALIASES: ReadonlyMap<string, FilterMode> = new Map([['shadow', 'test']]);
+
+/** 旧别名 shadow 的迁移诊断行（04-CONTEXT：stderr 一次诊断 + 交接说明要求显式改配置）。 */
+const SHADOW_ALIAS_MIGRATION =
+  `[jev-filter] config: mode 'shadow' is a legacy alias for 'test'; ` +
+  `update the config file to mode 'test'.`;
 
 const isFilterMode = (value: string): value is FilterMode => MODES.has(value);
 
@@ -157,6 +169,7 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
  * @returns 每项都合法的 FilterConfig（mode 缺省 off、黑名单为内置表、logDir 已展开 `~`）
  * @example parseFilterConfigObject({}).mode === 'off'
  * @example parseFilterConfigObject({ mode: ' ON ' }).mode === 'on'
+ * @example parseFilterConfigObject({ mode: 'shadow' }).mode === 'test'（旧别名，另发一次迁移诊断）
  * @example parseFilterConfigObject({ mode: 'banana' }).mode === 'off'
  * @example parseFilterConfigObject({ overfetch_factor: 0.5 }).overfetchFactor === 1
  * @example parseFilterConfigObject({ jev: 5 }).jev.model === 'jev-1.13.0'
@@ -174,13 +187,18 @@ export function parseFilterConfigObject(
   }
   const file = configFileRecord(raw);
 
-  // mode：字符串、trim、不分大小写；集合外一律 off
+  // mode：字符串、trim、不分大小写；三值 off/test/on；旧别名 'shadow' → 'test'
+  // 并发一次迁移诊断（每次 parseFilterConfigObject 调用至多一次——配置启动读一次，
+  // 进程内天然一次）；其余集合外一律 off
   let mode: FilterMode = 'off';
   if (Object.hasOwn(file, 'mode')) {
     const value = file.mode;
     const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (isFilterMode(text)) mode = text;
-    else warn(ignored('mode', value, 'off'));
+    else if (LEGACY_MODE_ALIASES.has(text)) {
+      mode = LEGACY_MODE_ALIASES.get(text) as FilterMode;
+      warn(SHADOW_ALIAS_MIGRATION);
+    } else warn(ignored('mode', value, 'off'));
   }
 
   // overfetch_factor：有限数且 >= 1

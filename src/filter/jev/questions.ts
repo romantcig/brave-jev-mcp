@@ -1,7 +1,7 @@
 /**
  * Jev 题库 v3 与全部 Jev 常量（JEV-03"集中在一个文件"）：十道来源级题、片段级
  * score 题的三档 legend、总指令、十一项阈值默认值、钉版模型 ID 与兜底常数。
- * 审阅改常量只看这里；影子期调参走单一配置文件（EMBED-05），解析在
+ * 审阅改常量只看这里；测试模式调参走单一配置文件（EMBED-05），解析在
  * `src/filter/config.ts`，坏值回落本文件的默认值。
  *
  * 题干预告逐字取 `dev/jev_probe.py` v3 定稿（前六道旧题干逐字保留，四道新题按
@@ -58,7 +58,7 @@ export const SNIPPET_LEVELS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * 十一项阈值默认值（notes/shadow-mode-logging.md 权威初值，全部待 Phase 4 影子期
+ * 十一项阈值默认值（notes/shadow-mode-logging.md 权威初值，全部待 Phase 4 测试模式
  * 修订）。判据方向：来源级五道丢弃门槛是概率 >= 门槛即丢（含等号）；片段
  * `score < snippetMin` 严格小于才删（score = 1.0 保留）；CJK 占比 > cjkShare 时
  * 五道丢弃门槛各加 cjkBonus。概率是 API 侧两位小数值，客户端不再舍入。

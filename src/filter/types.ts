@@ -8,8 +8,12 @@
  * 依据：PLAN.md §3.2、notes/shadow-mode-logging.md、01-RESEARCH.md「统计对象」一节。
  */
 
-/** 三档模式：off 只跑本地规则；shadow 让 Jev 判断但不真丢；on 让 Jev 裁决生效。 */
-export type FilterMode = 'off' | 'shadow' | 'on';
+/**
+ * 三档模式（04-CONTEXT 模式与兼容节）：off 只跑本地规则、不调 Jev；test 本地规则
+ * 与 Jev 共同过滤——与 on 共用同一过滤实现、裁决真实生效；on 是正式档。
+ * 旧配置值 `shadow` 在解析层（config.ts）作为别名映射为 `test`，不进本类型。
+ */
+export type FilterMode = 'off' | 'test' | 'on';
 
 /**
  * 适配行从 `RequestParamsSchema.parse` 结果里传进来的查询参数。
@@ -55,7 +59,7 @@ export type FilterConfig = {
   toolDescriptionFile?: string;
 };
 
-/** Phase 2 注入 Jev 客户端的位置；`classify` 缺省时 on/shadow 记 no_key 零值对象（SAFE-01 前置）。 */
+/** Phase 2 注入 Jev 客户端的位置；`classify` 缺省时 on/test 记 no_key 零值对象（SAFE-01 前置）。 */
 export type FilterDeps = {
   classify?: ClassifyDeps['classify'];
 };
@@ -183,7 +187,7 @@ export type JevPerSourceStats = {
   answers?: Record<string, number>;
   /** 片段 score，snip0..snipN 顺序，与 state 片段序对齐 */
   snippet_scores?: number[];
-  /** on 链的裁决（02-03 落地；shadow 在 would 层记同一形状） */
+  /** 来源级裁决（02-03 落地；test 与 on 同一记账形状） */
   verdict?: 'keep' | 'drop';
   reason?: SourceDropReason;
   model?: string;
@@ -201,7 +205,11 @@ export type JevStats = {
   per_source: JevPerSourceStats[];
 };
 
-/** shadow 模式的 would 层记账（02-03 落地填充；off 与 on 恒为 null）。 */
+/**
+ * 旧影子模式的 would 层记账（02-03 落地）。历史日志读取兼容：旧 shadow 记录按旧
+ * 影子语义（返回 off、计算 would）读，新记录不再产生——`FilterStats.shadow_diff`
+ * 恒为 null，字段仅为读旧记录保留（04-CONTEXT：勿机械改名继续维护旧影子行为）。
+ */
 export type ShadowDiff = {
   would_drop: string[];
   would_remove_snippets: number;
@@ -212,10 +220,10 @@ export type ShadowDiff = {
 /**
  * 链侧删除动作的证据（C-02/F-02 口径：能定位来源、片段、阶段与原因，新颖度差异
  * 带判定当时的逐片段数值）。只存身份、原因与计数，绝不存片段正文（LOG-03）。
- * `chain: 'would'`（on 链拷贝）解释 `would_drop` / `would_remove_snippets`；
- * `chain: 'actual'`（shadow 的 off 正本链）解释 `would_restore` /
- * `would_restore_snippets`——"off 当时为什么删"同样需要逐片段数值，来源级聚合
- * 不能代回逐片段条件。两边都发生的删除各有一条，证据清单不等同差异清单。
+ * 历史日志读取兼容：旧 shadow 记录按旧影子语义读——`chain: 'would'`（on 链拷贝）
+ * 解释 `would_drop` / `would_remove_snippets`；`chain: 'actual'`（shadow 的 off
+ * 正本链）解释 `would_restore` / `would_restore_snippets`。新记录不再产生本类型
+ * 的条目（旧影子双链已退役），类型仅为读旧记录保留。
  */
 export type WouldActionEvidence = {
   /** 证据所属链：would = on 链拷贝；actual = shadow 的 off 正本链 */
@@ -327,7 +335,7 @@ export type LocalStats = {
   /**
    * 步 7 后半的新颖度指纹明细（D-10）：只为发生过指纹新颖度删除的来源记条目，
    * `fp_total` 是该来源被删片段指纹的并集大小，`novel` 是其中对幸存指纹并集而言
-   * 首次出现 novel 的指纹串——影子期审核"这个来源为什么被删"的证据。只存指纹串
+   * 首次出现 novel 的指纹串——测试模式审核"这个来源为什么被删"的证据。只存指纹串
    * 本身，绝不存片段正文（LOG-03 允许的记录面：URL、标题、指纹与概率）。
    */
   novelty: NoveltySourceDetail[];
@@ -370,8 +378,8 @@ export type SourceStats = {
 
 /**
  * 统计对象：Phase 3 的状态行与 JSONL 日志的共同来源，直接序列化即可。
- * `jev`：off 模式保持 null（A16），on/shadow 由步 5 填充；`shadow_diff` 由 02-03 在
- * shadow 模式填充，off/on 恒为 null。
+ * `jev`：off 模式保持 null（A16），on/test 由步 5 填充；`shadow_diff` 恒为 null——
+ * 旧影子双链退役后新记录不再产生，字段仅为读旧记录保留。
  */
 export type FilterStats = {
   mode: FilterMode;
@@ -407,12 +415,15 @@ export type FilterStats = {
     est_tokens: number;
     status_line?: string;
   };
+  /**
+   * 旧影子差异记账：新记录恒为 null（旧影子双链已退役），字段仅为读旧记录保留——
+   * 旧 shadow 记录按旧影子语义（返回 off、计算 would）读，不重解释。
+   */
   shadow_diff: ShadowDiff | null;
   /**
-   * 链侧删除动作的逐条证据（R-06/C-02、F-02 返修）：would 链与 shadow 正本 off
-   * 链的删除动作都在这里，chain 字段区分；两边都发生的删除各有一条——证据清单
-   * 不等同差异清单，零差异仍可有证据。两链都零删除动作时省略键；旧记录（R-06
-   * 之前）缺键，审核脚本按"证据不足"读，不得当成零差异或可完整解释的差异。
+   * 链侧删除动作的逐条证据（R-06/C-02、F-02 返修）：旧影子双链的 would 链与正本
+   * off 链的删除动作都在这里，chain 字段区分。新记录不再产生本字段（键省略）；
+   * 旧记录按旧影子语义读，审核脚本对缺键的更旧记录按"证据不足"读。
    */
   shadow_evidence?: WouldActionEvidence[];
 };

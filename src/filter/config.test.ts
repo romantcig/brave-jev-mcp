@@ -148,13 +148,32 @@ describe('parseFilterConfigObject: shape and defaults', () => {
 describe('parseFilterConfigObject: mode', () => {
   it('reads each valid mode', () => {
     assert.equal(parseFilterConfigObject({ mode: 'off' }).mode, 'off');
-    assert.equal(parseFilterConfigObject({ mode: 'shadow' }).mode, 'shadow');
+    assert.equal(parseFilterConfigObject({ mode: 'test' }).mode, 'test');
     assert.equal(parseFilterConfigObject({ mode: 'on' }).mode, 'on');
+  });
+
+  it("maps the legacy alias 'shadow' to 'test' with exactly one migration warning", () => {
+    // 04-CONTEXT 模式与兼容节：旧 shadow 是 test 的别名（实际应用 Jev 裁决），
+    // 解析到时向 warn 出口发一行迁移诊断；别名绝不能落成 off（T-04-01-1）
+    const lines: string[] = [];
+    const config = parseFilterConfigObject({ mode: 'shadow' }, (line) => lines.push(line));
+    assert.equal(config.mode, 'test');
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /mode 'shadow' is a legacy alias for 'test'/);
+    assert.ok(lines[0].includes("update the config file to mode 'test'"), lines[0]);
+  });
+
+  it("maps case and whitespace variants of the alias ('SHADOW ') the same way", () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject({ mode: '  SHADOW  ' }, (line) => lines.push(line));
+    assert.equal(config.mode, 'test');
+    assert.equal(lines.length, 1, lines.join('\n'));
+    assert.match(lines[0], /mode 'shadow' is a legacy alias for 'test'/);
   });
 
   it('ignores case and surrounding whitespace', () => {
     assert.equal(parseFilterConfigObject({ mode: ' ON ' }).mode, 'on');
-    assert.equal(parseFilterConfigObject({ mode: 'Shadow' }).mode, 'shadow');
+    assert.equal(parseFilterConfigObject({ mode: ' Test ' }).mode, 'test');
   });
 
   it('falls back to off for unknown, empty or non-string modes, warning once each', () => {
@@ -606,7 +625,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
 
   it('parses a full config file into the documented shape', () => {
     const file = writeFixture(tmpRoot, 'full.json', {
-      mode: 'shadow',
+      mode: 'test',
       overfetch_factor: 2,
       jev: { model: 'jev-1.14.0', timeout_ms: 20000, concurrency: 6 },
       thresholds: { off_topic_drop: 0.9, snippet_min: 1.2, min_facts: 6, novelty_min: 3 },
@@ -618,7 +637,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
     });
     assert.equal(stderr.length, 0, stderr.join('\n'));
     assert.deepEqual(config, {
-      mode: 'shadow',
+      mode: 'test',
       overfetchFactor: 2,
       blocklist: DEFAULT_BLOCKLIST,
       thresholds: {

@@ -49,7 +49,7 @@ const genericItems = (
   Array.isArray(data?.grounding?.generic) ? data.grounding.generic : [];
 
 /**
- * on/shadow 模式未注入 classify 时的 Jev 统计零值（no_key）：零请求、零记账、
+ * on/test 模式未注入 classify 时的 Jev 统计零值（no_key）：零请求、零记账、
  * per_source 空表——SAFE-01 语义前置（"未判定"与"判了但失败"从一开始就分开记）。
  * 每次调用新建对象，库不持模块级可变状态。
  */
@@ -83,7 +83,8 @@ const metaOf = (
  * @param mode 本次调用的模式
  * @param request 已归一化的请求摘要（上限缺省已填 Brave 默认值）
  * @param data Brave 原始响应
- * @returns 新对象；`jev` 与 `shadow_diff` 为 null，`output` 全 0，由管道末尾填实
+ * @returns 新对象；`jev` 为 null、`shadow_diff` 恒为 null（旧影子双链退役后新记录
+ * 不再产生，字段仅为读旧记录保留），`output` 全 0，由管道末尾填实
  */
 export function createFilterStats(
   mode: FilterMode,

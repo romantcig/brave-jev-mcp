@@ -13,16 +13,15 @@
  *   `1 stale (vs intent: "…")`；超 100 字符截断加省略号。绝不用代码从 intent
  *   抽版本号（与"版本号正则不做"同精神，零误判）；
  * - D-05：付费墙截断 > 0 时单列一项（它是片段级动作不是来源级原因）；
- * - D-06：`on` 模式统计"Jev 未判定"来源——最终 keep 且 per_source 缺行、该行
+ * - D-06：test 与 on 同口径统计"Jev 未判定"来源（mode !== 'off'，04-CONTEXT：test
+ *   状态行不假装完成 Jev 检查）——最终 keep 且 per_source 缺行、该行
  *   status 非 answered、或 answered 但 fail_kind='validation'（回答已收到但未完成
  *   有效裁决，A-04）；> 0 时追加 `N source(s) not checked by Jev (kept)`，
- *   零丢弃也附（模型要知道结果是漏网的）；off / shadow 绝不出现这一段；
+ *   零丢弃也附（模型要知道结果是漏网的）；off 绝不出现这一段；
  * - 单复数：主数字用英文复数规则（1 source / 2 sources、1 snippet / N snippets），
  *   原因词保持键原样不变形；
  * - 附加条件（D-04，任一成立就附，全都没有返回 undefined）：有来源丢弃 /
- *   有片段删除 / 有付费墙截断 / on 模式有 Jev 未判定来源；
- * - shadow 的状态行与 off 逐字相同（D-07）：本函数只读"实际生效链"的结果，
- *   绝不读 `stats.shadow_diff`。
+ *   有片段删除 / 有付费墙截断 / test 或 on 模式有 Jev 未判定来源。
  *
  * 纯函数：不抛错（统计对象字段全部防御式读取）、不引任何 MCP 类型。
  *
@@ -76,12 +75,13 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
   // 付费墙是片段级动作不是来源级原因，单独计数（D-05）
   const paywallTruncated = stats.local.paywall_truncated;
 
-  // Jev 未判定来源（D-06）：只在 on 模式数——最终 keep 且 per_source 缺行
+  // Jev 未判定来源（D-06）：test 与 on 同口径（mode !== 'off'，04-CONTEXT——test
+  // 状态行与 on 同规则，不假装完成 Jev 检查）——最终 keep 且 per_source 缺行
   // （如 no_key 零值对象、本地规则后未入候选）、该行 status 非 answered，或
   // answered 但 fail_kind='validation'（A-04：回答已收到但关键答案缺失/越界，
   // 防御式保留——"回答已收到"不等于"已完成有效裁决"）。
   let unchecked = 0;
-  if (stats.mode === 'on') {
+  if (stats.mode !== 'off') {
     const bySrc = new Map((stats.jev?.per_source ?? []).map((row) => [row.src, row]));
     for (const source of stats.sources) {
       if (source.verdict !== 'keep') continue;

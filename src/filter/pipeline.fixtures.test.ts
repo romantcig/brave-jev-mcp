@@ -511,26 +511,27 @@ describe('no fixture is dropped as empty', () => {
 });
 
 // ---------------------------------------------------------------------------
-// shadow 输出必须与同输入的 off 逐字段相同（VERDICT-05，02-FIX 批 A）：真实夹具上
-// off 与 shadow 的 result / stats.local / stats.sources 必须 deepEqual；shadow_diff
-// 由测试独立地从 off 与 on 两次运行的 stats.sources 推导（不复制实现）。
+// test 模式端到端（04-01 单链语义）：test 与 on 共用 runOnChain——同输入同回放桩下
+// 两模式 result / stats.local / stats.sources 逐字段 deepEqual（本计划尚无样本元
+// 信息层，应为全等）；裁决真实生效以 test 相对 off 的差异推导钉死（旧 shadow
+// "只算不丢"行为退役，Jev 裁决不生效时差集为 0，断言有判别力）。
+// 范围备忘：现有两份录制夹具的 would_drop 均为空——全仓没有整源 Jev drop 的录制，
+// 这里不写"整源 drop 被删"的空真断言；将来需要时必须先新增录制夹具（范围变更，
+// 显式提出后再做，不得执行期即兴）。
 // ---------------------------------------------------------------------------
 
-const shadowIsRecord = (value: unknown): value is Record<string, unknown> =>
+const isRecordValue = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** 录制装载（与 client.test.ts / dev/compare.ts 同形）。 */
-const loadShadowRecording = (rel: string): Record<string, { http: number; response: unknown }> => {
+const loadRecording = (rel: string): Record<string, { http: number; response: unknown }> => {
   const parsed: unknown = JSON.parse(readFileSync(join(fixtureRoot, rel), 'utf8'));
-  assert.ok(
-    shadowIsRecord(parsed) && shadowIsRecord(parsed.results),
-    `${rel} has no results table`
-  );
+  assert.ok(isRecordValue(parsed) && isRecordValue(parsed.results), `${rel} has no results table`);
   return parsed.results as Record<string, { http: number; response: unknown }>;
 };
 
 /** 回放传输：按 state.source.id 取录制条目，200 走生产同一条 parseJevResponse。 */
-const shadowReplayClassifier =
+const replayClassifier =
   (results: Record<string, { http: number; response: unknown }>): ClassifyDeps['classify'] =>
   async ({ state }) => {
     const entry = results[state.source.id];
@@ -547,11 +548,11 @@ const shadowReplayClassifier =
   };
 
 /** 期望文件头三件套（回放与 off 期望同参数，管道夹具测试同口径）。 */
-const loadShadowExpectedHeader = (
+const loadExpectedHeader = (
   rel: string
 ): { query: string; intent: string; request: Omit<FilterRequest, 'query'> } => {
   const parsed: unknown = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8'));
-  assert.ok(shadowIsRecord(parsed), `${rel} is not an object`);
+  assert.ok(isRecordValue(parsed), `${rel} is not an object`);
   return {
     query: parsed.query as string,
     intent: parsed.intent as string,
@@ -559,10 +560,10 @@ const loadShadowExpectedHeader = (
   };
 };
 
-/** 由两次运行的 stats.sources 独立推导 shadow_diff（不复制实现）。 */
-const deriveShadowDiff = (
+/** 由两次运行的 stats.sources 独立推导 test 相对 off 的差异（不复制实现；身份口径与退役前的双链 diffShadow 一致）。 */
+const deriveTestDiff = (
   offSources: SourceStats[],
-  onSources: SourceStats[]
+  testSources: SourceStats[]
 ): {
   would_drop: string[];
   would_remove_snippets: number;
@@ -574,28 +575,29 @@ const deriveShadowDiff = (
   let wouldRemoveSnippets = 0;
   const wouldRestore: string[] = [];
   let wouldRestoreSnippets = 0;
-  for (const onSource of onSources) {
-    const offSource = offByIndex.get(onSource.index);
-    assert.ok(offSource, `source ${onSource.index} missing from the off run`);
-    if (offSource.verdict === 'keep' && onSource.verdict === 'drop') {
-      wouldDrop.push(`s${onSource.index}`);
+  for (const testSource of testSources) {
+    const offSource = offByIndex.get(testSource.index);
+    assert.ok(offSource, `source ${testSource.index} missing from the off run`);
+    if (offSource.verdict === 'keep' && testSource.verdict === 'drop') {
+      wouldDrop.push(`s${testSource.index}`);
       continue;
     }
-    if (offSource.verdict === 'drop' && onSource.verdict === 'keep') {
-      wouldRestore.push(`s${onSource.index}`);
+    if (offSource.verdict === 'drop' && testSource.verdict === 'keep') {
+      wouldRestore.push(`s${testSource.index}`);
       continue;
     }
-    if (offSource.verdict !== 'keep' || onSource.verdict !== 'keep') continue;
+    if (offSource.verdict !== 'keep' || testSource.verdict !== 'keep') continue;
     const offKept = new Map(
       offSource.snippets.map((row) => [
         row.part === undefined ? String(row.index) : `${row.index}.${row.part}`,
         row.kept,
       ])
     );
-    for (const onRow of onSource.snippets) {
-      const key = onRow.part === undefined ? String(onRow.index) : `${onRow.index}.${onRow.part}`;
-      if (!onRow.kept && offKept.get(key) === true) wouldRemoveSnippets += 1;
-      if (onRow.kept && offKept.get(key) === false) wouldRestoreSnippets += 1;
+    for (const testRow of testSource.snippets) {
+      const key =
+        testRow.part === undefined ? String(testRow.index) : `${testRow.index}.${testRow.part}`;
+      if (!testRow.kept && offKept.get(key) === true) wouldRemoveSnippets += 1;
+      if (testRow.kept && offKept.get(key) === false) wouldRestoreSnippets += 1;
     }
   }
   return {
@@ -606,7 +608,42 @@ const deriveShadowDiff = (
   };
 };
 
-const SHADOW_DIFF_EXPECTED: Record<string, unknown> = {
+/** test 相对 off 被删片段的逐 URL 身份（`<url>#<index>`，转换段为 `<url>#<index>.<part>`）：仅统计两链都保留的来源里 off 幸存、test 删除的片段。 */
+const deriveRemovedSnippetIds = (
+  offSources: SourceStats[],
+  testSources: SourceStats[]
+): string[] => {
+  const offByUrl = new Map(offSources.map((source) => [source.url, source]));
+  const removed: string[] = [];
+  for (const testSource of testSources) {
+    if (testSource.verdict !== 'keep') continue;
+    const offSource = offByUrl.get(testSource.url);
+    if (offSource === undefined || offSource.verdict !== 'keep') continue;
+    const offKept = new Map(
+      offSource.snippets.map((row) => [
+        row.part === undefined ? String(row.index) : `${row.index}.${row.part}`,
+        row.kept,
+      ])
+    );
+    for (const testRow of testSource.snippets) {
+      const key =
+        testRow.part === undefined ? String(testRow.index) : `${testRow.index}.${testRow.part}`;
+      if (!testRow.kept && offKept.get(key) === true) removed.push(`${testSource.url}#${key}`);
+    }
+  }
+  return removed;
+};
+
+/** test 相对 off 的差集真值常数（checker 2026-09-29 修订：随 test 语义改名，值不变）。 */
+const TEST_DIFF_EXPECTED: Record<
+  string,
+  {
+    would_drop: string[];
+    would_remove_snippets: number;
+    would_restore: string[];
+    would_restore_snippets: number;
+  }
+> = {
   jev_release_default: {
     would_drop: [],
     would_remove_snippets: 9,
@@ -621,9 +658,26 @@ const SHADOW_DIFF_EXPECTED: Record<string, unknown> = {
   },
 };
 
+// default 夹具 test 相对 off 的 9 条片段删减逐 URL 身份——与 dev/smoke_stdio.ts
+// const 区的差集注释互指同步（off−on 删 9 = typesafe.ai#4/#5/#6/#7、ua.news#1/#4/#6、
+// mezha#0/#2）。改动任一侧时必须同步另一侧。
+const TEST_REMOVED_SNIPPET_IDS: Record<string, string[]> = {
+  jev_release_default: [
+    'https://typesafe.ai/blog/introducing-system-one-models-and-jev#4',
+    'https://typesafe.ai/blog/introducing-system-one-models-and-jev#5',
+    'https://typesafe.ai/blog/introducing-system-one-models-and-jev#6',
+    'https://typesafe.ai/blog/introducing-system-one-models-and-jev#7',
+    'https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch#1',
+    'https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch#4',
+    'https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch#6',
+    'https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/#0',
+    'https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/#2',
+  ],
+};
+
 for (const stem of ['jev_release_default', 'jev_release_strict']) {
-  const recording = loadShadowRecording(`${stem}.jev.json`);
-  const expected = loadShadowExpectedHeader(`${stem}.off.json`);
+  const recording = loadRecording(`${stem}.jev.json`);
+  const expected = loadExpectedHeader(`${stem}.off.json`);
   const fixtureRequest = {
     params: { ...expected.request, query: expected.query },
     intent: expected.intent,
@@ -635,48 +689,84 @@ for (const stem of ['jev_release_default', 'jev_release_strict']) {
     fixtureRequest,
     offConfig
   );
-  const shadowRun = await filterLlmContext(
+  const testRun = await filterLlmContext(
     loadBraveFixture(`${stem}.json`),
     fixtureRequest,
-    { ...offConfig, mode: 'shadow' },
-    { classify: shadowReplayClassifier(recording) }
+    { ...offConfig, mode: 'test' },
+    { classify: replayClassifier(recording) }
   );
   const onRun = await filterLlmContext(
     loadBraveFixture(`${stem}.json`),
     fixtureRequest,
     { ...offConfig, mode: 'on' },
-    { classify: shadowReplayClassifier(recording) }
+    { classify: replayClassifier(recording) }
   );
 
-  describe(`shadow equals off · ${stem}`, () => {
-    it('returns a result identical to the off run field by field', () => {
-      assert.deepEqual(shadowRun.result, offRun.result);
+  describe(`test equals on · ${stem}`, () => {
+    it('returns a result identical to the on run field by field', () => {
+      assert.deepEqual(testRun.result, onRun.result);
     });
 
-    it('records stats.local identical to the off run', () => {
-      assert.deepEqual(shadowRun.stats.local, offRun.stats.local);
+    it('records stats.local identical to the on run', () => {
+      assert.deepEqual(testRun.stats.local, onRun.stats.local);
     });
 
-    it('records stats.sources identical to the off run', () => {
-      assert.deepEqual(shadowRun.stats.sources, offRun.stats.sources);
+    it('records stats.sources identical to the on run', () => {
+      assert.deepEqual(testRun.stats.sources, onRun.stats.sources);
     });
 
-    it('still calls Jev for every candidate and books it in per_source', () => {
-      assert.equal(shadowRun.stats.jev?.n_requests, Object.keys(recording).length);
-      assert.equal(shadowRun.stats.jev?.per_source.length, Object.keys(recording).length);
+    it('still calls Jev for every candidate and books verdict/reason in per_source', () => {
+      assert.equal(testRun.stats.jev?.n_requests, Object.keys(recording).length);
+      const rows = testRun.stats.jev?.per_source ?? [];
+      assert.equal(rows.length, Object.keys(recording).length);
+      for (const row of rows) {
+        assert.ok(
+          row.verdict === 'keep' || row.verdict === 'drop',
+          `${row.src} must carry a verdict`
+        );
+        if (row.verdict === 'drop') {
+          assert.ok(typeof row.reason === 'string', `${row.src} drop must carry a reason`);
+        }
+      }
     });
 
-    it('derives shadow_diff from the off and on tables', () => {
+    it('derives the test-vs-off diff from the off and test tables (verdicts really apply)', () => {
+      // Jev 裁决真实生效的判别力：裁决不生效（旧 shadow"只算不丢"）时 test 正本走
+      // off 链，差集恒为 0，与这里的 9/5 + s11 救回不等
       assert.deepEqual(
-        shadowRun.stats.shadow_diff,
-        deriveShadowDiff(offRun.stats.sources, onRun.stats.sources)
+        deriveTestDiff(offRun.stats.sources, testRun.stats.sources),
+        TEST_DIFF_EXPECTED[stem]
       );
     });
 
-    it('pins the concrete shadow_diff values, including what on restores', () => {
-      // on 按 is_primary 播种、保护原创论证段，会救回 off 删掉的内容（审查 R10）：
-      // strict 的 s11（therundown）被 off 判 rewrite 整源丢掉，on 保留
-      assert.deepEqual(shadowRun.stats.shadow_diff, SHADOW_DIFF_EXPECTED[stem]);
-    });
+    if (stem === 'jev_release_default') {
+      it('pins the per-URL identity of the 9 snippets test removes relative to off', () => {
+        assert.deepEqual(
+          deriveRemovedSnippetIds(offRun.stats.sources, testRun.stats.sources),
+          TEST_REMOVED_SNIPPET_IDS[stem]
+        );
+      });
+    }
+
+    if (stem === 'jev_release_strict') {
+      it('rescues s11 (therundown) as a whole source: off drops it as rewrite, test keeps it', () => {
+        // test 按 is_primary 播种、保护原创论证段，会救回 off 删掉的内容（审查 R10
+        // 同源）：strict 的 s11（therundown）被 off 判 rewrite 整源丢掉，test 保留
+        const s11Url = 'https://www.therundown.ai/news/typesafe-jev-ai-decisions-software';
+        const offRow = offRun.stats.sources.find((source) => source.url === s11Url);
+        assert.equal(offRow?.verdict, 'drop');
+        assert.equal(offRow?.reason, 'rewrite');
+        assert.equal(
+          offRun.result.grounding.generic.some((item) => item.url === s11Url),
+          false,
+          's11 must be absent from the off result'
+        );
+        assert.equal(
+          testRun.result.grounding.generic.some((item) => item.url === s11Url),
+          true,
+          's11 must be present in the test result'
+        );
+      });
+    }
   });
 }

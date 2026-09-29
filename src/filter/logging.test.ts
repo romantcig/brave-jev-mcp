@@ -138,7 +138,7 @@ describe('createLogWriter', () => {
 
   it('writes an error record with stage and truncated message when no stats body exists', async () => {
     const dir = join(logDir, 'error-record');
-    createLogWriter(configOf('shadow', dir)).writeError({
+    createLogWriter(configOf('test', dir)).writeError({
       stage: 'brave',
       message: '500 Internal Server Error'.padEnd(260, 'x'),
       query: 'test query',
@@ -148,7 +148,7 @@ describe('createLogWriter', () => {
 
     const record = readRecords(dir).at(-1) as Record<string, unknown>;
     assert.equal(record.backend, 'typesafe');
-    assert.equal(record.mode, 'shadow');
+    assert.equal(record.mode, 'test');
     assert.deepEqual(record.request, { query: 'test query', intent: 'test intent' });
     const error = record.error as { stage: string; message: string };
     assert.equal(error.stage, 'brave');
@@ -282,15 +282,15 @@ describe('createLogWriter', () => {
   it('writes a record for each of the three modes (D-16)', async () => {
     const dirs: Record<FilterConfig['mode'], string> = {
       off: join(logDir, 'mode-off'),
-      shadow: join(logDir, 'mode-shadow'),
+      test: join(logDir, 'mode-test'),
       on: join(logDir, 'mode-on'),
     };
-    for (const mode of ['off', 'shadow', 'on'] as const) {
+    for (const mode of ['off', 'test', 'on'] as const) {
       createLogWriter(configOf(mode, dirs[mode])).write(statsOf(mode));
     }
     await flushWrites();
 
-    for (const mode of ['off', 'shadow', 'on'] as const) {
+    for (const mode of ['off', 'test', 'on'] as const) {
       const records = readRecords(dirs[mode]);
       assert.equal(records.length, 1);
       assert.equal(records[0].mode, mode);

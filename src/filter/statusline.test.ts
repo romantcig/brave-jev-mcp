@@ -308,10 +308,10 @@ describe('buildStatusLine', () => {
     assert.equal(buildStatusLine(offStats), '[filter] dropped 1 of 3 sources: 1 empty');
 
     // shadow：与 off 同样不数（would 差异只进日志）
-    const shadowStats = statsOf('shadow');
-    withJev(shadowStats, []);
-    dropSource(shadowStats, 0, 'empty');
-    assert.equal(buildStatusLine(shadowStats), '[filter] dropped 1 of 3 sources: 1 empty');
+    const testStats = statsOf('test');
+    withJev(testStats, []);
+    dropSource(testStats, 0, 'empty');
+    assert.equal(buildStatusLine(testStats), '[filter] dropped 1 of 3 sources: 1 empty');
 
     // on 且全部 answered、零丢弃零删除 → 不附
     const allAnswered = statsOf('on');
@@ -340,6 +340,6 @@ describe('buildStatusLine', () => {
       return buildStatusLine(stats) ?? '';
     };
     // D-07：shadow 的状态行与 off 逐字相同——生成只读实际生效链，绝不读 shadow_diff
-    assert.equal(build('shadow'), build('off'));
+    assert.equal(build('test'), build('off'));
   });
 });

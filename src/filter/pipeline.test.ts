@@ -93,7 +93,7 @@ describe('filterLlmContext', () => {
     assert.equal(stats.jev, null);
   });
 
-  for (const mode of ['off', 'shadow', 'on'] as const) {
+  for (const mode of ['off', 'test', 'on'] as const) {
     it(`mode=${mode} performs no network call and records the mode`, async () => {
       const data = payload();
 
@@ -398,7 +398,7 @@ describe('filterLlmContext', () => {
       data,
       { params: { query: 'first' }, intent: 'first intent' },
       {
-        mode: 'shadow',
+        mode: 'test',
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
@@ -422,7 +422,7 @@ describe('filterLlmContext', () => {
       data,
       { params: { query: 'first' }, intent: 'first intent' },
       {
-        mode: 'shadow',
+        mode: 'test',
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
@@ -431,7 +431,7 @@ describe('filterLlmContext', () => {
       }
     );
 
-    assert.equal(first.stats.mode, 'shadow');
+    assert.equal(first.stats.mode, 'test');
     assert.equal(second.stats.mode, 'on');
     assert.equal(first.stats.request.overfetch_factor, 2);
     assert.equal(second.stats.request.overfetch_factor, 1);
@@ -965,7 +965,7 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     const shadowRun = await filterLlmContext(
       matrixPayload(),
       request,
-      { ...offConfig, mode: 'shadow' },
+      { ...offConfig, mode: 'test' },
       { classify: makeClassify(counter) }
     );
 
@@ -1066,7 +1066,7 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     const shadowRun = await filterLlmContext(
       mergePayload(),
       request,
-      { ...offConfig, mode: 'shadow' },
+      { ...offConfig, mode: 'test' },
       { classify: makeMergeClassify(counter, { s0: 0.1, s1: 0.9 }) }
     );
 
@@ -1112,7 +1112,7 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     const shadowRun = await filterLlmContext(
       mergePayload(),
       request,
-      { ...offConfig, mode: 'shadow' },
+      { ...offConfig, mode: 'test' },
       { classify: makeMergeClassify(counter, { s0: 0.9, s1: 0.1 }) }
     );
 
@@ -1199,7 +1199,7 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     const shadowRun = await filterLlmContext(
       f01Payload(),
       request,
-      { ...offConfig, mode: 'shadow' },
+      { ...offConfig, mode: 'test' },
       { classify: makeMergeClassify(counter, { s0: 0.9 }) }
     );
 
@@ -1259,7 +1259,7 @@ describe('three-mode semantic matrix (off / shadow / on)', () => {
     const shadowRun = await filterLlmContext(
       matrixPayload(),
       request,
-      { ...offConfig, mode: 'shadow' },
+      { ...offConfig, mode: 'test' },
       { classify: makeClassify(counter) }
     );
     counter.calls = 0;
@@ -1501,7 +1501,7 @@ describe('novelty and cross-source dup (02-04)', () => {
     const shadowRun = await filterLlmContext(
       noveltyPayload(),
       request,
-      { ...offConfig, mode: 'shadow' },
+      { ...offConfig, mode: 'test' },
       { classify }
     );
     const onRun = await filterLlmContext(
@@ -1778,7 +1778,7 @@ describe('one-liner sources emptied by score still land in would_drop (02-FIX ba
     const shadowRun = await filterLlmContext(
       data,
       request,
-      { ...offConfig, mode: 'shadow' },
+      { ...offConfig, mode: 'test' },
       { classify }
     );
 

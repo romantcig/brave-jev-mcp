@@ -60,8 +60,9 @@ export type JevSideDeletionFlags = {
 };
 
 /**
- * novelty 删除的上报载荷（R-06）：判定当时的逐片段数值——调用方（shadow 的
- * would 链）拿它落证据；snippet 是表行引用，pipeline 的 WorkSnippet 结构上满足
+ * novelty 删除的上报载荷（R-06）：判定当时的逐片段数值——调用方拿它做逐片段
+ * 记账（旧影子双链退役后管道本体不再传回调，参数保留给需要判定时数值的调用方）；
+ * snippet 是表行引用，pipeline 的 WorkSnippet 结构上满足
  * （可读 part / mergedFrom 拼配对身份）。
  */
 export type NoveltyDeletionInfo = {
@@ -199,7 +200,7 @@ const primaryOf = (
 
 /**
  * 播种顺序（与输出顺序分开）：off 模式或无 judged 答案时即 Brave 序；
- * on/shadow 按 is_primary 概率降序（同分按 Brave 序——比较器显式加 Brave 序
+ * test 与 on 按 is_primary 概率降序（同分按 Brave 序——比较器显式加 Brave 序
  * 平局裁决，不依赖引擎排序稳定性），未判定来源排已判定之后按 Brave 序（保守：
  * 不抢先占有事实扩大删除面，A3）。
  * @returns 参与播种的 keep 来源 index 序列（被丢来源不参与）
@@ -346,8 +347,8 @@ export function applyNovelty(
     }
   }
   // 明细写回（替换式，绝不 mutate 载体浅拷贝共享的 zeroLocal.novelty 空数组）；
-  // 条目按首次命中删除的顺序排列——off / 影子正本按 Brave 序，on / would 链按
-  // 播种序（is_primary 降序）；统计投影与输出仍按 Brave 序，不为此重排数据（C-03）
+  // 条目按首次命中删除的顺序排列——off 按 Brave 序，test 与 on 按 is_primary 播种
+  // 序；统计投影与输出仍按 Brave 序，不为此重排数据（C-03）
   if (noveltyDetails.length > 0) {
     stats.local.novelty = noveltyDetails;
   }
