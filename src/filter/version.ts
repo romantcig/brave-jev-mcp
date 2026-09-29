@@ -17,6 +17,5 @@
  * 包版本号冒充实现标识。
  */
 
-/** 当前过滤实现版本：1 = 04-04 返修后的过滤链（04-01 单链语义 + 超限阶梯实发
- * 派发记录），本字段语义下的首个值；更早的实现从未随样本发出过（R4 返修才建档）。 */
-export const FILTER_RULES_VERSION = 'filter-rules-1';
+/** 2 = 评分裁决与记录共用 [0,2] 校验；1 = 04-04 首轮实发派发记录版本。 */
+export const FILTER_RULES_VERSION = 'filter-rules-2';

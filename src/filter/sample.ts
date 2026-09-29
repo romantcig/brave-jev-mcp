@@ -11,12 +11,12 @@
  * 保留可用原始响应与失败阶段；两者的 final_return 都是 null 加显式缺失标记——
  * 绝不当零来源成功、绝不当完整成功样本。
  *
- * 实发口径（04-04 R1，format_version 2）：Jev 段的实发映射**只信管道交来的
+ * 实发口径（04-04 R1，format_version 3）：Jev 段的实发映射**只信管道交来的
  * JevDispatchRecord**——捕获于客户端超限阶梯之后、请求派发处，样本写入时绝不重跑
  * 本地规则重建候选（重建会得到阶梯前 state，与实发不符）。状态四个维度互相独立：
  * `dispatched`（请求已派发，fetch 已调用，不保证服务端已收到）、文本是否进入实发
- * state（`in_state`）、是否提交片段评分题（`score_question_sent`）、是否取得有效
- * 回答（`answered` / 逐片段 `scored`）。已派发但失败的请求（HTTP 4xx/5xx、超时、
+ * state（`in_state`）、是否提交片段评分题（`score_question_sent`）、收到响应
+ * （`answered`）与有效评分（`scored`）分别记录。已派发但失败的请求（HTTP 4xx/5xx、超时、
  * 断连）保留实发 state 作输入证据；skipped（无内容可发）/ too_large（阶梯砍不动）/
  * breaker_open（熔断短路）各自带 `not_dispatched_reason`，不再混作同一种"未发送"。
  * v1 记录（format_version 1，04-02）的 sent 段是阶梯前重建口径、snippets[].sent 是
@@ -111,8 +111,16 @@ export type SampleJevSentSnippet = {
   in_state: boolean;
   /** 该片段的 snip{i} 评分题是否随请求提交（未派发 / 题被阶梯删掉为 false） */
   score_question_sent: boolean;
-  /** 是否取得该片段的有效评分回答（answered 且位置在实发收分范围内） */
+  /**
+   * 是否取得该片段的有效评分（管道派发处逐题实测：收到且通过校验——有限数且在 [0,2]，
+   * 与裁决层口径一致）；缺失 / 错误类型 / 负分 / 非有限一律 false，绝不从数量
+   * 推断。评分是否被裁决采用由 score_applied 单独表达。
+   */
   scored: boolean;
+  /** 实际收到的有限评分，包含越界值便于复查；缺答、错误类型或非有限为 null。 */
+  score: number | null;
+  /** 该评分是否进入步 7 评分裁决；整组缺答或整源已删时为 false。后续新颖度删除不改变此事实。 */
+  score_applied: boolean;
   /**
    * 候选口径文本（与派发记录 snippet_texts 对齐）：进入实发 state 的片段即实发
    * 文本；被阶梯砍掉的片段凭本字段与身份键回 pre_filter 对齐原文
@@ -137,8 +145,16 @@ export type SampleJevSentSource = {
   not_dispatched_reason?: 'skipped' | 'too_large' | 'breaker_open';
   /** 是否提交了片段评分题（实发 questions 含 score 题即 snip{i}） */
   snip_questions_sent: boolean;
-  /** 是否取得有效回答（answered——回答形状校验通过且 answers 可用） */
+  /**
+   * 是否收到可解析响应（HTTP 200 且 answers 形状校验通过）——不等于"来源裁决
+   * 有效"，后者见 source_verdict_valid（二次复审 R1 余项拆分）
+   */
   answered: boolean;
+  /**
+   * 是否取得有效来源裁决（实际裁决所需的六道题通过校验并完成裁决）；answered=true
+   * 而本值 false = 收到可解析响应但 validation 兜底（状态行提示未完成 Jev 检查）
+   */
+  source_verdict_valid: boolean;
   snippets: SampleJevSentSnippet[];
 };
 
@@ -184,13 +200,11 @@ export type SampleMissingFinalReturn = {
  */
 export type SampleRecord = {
   /**
-   * 记录格式版本；字段语义变化时递增。2 = 04-04 R1 返修（jev.sent 为客户端阶梯后
-   * 实发捕获口径、sent 片段 in_state/score_question_sent/scored 三维拆分、来源级
-   * dispatched / not_dispatched_reason，新增 filter_rules_version）。1 = 04-02
-   * 初版（sent 为阶梯前重建口径、snippets[].sent 单一布尔、无 filter_rules_version）
-   * ——历史样本绝不按 v2 字段语义解释，读取按本值分支。
+   * 记录格式版本；3 = scored 逐题有效性、保留部分评分、score_applied 与来源裁决
+   * 有效性分离。2 = 实发捕获已准确，但 scored 仍可能由题数推断；1 = 阶梯前重建。
+   * 旧样本不能按新版本解释，尤其不能把 v2 的 scored 当成有效评分证据。
    */
-  format_version: 2;
+  format_version: 3;
   request_id: string;
   /** 本地 ISO 带时区偏移（复用 logging.ts 的 localIsoWithOffset 口径） */
   ts: string;
@@ -320,20 +334,13 @@ const readProgramVersion = (): string => {
 };
 
 /**
- * 逐片段 scored 的操作口径（04-04 R1）：answered 且位置在实发收分范围内——
- * snippet_scores 长度即实发片段数（cut_tail / source_only 阶梯下短于候选，
- * snippet_scores 缺失时回退 sent_snippets，再回退候选全长）。非 answered 行
- * score 全部 false——"没有有效回答"绝不写成"没提交评分题"或"没发送"。
+ * 逐片段 scored 的操作口径（二次复审 R1 余项定稿）：**实测**——管道在派发处逐题
+ * 记录的评分有效性（收到且通过校验：有限数且在 [0,2]，与裁决层口径一致），绝不从候选
+ * 数、提交题数或 snippet_scores 长度推断（旧口径把"漏答 / 负分保守保留"伪装成
+ * "已评分"）。是否被评分裁决采用由 score_applied 另记。
  */
-const isSnippetScored = (
-  row: JevPerSourceStats | undefined,
-  position: number,
-  candidateLength: number
-): boolean => {
-  if (row === undefined || row.status !== 'answered') return false;
-  const scored = row.snippet_scores?.length ?? row.sent_snippets ?? candidateLength;
-  return position < scored;
-};
+const isSnippetScored = (record: JevDispatchRecord, position: number): boolean =>
+  record.snippet_score_validity?.[position] === true;
 
 /**
  * Jev 段构建（04-04 R1）：判断原样 + 实发派发映射——**只信管道交来的
@@ -344,7 +351,6 @@ const isSnippetScored = (
 const buildJevSection = (input: SampleInput): SampleJev | null => {
   const jev = input.stats.jev;
   if (jev === null) return null; // test 模式不会出现（no_key 也建零值对象）；防御直调
-
   const rows = new Map(jev.per_source.map((row) => [row.src, row]));
 
   return {
@@ -372,12 +378,20 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
           : {}),
         snip_questions_sent: record.snip_questions_sent,
         answered: record.answered,
+        source_verdict_valid: record.source_verdict_valid,
         snippets: record.snippet_keys.map((key, position) => ({
           snippet: key,
           position,
           in_state: position < stateSnippets.length,
           score_question_sent: position < snipQuestionCount,
-          scored: isSnippetScored(row, position, record.snippet_keys.length),
+          scored: isSnippetScored(record, position),
+          score: record.snippet_scores_received?.[position] ?? null,
+          score_applied:
+            isSnippetScored(record, position) &&
+            row?.verdict === 'keep' &&
+            row.snippet_scores !== undefined &&
+            row.snippet_scores.length <= record.snippet_keys.length &&
+            position < row.snippet_scores.length,
           text: record.snippet_texts[position] ?? '',
         })),
       };
@@ -392,7 +406,7 @@ const buildRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 2,
+  format_version: 3,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,
@@ -434,7 +448,7 @@ const buildErrorRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 2,
+  format_version: 3,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,

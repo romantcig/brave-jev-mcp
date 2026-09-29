@@ -853,8 +853,8 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `sample: the status-line path must exist at return time — ${sampleAbsPath}`
         );
         const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
-        // 04-04 R1 返修：format_version 2（实发派发捕获口径）；v1 是阶梯前重建口径
-        assert.equal(sample.format_version, 2, 'sample: format_version must be 2');
+        // 04-04 R1 返修：format_version 3（实发派发捕获口径）；v1 是阶梯前重建口径
+        assert.equal(sample.format_version, 3, 'sample: format_version must be 3');
         assert.equal(
           sample.request_id,
           record.request_id,

@@ -471,8 +471,8 @@ export type FilterResult = {
 /**
  * Jev 实发派发记录（04-04 R1）：一次来源级请求的派发事实与输入证据。
  * 状态维度互相独立——`dispatched`（请求已派发）、文本是否进入 state（实发 state
- * 的片段数）、`snip_questions_sent`（是否提交片段评分题）、`answered`（是否取得
- * 有效回答）分别表达，failed / skipped / too_large / breaker_open 不再混作同一种
+ * 的片段数）、`snip_questions_sent`（是否提交片段评分题）、`answered`（是否收到
+ * 可解析响应）分别表达，failed / skipped / too_large / breaker_open 不再混作同一种
  * "未发送"。已派发但失败的请求保留实发 state 作输入证据。
  */
 export type JevDispatchRecord = {
@@ -491,8 +491,26 @@ export type JevDispatchRecord = {
   questions: Record<string, JevQuestion> | null;
   /** 是否提交了片段评分题（实发 questions 含 score 题即 snip{i}） */
   snip_questions_sent: boolean;
-  /** 是否取得有效回答（answered——回答形状校验通过且 answers 可用） */
+  /**
+   * 是否收到可解析响应（HTTP 200 且 answers 形状校验通过）——不含"来源裁决有效"
+   * 之义，后者见 source_verdict_valid（二次复审 R1 余项拆分）
+   */
   answered: boolean;
+  /**
+   * 逐片段评分有效性，按实发片段范围 snip0..snip{n-1} 对齐：该题实际收到且通过
+   * 校验的评分（有限数且在三档评分范围 [0,2] 内，与裁决层共用校验）。缺失 / 错误类型 /
+   * 负分 / 非有限一律 false——绝不从候选数或提交题数推断（二次复审 R1 余项）。
+   * null = 未派发或未收到可解析响应
+   */
+  snippet_score_validity: boolean[] | null;
+  /** 按题位保留实际收到的有限评分（含越界值供复查）；缺答/错误类型/非有限为 null。
+   * 整体 null 表示没有可解析响应；部分缺答不压缩数组、不丢弃其他题的值。 */
+  snippet_scores_received: Array<number | null> | null;
+  /**
+   * 来源级裁决有效：从 applySourceVerdicts 完成后的真实裁决读取；六道关键题通过
+   * 校验且已产生裁决，不是 validation 兜底。仅作观察的题缺失不令此值变为 false。
+   */
+  source_verdict_valid: boolean;
   /** 未派发原因；已派发时省略。防御分支（classify 契约外 reject）也省略 */
   not_dispatched_reason?: 'skipped' | 'too_large' | 'breaker_open';
   /** 候选片段配对身份（`{merged_from}:{index}` 前缀可省、多段加 `.{part}`），

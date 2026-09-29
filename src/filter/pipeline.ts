@@ -42,7 +42,7 @@ import {
   stripBoilerplateLines,
 } from './prefilter.js';
 import { buildQuestions, buildState, SOURCE_QUESTIONS } from './jev/questions.js';
-import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
+import { applySnippetScores, applySourceVerdicts, isUsableSnippetScore } from './jev/verdict.js';
 import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { buildStatusLine } from './statusline.js';
@@ -498,6 +498,12 @@ export async function filterLlmContext(
     const judged = await runJevStage(table, request, deps.classify, stats);
     dispatches = judged.dispatches;
     runOnChain(table, judged.rows, config.thresholds, stats, queryTerms);
+    // 来源裁决完成后再记有效性，复用实际校验结果；非裁决题缺答不应冒充校验失败。
+    for (const record of dispatches) {
+      const row = judged.rows.get(record.src);
+      record.source_verdict_valid =
+        row?.status === 'answered' && row.verdict !== undefined && row.fail_kind !== 'validation';
+    }
   }
   // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
   // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
@@ -635,6 +641,9 @@ const runJevStage = async (
         questions: null,
         snip_questions_sent: false,
         answered: false,
+        snippet_score_validity: null,
+        snippet_scores_received: null,
+        source_verdict_valid: false,
         not_dispatched_reason: 'skipped',
         snippet_keys: [],
         snippet_texts: [],
@@ -652,6 +661,9 @@ const runJevStage = async (
     questions: null,
     snip_questions_sent: false,
     answered: false,
+    snippet_score_validity: null,
+    snippet_scores_received: null,
+    source_verdict_valid: false,
     snippet_keys: candidate.snippets.map((snippet) => snippet.key),
     snippet_texts: candidate.snippets.map((snippet) => snippet.text),
   });
@@ -712,6 +724,7 @@ const runJevStage = async (
       jev.n_requests += 1;
       jev.input_tokens += outcome.input_tokens;
 
+      // 来源回答原样收集，裁决有效性在 runOnChain 完成后从实际裁决结果取得。
       const answers: Record<string, number> = {};
       for (const key of sourceKeys) {
         const answer = outcome.answers[key];
@@ -719,17 +732,31 @@ const runJevStage = async (
       }
       // 只收实际发送的片段范围的分数（cut_tail 降级时 out 来的 snip 题更少）：
       // `snip0..snip{n-1}` 必须齐全且都是 score，否则整源不写 snippet_scores
-      // （保守——"有几个收几个"会让中间缺一个就整体错位，后续片段分数张冠李戴）
+      // （保守——"有几个收几个"会让中间缺一个就整体错位，后续片段分数张冠李戴）。
+      // 逐题有效性同时实测进 scoreValidity（覆盖全部实发片段，含缺答位）：收到且
+      // 通过校验（与裁决层共用三档评分范围）才算
+      // true——缺失 / 错误类型 / 负分 / 非有限一律 false，绝不从数量推断（二次
+      // 复审 R1 余项）；snippet_scores 是否整组写盘仍按保守政策不变
       const sentSnippets = outcome.sent_snippets ?? candidate.snippets.length;
       const snippetScores: number[] = [];
-      let scoresComplete = true;
+      const scoreValidity: boolean[] = [];
+      const scoresReceived: Array<number | null> = [];
       for (let i = 0; i < sentSnippets; i += 1) {
         const answer = outcome.answers[`snip${i}`];
-        if (answer?.kind !== 'score') {
-          scoresComplete = false;
-          break;
-        }
+        scoreValidity.push(answer?.kind === 'score' && isUsableSnippetScore(answer.score));
+        // 部分缺答时裁决仍跳过整组，但记录保留其余分数的位置和值；非法有限值也留证。
+        scoresReceived.push(
+          answer?.kind === 'score' && Number.isFinite(answer.score) ? answer.score : null
+        );
+        if (answer?.kind !== 'score') continue;
         snippetScores.push(answer.score);
+      }
+      const scoresComplete = snippetScores.length === sentSnippets;
+
+      const record = dispatchMap.get(candidate.id);
+      if (record !== undefined) {
+        record.snippet_score_validity = scoreValidity;
+        record.snippet_scores_received = scoresReceived;
       }
 
       rows.set(candidate.id, {

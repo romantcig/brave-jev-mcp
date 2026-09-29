@@ -578,8 +578,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       };
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
-    // 04-04 R1 返修：format_version 2（实发派发捕获口径 + 状态四维拆分）
-    assert.equal(sample.format_version, 2);
+    // 04-04 R1 返修：format_version 3（实发派发捕获口径 + 状态四维拆分）
+    assert.equal(sample.format_version, 3);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/

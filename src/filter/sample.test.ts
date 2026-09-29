@@ -36,7 +36,7 @@ import {
 } from './jev/questions.js';
 import { createJevClassifier } from './jev/client.js';
 import { filterLlmContext } from './pipeline.js';
-import { createSampleWriter } from './sample.js';
+import { createSampleWriter, type SampleRecord } from './sample.js';
 import { createNoKeyJevStats } from './stats.js';
 import { FILTER_RULES_VERSION } from './version.js';
 import type {
@@ -238,6 +238,137 @@ describe('createSampleWriter', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // 生产客户端接收异常但可解析的响应，核对实发、逐题有效性与实际裁决三种事实。
+  for (const scenario of [
+    'complete',
+    'missing-score',
+    'wrong-score-type',
+    'negative-score',
+    'above-range',
+    'nonfinite-score',
+    'missing-source-answer',
+    'missing-observation-answer',
+    'source-drop',
+  ]) {
+    it(`preserves answer evidence without inventing valid scores: ${scenario}`, async () => {
+      const config = configOf(join(root, `answer-evidence-${scenario}`));
+      const response: BraveLlmContextResponse = {
+        grounding: {
+          generic: [
+            {
+              url: 'https://a.example/article',
+              title: 'Brave analysis',
+              snippets: [articleBody, uniqueBody],
+            },
+          ],
+          map: [],
+        },
+        sources: {},
+      };
+      const { captured, restore } = stubFetch((body) => {
+        const answers: Record<string, { type: string; score?: number | string; noul?: number }> =
+          {};
+        for (const [key, question] of Object.entries(body.questions)) {
+          answers[key] =
+            (question as { type: string }).type === 'score'
+              ? { type: 'score', score: key === 'snip0' ? 2 : 0.4 }
+              : { type: 'noul', noul: key === 'has_original_reasoning' ? 0.9 : 0 };
+        }
+        if (scenario === 'missing-score') delete answers.snip0;
+        if (scenario === 'wrong-score-type') answers.snip0 = { type: 'noul', noul: 0 };
+        if (scenario === 'negative-score') answers.snip0.score = -1;
+        if (scenario === 'above-range') answers.snip0.score = 3;
+        if (scenario === 'nonfinite-score') answers.snip0.score = 'overflow';
+        if (scenario === 'missing-source-answer') delete answers.stale;
+        if (scenario === 'missing-observation-answer') delete answers.worth_keeping;
+        if (scenario === 'source-drop') answers.is_off_topic.noul = 1;
+        const text = JSON.stringify({
+          model: DEFAULT_JEV_MODEL,
+          answers,
+          usage: { input_tokens: 20 },
+        }).replace('"score":"overflow"', '"score":1e309');
+        return { status: 200, text: () => Promise.resolve(text) };
+      });
+      let result: FilterResult;
+      try {
+        result = await filterLlmContext(
+          response,
+          { params: { query: QUERY }, intent: INTENT },
+          config,
+          createJevClassifier(config.jev, { TYPESAFE_API_KEY: 'stub-key' })
+        );
+      } finally {
+        restore();
+      }
+      assert.equal(captured.length, 1);
+      const writer = createSampleWriter(config);
+      const path = writer.allocatePath(scenario);
+      assert.equal(
+        writer.save({
+          requestId: scenario,
+          path,
+          originalParams: { query: QUERY },
+          braveParams: { query: QUERY },
+          filterParams: { query: QUERY },
+          intent: INTENT,
+          preFilter: response,
+          stats: result.stats,
+          jevDispatch: result.jev_dispatch,
+          payload: result.result,
+          statusLine: result.stats.output.status_line ?? null,
+        }).status,
+        'saved'
+      );
+      const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as SampleRecord;
+      const sent = sample.jev!.sent[0];
+      assert.equal(sent.dispatched, true);
+      assert.equal(sent.answered, true, '收到可解析响应与来源裁决有效性独立');
+      assert.equal(sent.source_verdict_valid, scenario !== 'missing-source-answer');
+      assert.deepEqual(JSON.parse(sent.state!), captured[0].state);
+      assert.ok(sent.snippets.every((snippet) => snippet.in_state && snippet.score_question_sent));
+      const invalidFirst = [
+        'missing-score',
+        'wrong-score-type',
+        'negative-score',
+        'above-range',
+        'nonfinite-score',
+      ].includes(scenario);
+      assert.deepEqual(
+        sent.snippets.map((snippet) => snippet.scored),
+        [!invalidFirst, true]
+      );
+      const firstScore =
+        scenario === 'negative-score'
+          ? -1
+          : scenario === 'above-range'
+            ? 3
+            : invalidFirst
+              ? null
+              : 2;
+      assert.deepEqual(
+        sent.snippets.map((snippet) => snippet.score),
+        [firstScore, 0.4]
+      );
+      const incomplete = ['missing-score', 'wrong-score-type'].includes(scenario);
+      const droppedSource = scenario === 'source-drop';
+      assert.deepEqual(
+        sent.snippets.map((snippet) => snippet.score_applied),
+        [!invalidFirst && !droppedSource, !incomplete && !droppedSource]
+      );
+      if (incomplete) {
+        assert.equal(sample.jev!.per_source[0].snippet_scores, undefined);
+        assert.equal(
+          result.result.grounding.generic[0].snippets.length,
+          2,
+          '部分缺答仍跳过整组裁决，但样本保留后续评分而不将位置前移'
+        );
+      }
+      if (scenario === 'missing-source-answer') {
+        assert.equal(sample.jev!.per_source[0].fail_kind, 'validation');
+      }
+    });
+  }
+
   it('writes a pretty sample with stable field order, config snapshot and program ids', async () => {
     const logDir = join(root, 'shape', 'logs');
     const config = configOf(logDir);
@@ -285,7 +416,7 @@ describe('createSampleWriter', () => {
       'filter_program_version',
       'filter_rules_version',
     ]);
-    assert.equal(sample.format_version, 2);
+    assert.equal(sample.format_version, 3);
     assert.equal(sample.request_id, requestId);
     assert.match(String(sample.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
     assert.equal(sample.mode, 'test');
@@ -1051,6 +1182,9 @@ describe('createSampleWriter', () => {
         questions: null,
         snip_questions_sent: true,
         answered: false,
+        snippet_score_validity: null,
+        snippet_scores_received: null,
+        source_verdict_valid: false,
         snippet_keys: ['0'],
         snippet_texts: [articleBody],
       },
@@ -1063,6 +1197,9 @@ describe('createSampleWriter', () => {
         questions: null,
         snip_questions_sent: false,
         answered: false,
+        snippet_score_validity: null,
+        snippet_scores_received: null,
+        source_verdict_valid: false,
         not_dispatched_reason: 'breaker_open' as const,
         snippet_keys: ['0'],
         snippet_texts: [uniqueBody],
