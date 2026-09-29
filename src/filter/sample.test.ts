@@ -1120,6 +1120,46 @@ describe('createSampleWriter', () => {
     assert.equal(s2.not_dispatched_reason, 'breaker_open');
   });
 
+  it('fails open without throwing when record construction itself explodes (boundary)', () => {
+    // 辅助边界（审查尾注）：记录构建/序列化在文件写入 try 内——不可序列化的循环
+    // 引用不再向外抛，与写入失败同口径（stderr 一行 + status failed）。
+    const logDir = join(root, 'circular', 'logs');
+    const config = configOf(logDir);
+    const writer = createSampleWriter(config);
+    const requestId = 'aaaaaaa6-2222-3333-4444-555555555555';
+    const path = writer.allocatePath(requestId);
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    let outcome: { status: string };
+    try {
+      outcome = writer.save({
+        requestId,
+        path,
+        originalParams: {},
+        braveParams: {},
+        filterParams: { query: QUERY },
+        intent: INTENT,
+        preFilter: { grounding: { generic: [] }, sources: {} },
+        stats: emptyStats('test'),
+        jevDispatch: [],
+        payload: circular,
+        statusLine: null,
+      });
+    } finally {
+      console.error = originalError;
+    }
+    assert.deepEqual(outcome, { status: 'failed' });
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].some((arg) => String(arg).includes(path.absolute)));
+    assert.equal(existsSync(path.absolute), false);
+  });
+
   it('resolves a relative log_dir to an absolute allocated path that matches the real file (review R5)', () => {
     // 相对 log_dir（配置允许的合法输入）：allocatePath 必须按写文件的解析基准
     // （进程工作目录）给出绝对路径——v1 用 join 返回相对路径（审查复现

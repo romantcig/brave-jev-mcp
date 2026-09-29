@@ -471,12 +471,14 @@ const serializeRecord = (record: SampleRecord): string => `${JSON.stringify(reco
 
 /**
  * 原子落盘：目录自愈（mkdirSync recursive）→ 临时文件单次整写 → 同目录 rename。
- * 任何一步失败：尽力清掉临时文件（清不掉就留着——`.tmp` 后缀不会被误读为完整
- * 样本）、stderr 恰一行可定位告警（oneLineStderr 先例）、返回 failed，绝不抛错。
+ * `content` 是懒构建 thunk（04-04 辅助边界）：记录构建与序列化挪进本函数 try 内
+ * ——构建异常（如输入契约扩展后出现不可序列化引用）与写入失败同口径消化：
+ * stderr 一行 + 返回 failed，绝不外抛反噬搜索。任何一步失败：尽力清掉临时文件
+ * （清不掉就留着——`.tmp` 后缀不会被误读为完整样本）、绝不抛错、绝不假装成功。
  */
 const writeSampleFile = (
   path: AllocatedSamplePath,
-  content: string,
+  content: () => string,
   hooks: SampleWriterHooks
 ): SampleWriteStatus => {
   const tmpPath = `${path.absolute}.tmp`;
@@ -486,7 +488,7 @@ const writeSampleFile = (
   const rename = hooks.rename ?? ((from: string, to: string) => renameSync(from, to));
   try {
     mkdirSync(dirname(path.absolute), { recursive: true });
-    writeFile(tmpPath, content);
+    writeFile(tmpPath, content());
     rename(tmpPath, path.absolute);
     return { status: 'saved' };
   } catch (error) {
@@ -506,8 +508,10 @@ const writeSampleFile = (
 /**
  * 创建样本写入器（04-02）：`allocatePath` 先分配路径并捕获锚点 Date，`save` 构建
  * 完整记录（深拷贝所有权隔离）、`saveError` 构建缺失标记样本，都经临时文件 +
- * rename 原子落盘。写入失败 fail-open（stderr 一行 + status 'failed'），搜索返回
- * 不受影响——适配行据此剥掉状态行后缀再返回，绝不假装样本已存在。
+ * rename 原子落盘；记录构建与序列化同在 try 内（构建异常与写入失败同口径
+ * fail-open，04-04 辅助边界）。写入失败 fail-open（stderr 一行 + status
+ * 'failed'），搜索返回不受影响——适配行据此剥掉状态行后缀再返回，绝不假装样本
+ * 已存在。
  * R5（04-04）：相对 log_dir 时 `allocatePath.absolute` 用 `path.resolve` 按**进程
  * 工作目录**基准转绝对（与写入时的解析基准一致——相对路径的 writeFileSync 同以
  * cwd 解析）；JSONL 信封的相对指针（`relative`）继续相对日志目录保存。
@@ -530,14 +534,14 @@ export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHoo
     save(input: SampleInput): SampleWriteStatus {
       return writeSampleFile(
         input.path,
-        serializeRecord(buildRecord(config, input, programVersion, rulesVersion)),
+        () => serializeRecord(buildRecord(config, input, programVersion, rulesVersion)),
         resolvedHooks
       );
     },
     saveError(input: SampleErrorInput): SampleWriteStatus {
       return writeSampleFile(
         input.path,
-        serializeRecord(buildErrorRecord(config, input, programVersion, rulesVersion)),
+        () => serializeRecord(buildErrorRecord(config, input, programVersion, rulesVersion)),
         resolvedHooks
       );
     },
