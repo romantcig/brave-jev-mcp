@@ -62,6 +62,7 @@ import type {
   FilterResult,
   FilterStats,
   JevCandidate,
+  JevDispatchRecord,
   JevPerSourceStats,
   JevStats,
   JevThresholds,
@@ -478,6 +479,8 @@ export async function filterLlmContext(
   const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
   // 步 8 只看 query 实词（步 3 已用 query ∪ intent 过滤过）
   const queryTerms = contentTerms(request.params.query);
+  // 实发派发记录（04-04 R1）：Jev 分支由步 5 填充，off / no_key 保持空表
+  let dispatches: JevDispatchRecord[] = [];
 
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
   if (config.mode === 'off') {
@@ -493,7 +496,8 @@ export async function filterLlmContext(
     // 步 5 Jev 每源一次请求：全候选一波并发派发（进程级并发闸住 02-05 的
     // createJevClassifier，管道编排层不持状态与限流）——test 与 on 共用此分支
     const judged = await runJevStage(table, request, deps.classify, stats);
-    runOnChain(table, judged, config.thresholds, stats, queryTerms);
+    dispatches = judged.dispatches;
+    runOnChain(table, judged.rows, config.thresholds, stats, queryTerms);
   }
   // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
   // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
@@ -518,7 +522,7 @@ export async function filterLlmContext(
   // 之后——它整体替换 stats.output，写在之前会被吞掉（03-RESEARCH Pitfall 1）。
   stats.output.status_line = buildStatusLine(stats);
 
-  return { result, stats };
+  return { result, stats, jev_dispatch: dispatches };
 }
 
 /**
@@ -587,15 +591,17 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => 
  * - 聚合：input_tokens / latency_ms_total 求和；status 任一 per_source
  *   `'breaker_open'` → `'breaker_open'`，否则任一 failed → `'degraded'`，否则 `'ok'`。
  *
- * @returns 逐源 judged 结果映射（键 = src id `s{index}`，值 = per_source 行对象
- * 引用）——步 6/7 的裁决消费入口。
+ * @returns `{ rows, dispatches }`：rows 为逐源 judged 结果映射（键 = src id
+ * `s{index}`，值 = per_source 行对象引用）——步 6/7 的裁决消费入口；dispatches
+ * 为实发派发记录（04-04 R1，每 keep 来源一条、按表序），随 FilterResult.jev_dispatch
+ * 交给样本层。
  */
 const runJevStage = async (
   table: WorkSource[],
   request: { params: FilterRequest; intent: string },
   classify: ClassifyDeps['classify'],
   stats: FilterStats
-): Promise<Map<string, JevPerSourceStats>> => {
+): Promise<{ rows: Map<string, JevPerSourceStats>; dispatches: JevDispatchRecord[] }> => {
   const jev: JevStats = {
     n_requests: 0,
     input_tokens: 0,
@@ -604,22 +610,58 @@ const runJevStage = async (
     per_source: [],
   };
   const sourceKeys = Object.keys(SOURCE_QUESTIONS);
-  const candidates = toPlainCandidates(jevCandidatesFromTable(table));
+  // 带身份候选（04-04 R1）：派发记录需要片段配对身份与候选口径文本，plain 形状给不出
+  const candidates = jevCandidatesFromTable(table);
 
   // 先按表序给每个 keep 来源立 skipped 占位行，候选来源派发后覆盖——per_source
-  // 天然保持 Brave 原序（RULES-08），顺序由 Map 的插入序保证
+  // 天然保持 Brave 原序（RULES-08），顺序由 Map 的插入序保证；无候选的来源
+  // （本地规则删光、未调 Jev）预置 skipped 派发记录（04-04 R1：与候选来源的
+  // "未派发"区分开——skipped 是无内容可发，too_large / breaker_open 是有内容没发）
   const rows = new Map<string, JevPerSourceStats>();
+  // 实发派发记录（04-04 R1）：按 src 暂存，allSettled 后按表序（rows 序）输出
+  const dispatchMap = new Map<string, JevDispatchRecord>();
+  const candidateIds = new Set(candidates.map((candidate) => candidate.id));
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
-    rows.set(`s${source.index}`, { src: `s${source.index}`, url: source.url, status: 'skipped' });
+    const src = `s${source.index}`;
+    rows.set(src, { src, url: source.url, status: 'skipped' });
+    if (!candidateIds.has(src)) {
+      dispatchMap.set(src, {
+        src,
+        url: source.url,
+        title: source.title,
+        dispatched: false,
+        state: null,
+        questions: null,
+        snip_questions_sent: false,
+        answered: false,
+        not_dispatched_reason: 'skipped',
+        snippet_keys: [],
+        snippet_texts: [],
+      });
+    }
   }
 
-  const dispatch = async (candidate: JevCandidate): Promise<void> => {
+  /** 一条派发记录的公共投影（src/url/title/候选身份与文本，派发与否都带）。 */
+  const dispatchBase = (candidate: JevCandidateDetailed): JevDispatchRecord => ({
+    src: candidate.id,
+    url: candidate.url,
+    title: candidate.title,
+    dispatched: false,
+    state: null,
+    questions: null,
+    snip_questions_sent: false,
+    answered: false,
+    snippet_keys: candidate.snippets.map((snippet) => snippet.key),
+    snippet_texts: candidate.snippets.map((snippet) => snippet.text),
+  });
+
+  const dispatch = async (candidate: JevCandidateDetailed): Promise<void> => {
     const state = buildState(
       candidate.id,
       candidate.url,
       candidate.title,
-      candidate.snippets,
+      candidate.snippets.map((snippet) => snippet.text),
       request.params.query,
       request.intent
     );
@@ -630,11 +672,41 @@ const runJevStage = async (
     try {
       outcome = await classify({ state, questions });
     } catch {
-      // classify 契约是返回 failed 而非 reject；真 reject 按网络失败记账（防御注入面）
+      // classify 契约是返回 failed 而非 reject；真 reject 按网络失败记账（防御注入面）。
+      // 此时无实发载荷（客户端契约内必有）——派发记录按未派发落、原因省略（防御分支）
       outcome = { status: 'failed', kind: 'network' };
     }
     const latencyMs = Date.now() - startedAt;
     jev.latency_ms_total += latencyMs;
+
+    const answered = outcome.status === 'answered';
+    if (outcome.dispatch !== undefined || answered) {
+      // 派发记录：生产客户端必带实发载荷（已派发）；注入面（重录回放 / 测试桩）
+      // 的 answered 不带载荷——按"已取得回答但无实发证据"如实记（dispatched=false、
+      // state=null），answered 独立取自 outcome，绝不互相冒充（04-04 R1）
+      const record = dispatchBase(candidate);
+      record.dispatched = outcome.dispatch !== undefined;
+      record.state = outcome.dispatch !== undefined ? outcome.dispatch.state : null;
+      record.questions = outcome.dispatch !== undefined ? outcome.dispatch.questions : null;
+      // score 题只有片段级 snip{i}（buildQuestions 的形状）——实发载荷含 score 题
+      // 即提交了片段评分题；注入面无载荷时按 answered 推断（有回答必有题被提交）
+      record.snip_questions_sent =
+        outcome.dispatch !== undefined
+          ? Object.values(outcome.dispatch.questions).some((question) => question.type === 'score')
+          : answered;
+      record.answered = answered;
+      dispatchMap.set(candidate.id, record);
+    } else {
+      // 未派发：too_large（阶梯不可再砍）/ breaker_open（熔断短路）；防御分支
+      // （契约外 reject 映射的 network）原因未知——省略 not_dispatched_reason
+      const record = dispatchBase(candidate);
+      if (outcome.status === 'failed' && outcome.kind === 'too_large') {
+        record.not_dispatched_reason = 'too_large';
+      } else if (outcome.status === 'failed' && outcome.kind === 'breaker_open') {
+        record.not_dispatched_reason = 'breaker_open';
+      }
+      dispatchMap.set(candidate.id, record);
+    }
 
     if (outcome.status === 'answered') {
       jev.n_requests += 1;
@@ -707,7 +779,11 @@ const runJevStage = async (
       ? 'degraded'
       : 'ok';
   stats.jev = jev;
-  return rows;
+  // 实发派发记录按表序（rows 插入序 = Brave 原序）输出：每个 keep 来源恰一条
+  // （候选来源派发后覆盖、无候选来源预置 skipped）——不变式由上方构造保证，
+  // 非空断言安全（llm_context 适配行 `filtered!` 同款先例）
+  const dispatches = [...rows.values()].map((row) => dispatchMap.get(row.src)!);
+  return { rows, dispatches };
 };
 
 /**

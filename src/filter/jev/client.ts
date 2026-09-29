@@ -24,6 +24,7 @@ import type {
   ClassifyFailKind,
   ClassifyOutcome,
   JevAnswer,
+  JevDispatchPayload,
   JevLadderLevel,
   JevQuestion,
   JevState,
@@ -366,6 +367,11 @@ export type JevClassifierHooks = {
  * 直接 failed 'too_large'。answered outcome 带实际生效的 ladder 级别名与真正发送
  * 的片段数 `sent_snippets`（未降级可省略——管道据此把 snip 分数按位置对齐）。
  *
+ * 实发派发捕获（04-04 R1）：请求体定形后（阶梯处理完、fetch 调用前）捕获实发
+ * state 与题目集合，随所有从重试循环返回的 outcome（answered 或已派发后失败）
+ * 以 `dispatch` 交回——样本记录的"实发内容"只信这里，绝不重建。未派发的短路
+ * （too_large / breaker_open，进闸前后）不带 dispatch——请求从未离开进程。
+ *
  * 失败一律返回 failed 联合不抛（SAFE-01：单来源失败按"留"）。detail 只含状态码与
  * body 前 200 字符摘要，绝不拼接鉴权头或 key 值（T-02-05-1）。
  *
@@ -478,6 +484,16 @@ export function createJevClassifier(
       const body = JSON.stringify(buildRequest(sendState, sendQuestions, model));
       const ladderLifted = ladder.value !== undefined;
 
+      // 实发派发捕获（04-04 R1）：请求体已定形、即将派发——从这里到本闭包的所有
+      // 返回点都属"请求已派发"（fetch 已调用；每次重试复用同一 body，实发内容
+      // 不变）。样本层据此如实记录，绝不重跑本地规则重建。
+      const dispatch: JevDispatchPayload = { state: sendState, questions: sendQuestions };
+      /** 统一给返回结果附上实发载荷；不修改入参（写时复制约定）。 */
+      const withDispatch = (outcome: ClassifyOutcome): ClassifyOutcome => ({
+        ...outcome,
+        dispatch,
+      });
+
       /** 非 200 状态的 kind 映射；`retryable` 决定是否进入退避重试。 */
       const statusOutcome = (
         status: number
@@ -506,7 +522,7 @@ export function createJevClassifier(
           const kind = kindOfThrow(error);
           if (kind === 'timeout' || attempt >= RETRY_ATTEMPTS) {
             recordFailure(kind);
-            return throwFailure(kind, error);
+            return withDispatch(throwFailure(kind, error));
           }
           await sleep(backoffDelayMs(attempt, random));
           continue;
@@ -520,7 +536,7 @@ export function createJevClassifier(
           const kind = kindOfThrow(error);
           if (kind === 'timeout' || attempt >= RETRY_ATTEMPTS) {
             recordFailure(kind);
-            return throwFailure(kind, error);
+            return withDispatch(throwFailure(kind, error));
           }
           await sleep(backoffDelayMs(attempt, random));
           continue;
@@ -531,7 +547,7 @@ export function createJevClassifier(
         if (parsed.ok) {
           // 任一成功清零连续失败计数（SAFE-02）
           consecutiveFailures = 0;
-          return {
+          return withDispatch({
             status: 'answered',
             model: parsed.model,
             answers: parsed.answers,
@@ -540,27 +556,28 @@ export function createJevClassifier(
             // 降级后实际带 score 题发出的片段数（不含 snip 题即 0）；未降级可省略，
             // 管道按"全部发送"理解（见 ClassifyOutcome.sent_snippets 注释）
             ...(ladderLifted ? { sent_snippets: prepared.sentSnippets } : {}),
-          };
+          });
         }
 
         // 200 但形状坏：确定性，不重试（重试必然再坏）
-        if (parsed.kind === 'shape') return httpFailure('validation', status, bodyText);
+        if (parsed.kind === 'shape')
+          return withDispatch(httpFailure('validation', status, bodyText));
 
         const mapped = statusOutcome(status);
         if (mapped === undefined || !mapped.retryable) {
           // auth / validation 不计熔断（确定性请求问题）
-          return httpFailure(mapped?.kind ?? 'validation', status, bodyText);
+          return withDispatch(httpFailure(mapped?.kind ?? 'validation', status, bodyText));
         }
 
         // Retry-After 优先于普通退避；要求等超上限就干脆不再重试
         const retryAfterMs = parseRetryAfterMs(response, now);
         if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) {
           recordFailure(mapped.kind);
-          return httpFailure(mapped.kind, status, bodyText);
+          return withDispatch(httpFailure(mapped.kind, status, bodyText));
         }
         if (attempt >= RETRY_ATTEMPTS) {
           recordFailure(mapped.kind);
-          return httpFailure(mapped.kind, status, bodyText);
+          return withDispatch(httpFailure(mapped.kind, status, bodyText));
         }
         await sleep(retryAfterMs !== undefined ? retryAfterMs : backoffDelayMs(attempt, random));
       }

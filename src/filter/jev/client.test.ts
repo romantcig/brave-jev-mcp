@@ -488,7 +488,13 @@ describe('createJevClassifier', () => {
         questions: buildQuestions(0),
       });
 
-      assert.deepEqual(outcome, { status: 'failed', kind: 'auth', detail: '401 unauthorized' });
+      // 04-04 R1：401 也是已派发的请求——失败 outcome 必须带实发载荷（输入证据）
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'auth',
+        detail: '401 unauthorized',
+        dispatch: { state, questions: buildQuestions(0) },
+      });
       assert.equal(fetchCount, 1);
     } finally {
       globalThis.fetch = saved;
@@ -517,10 +523,12 @@ describe('createJevClassifier', () => {
         questions: buildQuestions(0),
       });
 
+      // 超时同样"已派发"：请求已交给传输层，实发载荷照带（04-04 R1）
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'timeout',
         detail: 'This operation was aborted',
+        dispatch: { state, questions: buildQuestions(0) },
       });
       assert.equal(fetchCount, 1, 'a timeout must not be retried');
     } finally {
@@ -548,7 +556,12 @@ describe('createJevClassifier', () => {
         questions: buildQuestions(0),
       });
 
-      assert.deepEqual(outcome, { status: 'failed', kind: 'network', detail: 'fetch failed' });
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'network',
+        detail: 'fetch failed',
+        dispatch: { state, questions: buildQuestions(0) },
+      });
     } finally {
       globalThis.fetch = saved;
     }
@@ -774,7 +787,13 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
-      assert.deepEqual(outcome, { status: 'failed', kind: 'auth', detail: '403 forbidden' });
+      // 04-04 R1：已派发失败的请求保留实发载荷（输入证据），失败 kind 照旧
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'auth',
+        detail: '403 forbidden',
+        dispatch: request,
+      });
       assert.equal(counter.calls, 1);
     } finally {
       globalThis.fetch = saved;
@@ -790,7 +809,12 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
-      assert.deepEqual(outcome, { status: 'failed', kind: 'validation', detail: '404 not found' });
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'validation',
+        detail: '404 not found',
+        dispatch: request,
+      });
       assert.equal(counter.calls, 1);
     } finally {
       globalThis.fetch = saved;
@@ -806,10 +830,13 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
+      // 422：请求已派发并被拒绝——实发载荷必须随失败 outcome 带回（04-04 R1，
+      // 样本层据此保留输入证据，不再把"没有有效回答"写成"没发送"）
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'validation',
         detail: '422 state too large',
+        dispatch: request,
       });
       assert.equal(counter.calls, 1);
     } finally {

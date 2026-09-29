@@ -1,7 +1,7 @@
 /**
- * test 模式样本落盘（04-02 / SC2+SC3）：每次 test 搜索一份独立 JSON 样本——
- * 过滤前完整响应（schema 校验前克隆）+ 最终实际返回 + 过程映射 + Jev 判断与
- * 稳定身份映射 + 生效配置快照。写入器住纯过滤库（不引任何 MCP 类型），适配层
+ * test 模式样本落盘（04-02 / SC2+SC3；04-04 R1 返修）：每次 test 搜索一份独立
+ * JSON 样本——过滤前完整响应（schema 校验前克隆）+ 最终实际返回 + 过程映射 + Jev
+ * 判断与实发派发映射 + 生效配置快照。写入器住纯过滤库（不引任何 MCP 类型），适配层
  * 只交数据。
  *
  * 形状：`createSampleWriter` 是工厂——库不持模块级可变状态（stats.ts 不变式），
@@ -11,14 +11,22 @@
  * 保留可用原始响应与失败阶段；两者的 final_return 都是 null 加显式缺失标记——
  * 绝不当零来源成功、绝不当完整成功样本。
  *
+ * 实发口径（04-04 R1，format_version 2）：Jev 段的实发映射**只信管道交来的
+ * JevDispatchRecord**——捕获于客户端超限阶梯之后、请求派发处，样本写入时绝不重跑
+ * 本地规则重建候选（重建会得到阶梯前 state，与实发不符）。状态四个维度互相独立：
+ * `dispatched`（请求已派发，fetch 已调用，不保证服务端已收到）、文本是否进入实发
+ * state（`in_state`）、是否提交片段评分题（`score_question_sent`）、是否取得有效
+ * 回答（`answered` / 逐片段 `scored`）。已派发但失败的请求（HTTP 4xx/5xx、超时、
+ * 断连）保留实发 state 作输入证据；skipped（无内容可发）/ too_large（阶梯砍不动）/
+ * breaker_open（熔断短路）各自带 `not_dispatched_reason`，不再混作同一种"未发送"。
+ * v1 记录（format_version 1，04-02）的 sent 段是阶梯前重建口径、snippets[].sent 是
+ * 单一布尔——按旧语义读，绝不按 v2 字段名解释。
+ *
  * 身份口径（实施计划第三节 C）：来源身份 = Brave 原始索引 `s{n}`（与
  * per_source.src 同源）；片段身份 = `{merged_from}:{index}` 前缀可省、JSON-LD
  * 多段加 `.{part}`（与统计表 SnippetStats 的 index/part/merged_from 同源）。
- * Jev 实发映射按候选记录每片段身份、文本与 sent 标记——候选口径取
- * `collectJevCandidatesDetailed`（与步 5 同一纯函数同一输入，天然同口径），
- * answered 行的 snippet_scores 长度即实发片段数（cut_tail / source_only 阶梯下
- * 短于候选，snippet_scores 缺失时回退 sent_snippets），未发送的片段标
- * sent:false，不伪造判断。被删内容不重复存正文，凭身份键回 pre_filter 查。
+ * 实发映射的片段表 = 派发记录的候选全量（snippet_keys / snippet_texts），阶梯砍掉
+ * 的片段 in_state=false——被删内容不重复存正文文本，凭身份键回 pre_filter 查。
  *
  * 过程映射（SC2：任一删除项可凭样本定位内容、原因与执行阶段）：outcome 段内嵌
  * 统计表的 sources 投影（keep/drop + 逐片段 kept/reason/身份，reason 词即阶段
@@ -36,12 +44,13 @@
  * 中途失败、rename 失败）返回 status 'failed'，stderr 恰一行可定位告警（含目标
  * 路径），绝不抛错、绝不假装成功；不设自动清理（与 JSONL 日志同策略）。
  *
- * 依据：测试模式与搜索样本记录实施计划.md 第三节、04-CONTEXT.md 落盘契约四节。
+ * 依据：测试模式与搜索样本记录实施计划.md 第三节、04-CONTEXT.md 落盘契约四节、
+ * 测试模式与搜索样本记录审查报告.md R1。
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { buildState, QUESTION_SET_ID } from './jev/questions.js';
+import { QUESTION_SET_ID } from './jev/questions.js';
 import {
   localDateStamp,
   localIsoWithOffset,
@@ -49,13 +58,12 @@ import {
   thresholdSnapshot,
   truncateMessage,
 } from './logging.js';
-import { collectJevCandidatesDetailed } from './pipeline.js';
 import type {
-  BraveLlmContextResponse,
   FilterConfig,
   FilterMode,
   FilterRequest,
   FilterStats,
+  JevDispatchRecord,
   JevPerSourceStats,
   LocalStats,
   SourceStats,
@@ -85,33 +93,55 @@ export type SampleOutcome = {
   sources: SourceStats[];
 };
 
-/** Jev 实发映射里的一条片段：配对身份 + 候选内位置 + 是否落在实发片段题范围 + 文本。 */
+/**
+ * Jev 实发映射里的一条片段（04-04 R1，v2）：配对身份 + 候选内位置 + 三个互相
+ * 独立的状态维度 + 候选口径文本。v1 的单一 `sent` 布尔已拆分——"没有有效回答"
+ * 与"没发送"不再混同。
+ */
 export type SampleJevSentSnippet = {
   /** 片段配对身份：`{merged_from}:{index}`（前缀可省）+ 可选 `.{part}` */
   snippet: string;
   /** 候选内位置（即 snip{i} 题位） */
   position: number;
   /**
-   * 是否落在实发片段题范围内（cut_tail / source_only 阶梯砍掉的部分为 false——
-   * 没有片段题就没有片段级判断）；failed / skipped / breaker_open 行无可对齐
-   * 判断，一律 false
+   * 文本是否进入实发 state（捕获于客户端超限阶梯后、派发前）——cut_tail 砍掉
+   * 的尾片段为 false，source_only_questions 级片段全部 true（state 片段保留）
    */
-  sent: boolean;
-  /** 实发（构造 state 时的）片段文本 */
+  in_state: boolean;
+  /** 该片段的 snip{i} 评分题是否随请求提交（未派发 / 题被阶梯删掉为 false） */
+  score_question_sent: boolean;
+  /** 是否取得该片段的有效评分回答（answered 且位置在实发收分范围内） */
+  scored: boolean;
+  /**
+   * 候选口径文本（与派发记录 snippet_texts 对齐）：进入实发 state 的片段即实发
+   * 文本；被阶梯砍掉的片段凭本字段与身份键回 pre_filter 对齐原文
+   */
   text: string;
 };
 
-/** Jev 实发映射里的一条来源：实发 state 的 JSON 文本 + 逐片段映射。 */
+/** Jev 实发映射里的一条来源：实发 state 文本 + 派发状态 + 逐片段映射（v2）。 */
 export type SampleJevSentSource = {
   src: string;
   url: string;
   title: string;
-  /** 实发 state 的 JSON 文本（buildState 构造口径，与步 5 同一函数同一输入） */
-  state: string;
+  /**
+   * 实发 state 的 JSON 文本（客户端超限阶梯处理后、派发前的真实发送内容，
+   * 04-04 R1 捕获口径）；未派发（skipped / too_large / breaker_open）为 null
+   */
+  state: string | null;
+  /** 请求是否已派发（fetch 已调用；不保证服务端已收到或已处理） */
+  dispatched: boolean;
+  /** 未派发原因（skipped = 无内容可发；too_large = 阶梯不可再砍；breaker_open =
+   * 熔断短路）；已派发时省略。防御分支（classify 契约外 reject）也省略 */
+  not_dispatched_reason?: 'skipped' | 'too_large' | 'breaker_open';
+  /** 是否提交了片段评分题（实发 questions 含 score 题即 snip{i}） */
+  snip_questions_sent: boolean;
+  /** 是否取得有效回答（answered——回答形状校验通过且 answers 可用） */
+  answered: boolean;
   snippets: SampleJevSentSnippet[];
 };
 
-/** Jev 段：判断（per_source 原样）+ 实发 state 还原映射。 */
+/** Jev 段：判断（per_source 原样）+ 实发派发映射（v2 捕获口径）。 */
 export type SampleJev = {
   status: 'ok' | 'no_key' | 'degraded' | 'breaker_open';
   n_requests: number;
@@ -119,7 +149,11 @@ export type SampleJev = {
   latency_ms_total: number;
   /** 来源级判断原样（含 answers / snippet_scores / verdict / reason / fail_kind / ladder / sent_snippets） */
   per_source: JevPerSourceStats[];
-  /** 实发 state 还原映射（候选口径 = collectJevCandidatesDetailed，与步 5 同一纯函数同一输入） */
+  /**
+   * 实发派发映射（04-04 R1）：每 keep 来源一条、按表序（Brave 原序）——来自管道
+   * 交来的 JevDispatchRecord（客户端阶梯后、派发处捕获），样本写入时绝不重建候选。
+   * v1 记录本字段是阶梯前重建口径，读取按 format_version 区分
+   */
   sent: SampleJevSentSource[];
 };
 
@@ -148,8 +182,14 @@ export type SampleMissingFinalReturn = {
  * final_return_missing 显式标记，outcome 省略（无过滤过程），jev 为 null。
  */
 export type SampleRecord = {
-  /** 记录格式版本；字段语义变化时递增 */
-  format_version: 1;
+  /**
+   * 记录格式版本；字段语义变化时递增。2 = 04-04 R1 返修（jev.sent 为客户端阶梯后
+   * 实发捕获口径、sent 片段 in_state/score_question_sent/scored 三维拆分、来源级
+   * dispatched / not_dispatched_reason，新增 filter_rules_version）。1 = 04-02
+   * 初版（sent 为阶梯前重建口径、snippets[].sent 单一布尔、无 filter_rules_version）
+   * ——历史样本绝不按 v2 字段语义解释，读取按本值分支。
+   */
+  format_version: 2;
   request_id: string;
   /** 本地 ISO 带时区偏移（复用 logging.ts 的 localIsoWithOffset 口径） */
   ts: string;
@@ -174,7 +214,7 @@ export type SampleRecord = {
   config_snapshot: SampleConfigSnapshot;
   /** 题库版本标识（questions.ts 的 QUESTION_SET_ID，配合 git 历史取得完整题目） */
   question_set_id: string;
-  /** 过滤程序版本（package.json version） */
+  /** 过滤程序版本（package.json version——包版本，跨实现变更不变） */
   filter_program_version: string;
 };
 
@@ -210,6 +250,12 @@ export type SampleInput = {
   preFilter: unknown;
   /** 过滤统计（jev 判断、outcome 过程映射的来源） */
   stats: FilterStats;
+  /**
+   * 实发派发记录（04-04 R1）：FilterResult.jev_dispatch 原样交入——客户端超限
+   * 阶梯后、派发处捕获的真实 state 与题目集合。样本 Jev 段只信它，绝不重跑本地
+   * 规则重建候选（off / no_key 为空表）
+   */
+  jevDispatch: JevDispatchRecord[];
   /** 实际返回第一块 JSON（含 output.status_line 带 sample 后缀） */
   payload: unknown;
   /** 实际返回第二块状态行文本（含 sample 后缀）；无状态行为 null */
@@ -268,32 +314,31 @@ const readProgramVersion = (): string => {
 };
 
 /**
- * 片段是否落在实发片段题范围内（sent 的操作口径）：answered 行的 snippet_scores
- * 长度即实发片段数（cut_tail / source_only 阶梯下短于候选——snippet_scores 缺失
- * 时回退 sent_snippets，再回退候选全长）；其余状态（failed / skipped /
- * breaker_open）没有可对齐的片段级判断，一律 false——未发送（无可对齐判断）的
- * 片段绝不伪造判断。
+ * 逐片段 scored 的操作口径（04-04 R1）：answered 且位置在实发收分范围内——
+ * snippet_scores 长度即实发片段数（cut_tail / source_only 阶梯下短于候选，
+ * snippet_scores 缺失时回退 sent_snippets，再回退候选全长）。非 answered 行
+ * score 全部 false——"没有有效回答"绝不写成"没提交评分题"或"没发送"。
  */
-const isSnippetSent = (
+const isSnippetScored = (
   row: JevPerSourceStats | undefined,
   position: number,
   candidateLength: number
 ): boolean => {
   if (row === undefined || row.status !== 'answered') return false;
-  const sent = row.snippet_scores?.length ?? row.sent_snippets ?? candidateLength;
-  return position < sent;
+  const scored = row.snippet_scores?.length ?? row.sent_snippets ?? candidateLength;
+  return position < scored;
 };
 
-/** Jev 段构建：判断原样 + 实发 state 映射（候选重导出与步 5 同一纯函数同一输入）。 */
-const buildJevSection = (config: FilterConfig, input: SampleInput): SampleJev | null => {
+/**
+ * Jev 段构建（04-04 R1）：判断原样 + 实发派发映射——**只信管道交来的
+ * JevDispatchRecord**（客户端超限阶梯后、派发处捕获），绝不重跑本地规则重建候选
+ * （重建得到的是阶梯前 state，与实发不符——R1 的病灶）。被阶梯砍掉的片段从实发
+ * state 里消失，凭候选全量表（snippet_keys / snippet_texts）保留身份与原文对齐。
+ */
+const buildJevSection = (input: SampleInput): SampleJev | null => {
   const jev = input.stats.jev;
   if (jev === null) return null; // test 模式不会出现（no_key 也建零值对象）；防御直调
 
-  const candidates = collectJevCandidatesDetailed(
-    input.preFilter as BraveLlmContextResponse,
-    { params: input.filterParams, intent: input.intent },
-    config
-  );
   const rows = new Map(jev.per_source.map((row) => [row.src, row]));
 
   return {
@@ -302,28 +347,32 @@ const buildJevSection = (config: FilterConfig, input: SampleInput): SampleJev | 
     input_tokens: jev.input_tokens,
     latency_ms_total: jev.latency_ms_total,
     per_source: structuredClone(jev.per_source),
-    sent: candidates.map((candidate) => {
-      const row = rows.get(candidate.id);
-      // 实发 state 的文本还原：与步 5 的 dispatch 同一 buildState、同一输入——
-      // 记录的是构造时（阶梯前）state；阶梯砍尾范围由 snippets[].sent 表达
-      const state = buildState(
-        candidate.id,
-        candidate.url,
-        candidate.title,
-        candidate.snippets.map((snippet) => snippet.text),
-        input.filterParams.query,
-        input.intent
-      );
+    sent: input.jevDispatch.map((record) => {
+      // 实发 state（阶梯后）与实发题目集合：未派发为 null——不伪造输入证据
+      const stateSnippets = record.state?.source.snippets ?? [];
+      const snipQuestionCount =
+        record.questions === null
+          ? 0
+          : Object.values(record.questions).filter((question) => question.type === 'score').length;
+      const row = rows.get(record.src);
       return {
-        src: candidate.id,
-        url: candidate.url,
-        title: candidate.title,
-        state: JSON.stringify(state),
-        snippets: candidate.snippets.map((snippet, position) => ({
-          snippet: snippet.key,
+        src: record.src,
+        url: record.url,
+        title: record.title,
+        state: record.state === null ? null : JSON.stringify(record.state),
+        dispatched: record.dispatched,
+        ...(record.not_dispatched_reason !== undefined
+          ? { not_dispatched_reason: record.not_dispatched_reason }
+          : {}),
+        snip_questions_sent: record.snip_questions_sent,
+        answered: record.answered,
+        snippets: record.snippet_keys.map((key, position) => ({
+          snippet: key,
           position,
-          sent: isSnippetSent(row, position, candidate.snippets.length),
-          text: snippet.text,
+          in_state: position < stateSnippets.length,
+          score_question_sent: position < snipQuestionCount,
+          scored: isSnippetScored(row, position, record.snippet_keys.length),
+          text: record.snippet_texts[position] ?? '',
         })),
       };
     }),
@@ -336,7 +385,7 @@ const buildRecord = (
   input: SampleInput,
   programVersion: string
 ): SampleRecord => ({
-  format_version: 1,
+  format_version: 2,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,
@@ -354,7 +403,7 @@ const buildRecord = (
     local: structuredClone(input.stats.local),
     sources: structuredClone(input.stats.sources),
   },
-  jev: buildJevSection(config, input),
+  jev: buildJevSection(input),
   config_snapshot: {
     thresholds: thresholdSnapshot(config),
     jev: {
@@ -376,7 +425,7 @@ const buildErrorRecord = (
   input: SampleErrorInput,
   programVersion: string
 ): SampleRecord => ({
-  format_version: 1,
+  format_version: 2,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,

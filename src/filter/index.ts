@@ -57,6 +57,8 @@ export type {
   FilterRequest,
   FilterResult,
   FilterStats,
+  JevDispatchPayload,
+  JevDispatchRecord,
   LocalStats,
   SnippetRemovalReason,
   SnippetStats,

@@ -120,8 +120,24 @@ export type ClassifyFailKind =
   | 'too_large';
 
 /**
+ * 实发派发载荷（04-04 R1）：捕获于客户端超限阶梯**之后**、请求派发（fetch 调用）
+ * 处的请求体内容——真实发送的 state 与题目集合，绝不重跑本地规则重建。
+ * 每次重试复用同一请求体，载荷全程不变；写时复制，消费方不得改写。
+ */
+export type JevDispatchPayload = {
+  /** 实发 state（超限阶梯处理后的真实发送内容） */
+  state: JevState;
+  /** 实发题目集合（与 state 一同构成请求体） */
+  questions: Record<string, JevQuestion>;
+};
+
+/**
  * classify 的返回：answered 带实际模型版本 ID 与 input_tokens（JEV-02），
  * failed 一律 union 不抛（单来源失败按"留"，SAFE-01）。
+ *
+ * `dispatch`（04-04 R1）：请求已派发（fetch 已调用）时携带实发载荷——含已派发
+ * 但失败的请求（HTTP 4xx/5xx、超时、网络错误都算"已派发"，输入证据必须保留）；
+ * 未派发的短路（too_large / breaker_open）不带。术语口径：派发 ≠ 服务端已收到。
  */
 export type ClassifyOutcome =
   | {
@@ -136,11 +152,15 @@ export type ClassifyOutcome =
        * 管道据此只收 `snip0..snip{n-1}` 的分数并按位置对齐（JEV-05）。
        */
       sent_snippets?: number;
+      /** 实发派发载荷（04-04 R1，见类型注释） */
+      dispatch?: JevDispatchPayload;
     }
   | {
       status: 'failed';
       kind: ClassifyFailKind;
       detail?: string;
+      /** 实发派发载荷（04-04 R1）：已派发但失败的请求保留输入证据 */
+      dispatch?: JevDispatchPayload;
     };
 
 /** 传输依赖：管道经 `FilterDeps.classify` 注入；实现持有超时/重试/熔断/并发闸（02-05 的 createJevClassifier）。 */
@@ -438,4 +458,46 @@ export type FilterStats = {
 export type FilterResult = {
   result: FilteredResponse;
   stats: FilterStats;
+  /**
+   * Jev 实发派发记录（04-04 R1）：每 keep 来源一条，捕获于客户端超限阶梯之后、
+   * 请求派发处，按表序（Brave 原序）排列——样本层如实落盘的唯一来源，样本写入时
+   * **绝不**重跑本地规则重建候选。含实发 state 正文，**绝不进 FilterStats /
+   * JSONL 日志**（LOG-03 红线：JSONL 无正文，本字段住在 FilterResult 上就是证明）。
+   * off / no_key 模式为空表。
+   */
+  jev_dispatch: JevDispatchRecord[];
+};
+
+/**
+ * Jev 实发派发记录（04-04 R1）：一次来源级请求的派发事实与输入证据。
+ * 状态维度互相独立——`dispatched`（请求已派发）、文本是否进入 state（实发 state
+ * 的片段数）、`snip_questions_sent`（是否提交片段评分题）、`answered`（是否取得
+ * 有效回答）分别表达，failed / skipped / too_large / breaker_open 不再混作同一种
+ * "未发送"。已派发但失败的请求保留实发 state 作输入证据。
+ */
+export type JevDispatchRecord = {
+  /** 探测约定 id：`s{braveIndex}`（与 per_source.src 同源） */
+  src: string;
+  url: string;
+  title: string;
+  /**
+   * 请求是否已派发（fetch 已调用；不保证服务端已收到或已处理——重试、断连、
+   * 非零退出都可能发生）。too_large / breaker_open / skipped 一律 false。
+   */
+  dispatched: boolean;
+  /** 实发 state（超限阶梯处理后的真实发送内容）；未派发为 null */
+  state: JevState | null;
+  /** 实发题目集合；未派发为 null */
+  questions: Record<string, JevQuestion> | null;
+  /** 是否提交了片段评分题（实发 questions 含 score 题即 snip{i}） */
+  snip_questions_sent: boolean;
+  /** 是否取得有效回答（answered——回答形状校验通过且 answers 可用） */
+  answered: boolean;
+  /** 未派发原因；已派发时省略。防御分支（classify 契约外 reject）也省略 */
+  not_dispatched_reason?: 'skipped' | 'too_large' | 'breaker_open';
+  /** 候选片段配对身份（`{merged_from}:{index}` 前缀可省、多段加 `.{part}`），
+   * 与实发 state 片段按位置前缀对齐（阶梯只砍尾，前缀保持） */
+  snippet_keys: string[];
+  /** 候选口径片段文本（与 snippet_keys 对齐；被阶梯砍掉的片段凭本表对齐原文） */
+  snippet_texts: string[];
 };
