@@ -31,6 +31,7 @@ import type {
   FilteredResponse,
   FilterResult,
   FilterStats,
+  LogSamplePointer,
   LogWriteMeta,
   LogWriter,
   SampleWriter,
@@ -167,8 +168,11 @@ export const execute = async (params: QueryParams) => {
     const message = requestError instanceof Error ? requestError.message : String(requestError);
     // 错误路径样本（04-02）：test 模式存请求与失败信息，final_return 显式标缺失——
     // 绝不当零来源成功。写入失败 fail-open（stderr 一行），不影响原样上抛。
+    // 04-04 R3：接收保存状态——错误 JSONL 与成功记录同样写样本指针（saved/failed
+    // 如实区分），同一 request_id 关联；保存失败不覆盖原始搜索错误语义。
+    let sample: LogSamplePointer | undefined;
     if (samples !== undefined && samplePath !== undefined) {
-      samples.saveError({
+      const outcome = samples.saveError({
         requestId,
         path: samplePath,
         originalParams: { ...params } as Record<string, unknown>,
@@ -178,6 +182,7 @@ export const execute = async (params: QueryParams) => {
         message,
         preFilter: null,
       });
+      sample = { path: samplePath.relative, status: outcome.status };
     }
     // Brave 报错（抛错 / 非 2xx 由 issueRequest 统一转 Error）：写一条带 error
     // 标记的日志再原样上抛，保持既有失败行为（stage 'brave'）。
@@ -187,6 +192,7 @@ export const execute = async (params: QueryParams) => {
       query: params.query,
       intent: params.intent,
       requestId,
+      sample,
     });
     throw requestError;
   }
@@ -207,12 +213,23 @@ export const execute = async (params: QueryParams) => {
       jevDepsFor(config)
     );
     filtered.stats.brave.latency_ms = braveLatencyMs;
-    // test 模式状态行末尾追加 sample 后缀（SC3）：路径已分配、文件即将先写后返；
-    // status_line 尚无内容（零删除）时不加后缀——样本照落。第二块与 JSON 块内
-    // output.status_line 都从 stats.output.status_line 出（D-08 同源不破）。
+    // test 模式状态行末尾追加 sample 后缀（SC3；04-04 R2 扩展）：零删除且原本无
+    // 状态行时，saved 口径生成仅含 `[filter] sample: <路径>` 的状态行——每次成功
+    // 保存的 test 搜索都有样本定位入口。乐观构造（与 04-02 同法：先按 saved 口径
+    // 设好、写入失败再剥回）——样本里存的 final_return.status_line 必须与实际返回
+    // 逐字一致，而实际返回取决于写入结果，只能先按成功口径构造。第二块与 JSON 块
+    // 内 output.status_line 都从 stats.output.status_line 出（D-08 同源不破）。
     const sampleSuffix = samplePath !== undefined ? ` sample: ${samplePath.absolute}` : '';
-    if (sampleSuffix !== '' && typeof filtered.stats.output.status_line === 'string') {
-      filtered.stats.output.status_line += sampleSuffix;
+    const baseLine = filtered.stats.output.status_line;
+    const hadLine = typeof baseLine === 'string';
+    const savedLine =
+      hadLine === true
+        ? `${baseLine}${sampleSuffix}`
+        : samplePath !== undefined
+          ? `[filter] sample: ${samplePath.absolute}`
+          : undefined;
+    if (savedLine !== undefined) {
+      filtered.stats.output.status_line = savedLine;
     }
     // 第一个 JSON 块在过滤结果之上附加统计摘要（stats.output，含 status_line）：
     // 状态行第二块与 JSON 块内 output.status_line 逐字同源（D-08/LOG-03 红线），
@@ -226,7 +243,7 @@ export const execute = async (params: QueryParams) => {
         raised
       );
     payload = buildPayload();
-    // 先写后返（SC3）：样本写成功才带着 sample 后缀返回；写失败剥后缀照常返回
+    // 先写后返（SC3）：样本写成功才带着样本路径返回；写失败剥回原状照常返回
     // 搜索内容、stderr 一行、JSONL 记 failed——绝不返回仿佛文件已存在的路径。
     if (samples !== undefined && samplePath !== undefined) {
       const outcome = samples.save({
@@ -238,14 +255,18 @@ export const execute = async (params: QueryParams) => {
         intent: params.intent,
         preFilter,
         stats: filtered.stats,
+        // 04-04 R1：实发派发记录原样交给样本层——样本 Jev 段只信它
+        jevDispatch: filtered.jev_dispatch,
         payload,
         statusLine: filtered.stats.output.status_line ?? null,
       });
       if (outcome.status === 'failed') {
-        // 剥后缀：第二块与 JSON 块同源剥除（D-08 不破），返回内容不含 sample 路径
-        const line = filtered.stats.output.status_line;
-        if (sampleSuffix !== '' && typeof line === 'string' && line.endsWith(sampleSuffix)) {
-          filtered.stats.output.status_line = line.slice(0, line.length - sampleSuffix.length);
+        // 剥回：有状态行剥掉 sample 后缀；原本无状态行（saved 口径生成的样本行）
+        // 删键——返回内容不含 sample 路径（04-04 R2：写入失败不得返回成功路径）
+        if (hadLine) {
+          filtered.stats.output.status_line = baseLine;
+        } else {
+          delete filtered.stats.output.status_line;
         }
         payload = buildPayload();
       }
@@ -262,9 +283,11 @@ export const execute = async (params: QueryParams) => {
     payload = z.treeifyError(error);
     const message = error instanceof Error ? error.message : String(error);
     // 错误路径样本（04-02）：schema 校验失败保留可用原始响应（safeParse 前快照）
-    // 与失败阶段；final_return 显式标缺失，不当零来源成功。
+    // 与失败阶段；final_return 显式标缺失，不当零来源成功。04-04 R3：接收保存
+    // 状态写进错误 JSONL——saved / failed 如实区分，同一 request_id 关联。
+    let sample: LogSamplePointer | undefined;
     if (samples !== undefined && samplePath !== undefined) {
-      samples.saveError({
+      const outcome = samples.saveError({
         requestId,
         path: samplePath,
         originalParams: { ...params } as Record<string, unknown>,
@@ -274,6 +297,7 @@ export const execute = async (params: QueryParams) => {
         message,
         preFilter,
       });
+      sample = { path: samplePath.relative, status: outcome.status };
     }
     writer.writeError({
       stage: 'schema',
@@ -281,6 +305,7 @@ export const execute = async (params: QueryParams) => {
       query: params.query,
       intent: params.intent,
       requestId,
+      sample,
     });
   }
 

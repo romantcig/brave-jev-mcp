@@ -563,11 +563,23 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       jev: {
         status: string;
         per_source: Array<{ src: string; status: string }>;
-        sent: Array<{ src: string; snippets: Array<{ snippet: string; sent: boolean }> }>;
+        sent: Array<{
+          src: string;
+          dispatched: boolean;
+          answered: boolean;
+          state: string | null;
+          snippets: Array<{
+            snippet: string;
+            in_state: boolean;
+            score_question_sent: boolean;
+            scored: boolean;
+          }>;
+        }>;
       };
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
-    assert.equal(sample.format_version, 1);
+    // 04-04 R1 返修：format_version 2（实发派发捕获口径 + 状态四维拆分）
+    assert.equal(sample.format_version, 2);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -585,18 +597,28 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.equal(sample.final_return.status_line, statusLine);
     assert.equal(payload.output.status_line, statusLine);
 
-    // jev 判断与实发映射：s0 answered、空源 s1 skipped；候选只有 s0
+    // jev 判断与实发映射（v2 捕获口径）：s0 answered、空源 s1 是 skipped 派发记录
     assert.equal(sample.jev.status, 'ok');
     const rows = new Map(sample.jev.per_source.map((row) => [row.src, row.status]));
     assert.equal(rows.get('s0'), 'answered');
     assert.equal(rows.get('s1'), 'skipped');
     assert.deepEqual(
-      sample.jev.sent.map((entry) => entry.src),
-      ['s0']
+      sample.jev.sent.map((entry) => [entry.src, entry.dispatched, entry.answered]),
+      [
+        ['s0', true, true],
+        ['s1', false, false],
+      ]
     );
+    // s1 的 skipped 记录不带 state（无内容可派发，不伪造输入证据）
+    assert.equal(sample.jev.sent[1]?.state, null);
     assert.deepEqual(
-      sample.jev.sent[0].snippets.map((snippet) => [snippet.snippet, snippet.sent]),
-      [['0', true]]
+      sample.jev.sent[0]?.snippets.map((snippet) => [
+        snippet.snippet,
+        snippet.in_state,
+        snippet.score_question_sent,
+        snippet.scored,
+      ]),
+      [['0', true, true, true]]
     );
 
     // JSONL 关联：request_id 三处同值（样本文件名 / 信封 / 记录），信封指针 saved
@@ -609,7 +631,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.deepEqual(record.sample, { path: relativePath, status: 'saved' });
   });
 
-  it('test and on tool returns are field-identical once the status-line sample suffix is stripped', async () => {
+  it('test and on tool returns are field-identical once the sample location metadata is stripped', async () => {
     const args = { query: 'drop case', intent: INTENT };
     const logDirTest = newLogDir();
     useFilterConfig({ mode: 'test', log_dir: logDirTest });
@@ -619,19 +641,24 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     useFilterConfig({ mode: 'on', log_dir: logDirOn });
     const onResult = await getClient().callTool({ name, arguments: args });
 
-    // SC1 验收口径：比较前剥除状态行 sample 后缀（两载体：第二块文本与 JSON 块内
-    // output.status_line），其余必须逐字段全等
+    // SC1 验收口径（04-04 R2 更新）：过滤内容与过滤统计一致，test 独有的样本定位
+    // 元信息允许存在——剥除 sample 后缀（两载体）之外，test 独有的纯样本状态行
+    // （`[filter] sample: <路径>`，零删除时生成）视为与"无状态行"等价
     const normalize = (result: unknown): { payload: unknown; statusLine: string } => {
       const content = (result as { content: { text: string }[] }).content;
       const payload = JSON.parse(content[0].text) as { output?: { status_line?: string } };
-      const cut = (line: string | undefined): string => {
-        const at = line?.indexOf(' sample: ') ?? -1;
-        return at === -1 || line === undefined ? (line ?? '') : line.slice(0, at);
+      const cut = (line: string | undefined): string | undefined => {
+        if (line === undefined) return undefined;
+        if (line.startsWith('[filter] sample: ')) return undefined; // test 独有的纯样本行
+        const at = line.indexOf(' sample: ');
+        return at === -1 ? line : line.slice(0, at);
       };
       if (payload.output?.status_line !== undefined) {
-        payload.output.status_line = cut(payload.output.status_line);
+        const stripped = cut(payload.output.status_line);
+        if (stripped === undefined) delete payload.output.status_line;
+        else payload.output.status_line = stripped;
       }
-      return { payload, statusLine: cut(content[1]?.text) };
+      return { payload, statusLine: cut(content[1]?.text) ?? '' };
     };
     assert.deepEqual(normalize(testResult), normalize(onResult));
 
@@ -640,6 +667,35 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       output: { status_line: string };
     };
     assert.ok(!onPayload.output.status_line.includes(' sample: '));
+  });
+
+  it('a zero-removal on search has no status line while its test twin gains the sample-only entry (review R2)', async () => {
+    const args = { query: 'brave browser', intent: INTENT }; // clean 夹具：零删除
+    const logDirTest = newLogDir();
+    useFilterConfig({ mode: 'test', log_dir: logDirTest });
+    const testResult = await getClient().callTool({ name, arguments: args });
+
+    const logDirOn = newLogDir();
+    useFilterConfig({ mode: 'on', log_dir: logDirOn });
+    const onResult = await getClient().callTool({ name, arguments: args });
+
+    // on 无状态行（单块返回）；test 多一条仅含样本定位的状态行——样本定位元信息
+    // 是 test 独有允许项，剥离后过滤内容必须逐字段一致
+    const onContent = (onResult as { content: { text: string }[] }).content;
+    assert.equal(onContent.length, 1);
+    const testContent = (testResult as { content: { text: string }[] }).content;
+    assert.equal(testContent.length, 2);
+    assert.match(testContent[1]?.text ?? '', /^\[filter\] sample: /);
+    const testPayload = JSON.parse(testContent[0].text) as { output: { status_line?: string } };
+    const onPayloadZero = JSON.parse(onContent[0].text) as { output: { status_line?: string } };
+    assert.match(testPayload.output.status_line ?? '', /^\[filter\] sample: /);
+    delete testPayload.output.status_line;
+    delete onPayloadZero.output.status_line;
+    assert.deepEqual(
+      testPayload,
+      onPayloadZero,
+      'filtered payload must be identical; only the sample pointer differs'
+    );
   });
 
   it('off mode never allocates or writes samples but still carries request_id in the JSONL envelope', async () => {
@@ -662,7 +718,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.equal('sample' in record, false, 'off records carry no sample pointer');
   });
 
-  it('coverage: zero-removal search still writes a sample with an all-equal final_return and no status line', async () => {
+  it('coverage: zero-removal search gains a sample-only status line entry (review R2)', async () => {
     const logDir = newLogDir();
     useFilterConfig({ mode: 'test', log_dir: logDir });
 
@@ -672,15 +728,49 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     });
     assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
     const content = result.content as { text: string }[];
-    // 零删除：无状态行第二块、无 sample 后缀——但样本照落（状态行无内容不加后缀）
-    assert.equal(content.length, 1);
-    assert.equal(samplePathOf(content), undefined);
+    // 04-04 R2：零删除且原本无状态行 → 生成仅含样本定位的状态行——每次成功保存
+    // 的 test 搜索都有样本入口（v1 恰好漏掉这批最可能暴露漏网内容的搜索）
+    assert.equal(content.length, 2);
+    assert.match(content[1]?.text ?? '', /^\[filter\] sample: /);
+    const sampleAbsPath = samplePathOf(content);
+    assert.ok(sampleAbsPath, 'the sample-only status line must carry the path');
+    assert.ok(existsSync(sampleAbsPath), `sample file must exist: ${sampleAbsPath}`);
 
     const { sample } = readSingleSample(logDir);
     const finalReturn = sample.final_return as { payload: unknown; status_line: string | null };
-    assert.equal(finalReturn.status_line, null);
+    // final_return 与实际返回逐字段一致：状态行就是这条纯样本定位行
+    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
+    assert.deepEqual(finalReturn.payload, payload);
+    assert.equal(finalReturn.status_line, content[1]?.text);
+    assert.equal(payload.output.status_line, content[1]?.text);
     // final_return 与实际返回逐字段一致（payload 无 output.status_line 可言——本就无状态行）
     assert.deepEqual(finalReturn.payload, JSON.parse(content[0].text));
+  });
+
+  it('coverage: sample write failure strips the path from both carriers and the JSONL records failed (review R2)', async () => {
+    // samples 子目录被一个文件占用：样本写入必然失败，JSONL 落账不受影响——
+    // 返回不得带成功样本路径（R2），错误可从 JSONL 的 sample.status 区分
+    const logDir = newLogDir();
+    writeFileSync(join(logDir, 'samples'), 'occupied by a file, not a directory', 'utf8');
+    useFilterConfig({ mode: 'test', log_dir: logDir });
+
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'drop case', intent: INTENT },
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const content = result.content as { text: string }[];
+    // 状态行第二块仍在（drop case 本有状态行），但绝无 sample 路径（两载体同源剥净）
+    assert.equal(content.length, 2);
+    assert.ok(!content[1]?.text.includes(' sample: '), JSON.stringify(content));
+    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
+    assert.ok(!payload.output.status_line?.includes(' sample: '));
+
+    await flushWrites();
+    const record = firstRecord(logDir);
+    const sample = record.sample as { path: string; status: string };
+    assert.equal(sample.status, 'failed');
+    assert.match(sample.path, /^samples\//, 'the relative pointer is still recorded');
   });
 
   it('coverage: all-removed search returns empty, still writes a sample, and maps no candidates', async () => {
@@ -708,17 +798,34 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.ok(existsSync(sampleAbsPath));
     const finalReturn = sample.final_return as { payload: unknown; status_line: string };
     assert.deepEqual(finalReturn.payload, payload);
-    // pre_filter 仍含全部来源；无候选可发 → sent 空表、逐源 skipped 占位
+    // pre_filter 仍含全部来源；无候选可发 → 无派发记录，逐源 skipped 占位
+    // （04-04 R1 v2：sent 按来源带 not_dispatched_reason，不再隐身也不冒充实发）
     const preFilter = sample.pre_filter as { grounding: { generic: unknown[] } };
     assert.equal(preFilter.grounding.generic.length, 2);
     const jev = sample.jev as {
       status: string;
       per_source: Array<{ src: string; status: string }>;
-      sent: unknown[];
+      sent: Array<{
+        src: string;
+        dispatched: boolean;
+        not_dispatched_reason?: string;
+        state: string | null;
+      }>;
     };
     assert.equal(jev.status, 'ok');
     assert.ok(jev.per_source.every((row) => row.status === 'skipped'));
-    assert.deepEqual(jev.sent, []);
+    assert.deepEqual(
+      jev.sent.map((entry) => [
+        entry.src,
+        entry.dispatched,
+        entry.not_dispatched_reason,
+        entry.state,
+      ]),
+      [
+        ['s0', false, 'skipped', null],
+        ['s1', false, 'skipped', null],
+      ]
+    );
   });
 
   it('coverage: concurrent requests land distinct sample files that never cross-write', async () => {
@@ -846,6 +953,107 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
   const getClient = useTestClient((url) => {
     if (url.pathname === '/res/v1/llm/context') {
       return { grounding: { generic: [], map: [] } };
+    }
+  });
+
+  it('coverage: a Brave failure with a failing sample write records status failed and keeps the search error (review R3)', async () => {
+    // Brave 500 + 样本写入失败（samples 被文件占用）叠加：错误 JSONL 必须写
+    // sample { path, status: 'failed' }，同时原始错误语义原样（isError、stage）
+    const logDir = mkdtempSync(join(tmpdir(), 'jev-sample-brave-err-fail-'));
+    writeFileSync(join(logDir, 'samples'), 'occupied by a file, not a directory', 'utf8');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('{"error":"boom"}', {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch;
+    try {
+      useFilterConfig({ mode: 'test', log_dir: logDir });
+      const client = await connectTestClient();
+      try {
+        const result = await client.callTool({
+          name,
+          arguments: { query: 'brave browser', intent: INTENT },
+        });
+        // 原始搜索错误语义不被样本保存失败覆盖
+        assert.equal(result.isError, true);
+
+        await new Promise((resolve) => setImmediate(resolve));
+        const jsonlFiles = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+        assert.equal(jsonlFiles.length, 1);
+        const record = JSON.parse(readFileSync(join(logDir, jsonlFiles[0]), 'utf8')) as Record<
+          string,
+          unknown
+        >;
+        assert.equal((record.error as { stage: string }).stage, 'brave');
+        // 同一 request_id 关联 + 保存失败如实入账
+        assert.match(String(record.request_id), /^[0-9a-f-]{36}$/);
+        const sample = record.sample as { path: string; status: string };
+        assert.equal(sample.status, 'failed');
+        assert.match(sample.path, /^samples\//);
+        // 样本确实不存在（写入失败，无半截文件冒充）
+        assert.equal(existsSync(join(logDir, sample.path)), false);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(logDir, { recursive: true, force: true });
+    }
+  });
+
+  it('coverage: a schema failure with a failing sample write records status failed and keeps the search error (review R3)', async () => {
+    // schema 失败 + 样本写入失败叠加：saved / failed 必须能从错误 JSONL 区分
+    const logDir = mkdtempSync(join(tmpdir(), 'jev-sample-schema-err-fail-'));
+    writeFileSync(join(logDir, 'samples'), 'occupied by a file, not a directory', 'utf8');
+    try {
+      useFilterConfig({ mode: 'test', log_dir: logDir });
+      const result = await getClient().callTool({
+        name,
+        arguments: { query: 'brave browser', intent: INTENT },
+      });
+      assert.equal(result.isError, true);
+
+      await new Promise((resolve) => setImmediate(resolve));
+      const jsonlFiles = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+      assert.equal(jsonlFiles.length, 1);
+      const record = JSON.parse(readFileSync(join(logDir, jsonlFiles[0]), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      assert.equal((record.error as { stage: string }).stage, 'schema');
+      const sample = record.sample as { path: string; status: string };
+      assert.equal(sample.status, 'failed');
+      assert.match(sample.path, /^samples\//);
+    } finally {
+      rmSync(logDir, { recursive: true, force: true });
+    }
+  });
+
+  it('coverage: a schema failure with a succeeding sample write records status saved (review R3)', async () => {
+    const logDir = mkdtempSync(join(tmpdir(), 'jev-sample-schema-err-ok-'));
+    try {
+      useFilterConfig({ mode: 'test', log_dir: logDir });
+      const result = await getClient().callTool({
+        name,
+        arguments: { query: 'brave browser', intent: INTENT },
+      });
+      assert.equal(result.isError, true);
+
+      await new Promise((resolve) => setImmediate(resolve));
+      const jsonlFiles = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
+      assert.equal(jsonlFiles.length, 1);
+      const record = JSON.parse(readFileSync(join(logDir, jsonlFiles[0]), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      const sample = record.sample as { path: string; status: string };
+      assert.equal(sample.status, 'saved');
+      // 指针对得上真实文件：samples/<日期>/<request_id>.json 且 request_id 同值
+      assert.ok(existsSync(join(logDir, sample.path)));
+      assert.ok(sample.path.endsWith(`${String(record.request_id)}.json`));
+    } finally {
+      rmSync(logDir, { recursive: true, force: true });
     }
   });
 

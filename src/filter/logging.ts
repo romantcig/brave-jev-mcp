@@ -64,13 +64,20 @@ export type LogWriter = {
    * `meta` 缺省时不产 `request_id` / `sample` 键（兼容旧调用形状）。
    */
   write(stats: FilterStats, meta?: LogWriteMeta): void;
-  /** 错误请求（无 stats 主体）：信封 + request + error 标记；requestId 缺省不产键。 */
+  /**
+   * 错误请求（无 stats 主体）：信封 + request + error 标记；requestId 缺省不产键。
+   * `sample`（04-04 R3）：错误路径样本（saveError）的保存指针——错误 JSONL 与成功
+   * 记录同样写样本相对路径与 saved/failed，审核 AI 才能区分"没录 / 录制失败 /
+   * 已录"；缺省不产键（旧记录与非 test 模式）。保存状态由适配行接收 saveError
+   * 返回值取得，绝不假设成功。
+   */
   writeError(entry: {
     stage: LogErrorStage;
     message: string;
     query: string;
     intent: string;
     requestId?: string;
+    sample?: LogSamplePointer;
   }): void;
 };
 
@@ -182,6 +189,7 @@ export function createLogWriter(config: FilterConfig): LogWriter {
       query: string;
       intent: string;
       requestId?: string;
+      sample?: LogSamplePointer;
     }): void {
       enqueue((now) => ({
         ts: localIsoWithOffset(now),
@@ -191,6 +199,8 @@ export function createLogWriter(config: FilterConfig): LogWriter {
         mode: config.mode,
         // request_id（04-02）：错误记录与样本同 request_id 关联；缺省不产键
         ...(entry.requestId !== undefined ? { request_id: entry.requestId } : {}),
+        // 样本指针（04-04 R3）：错误记录同样写保存状态——saved / failed 如实区分
+        ...(entry.sample !== undefined ? { sample: entry.sample } : {}),
         request: { query: entry.query, intent: entry.intent },
         error: { stage: entry.stage, message: truncateMessage(entry.message) },
       }));
