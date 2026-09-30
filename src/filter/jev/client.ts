@@ -294,6 +294,7 @@ const applyOversizeLadder = (
     const snippets = workState.source.snippets.slice(0, -1);
     workQuestions = { ...workQuestions };
     delete workQuestions[`snip${snippets.length}`];
+    delete workQuestions[`time_snip${snippets.length}`];
     workState = { ...workState, source: { ...workState.source, snippets } };
     ladder.value = 'cut_tail';
   }
@@ -309,7 +310,9 @@ const applyOversizeLadder = (
     LADDER_LIMIT_64K
   ) {
     workQuestions = Object.fromEntries(
-      Object.entries(workQuestions).filter(([name]) => !SNIP_KEY_PATTERN.test(name))
+      Object.entries(workQuestions).filter(
+        ([name]) => !SNIP_KEY_PATTERN.test(name) && !/^time_snip\d+$/.test(name)
+      )
     );
     ladder.value = 'source_only_questions';
   }

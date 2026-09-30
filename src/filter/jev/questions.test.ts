@@ -92,6 +92,21 @@ describe('pinned model and fallback constants', () => {
 });
 
 describe('buildQuestions', () => {
+  it('only asks temporal questions for snippets containing a standalone year', () => {
+    const questions = buildQuestions([
+      'Measured in January 2024: the response took 80ms.',
+      'The instance list is available as JSON.',
+      'Identifier 1202400 is not a year.',
+      'Measurements from 2026 remain below the limit.',
+    ]);
+    assert.deepEqual(
+      Object.keys(questions).filter((key) => key.startsWith('time_')),
+      ['time_snip0', 'time_snip3']
+    );
+    assert.equal(questions.time_snip0.type, 'noul');
+    assert.equal(Object.hasOwn(questions, 'time_source'), false);
+  });
+
   it('returns ten source-level questions plus one score question per snippet', () => {
     const questions = buildQuestions(3);
     assert.equal(Object.keys(questions).length, 13);

@@ -297,6 +297,7 @@ export type SnippetRemovalReason =
   | 'paywall_empty'
   | 'budget'
   | 'score'
+  | 'time_mismatch'
   | 'novelty';
 
 /** `grounding.generic[]` 的一条：一个来源与它的片段。 */

@@ -58,6 +58,17 @@ export const SNIPPET_LEVELS: readonly string[] = Object.freeze([
   'States specific information or analysis that directly serves `intent`',
 ]);
 
+/** 年份只用于决定是否提问，不能单凭年份删除正文。 */
+export const EXPLICIT_YEAR_PATTERN = /\b(?:19|20)\d{2}\b/;
+export const hasExplicitYear = (text: string): boolean => EXPLICIT_YEAR_PATTERN.test(text);
+
+/** 时间判断只处理带年份的片段，不触发整页删除；与常规片段评分分开记账。 */
+export const TEMPORAL_SNIPPET_DROP = 0.85;
+export const TEMPORAL_SNIPPET_INSTRUCTION =
+  'Use explicit event or measurement dates in the body first. A page date alone does not date all of its statements. If no event period can be established, do not assume a mismatch. Historical queries require historical evidence.';
+export const temporalQuestionText = (index: number): string =>
+  `${GLOBAL_INSTRUCTION} ${TEMPORAL_SNIPPET_INSTRUCTION} source.snippets[${index}] describes an event, reaction, or measurement from an earlier period than the one requested in intent.`;
+
 /**
  * 十一项阈值默认值（notes/test-mode-logging.md 权威初值，全部待测试模式
  * 修订）。判据方向：来源级五道丢弃门槛是概率 >= 门槛即丢（含等号）；片段
@@ -92,14 +103,22 @@ export const DEFAULT_JEV_TIMEOUT_MS = 15000;
 export const DEFAULT_JEV_CONCURRENCY = 12;
 
 /**
- * 题库版本标识（04-02 样本记录）：对总指令、十道来源级题与片段级三档 legend 的
- * 规范化 JSON（数组包裹、对象键固定序——模块求值顺序即序列化顺序）做 SHA-256，
+ * 题库版本标识（04-02 样本记录）：对总指令、来源题、片段评分 legend、年份选择条件
+ * 和时间题模板的规范化 JSON 做 SHA-256，
  * 取前 12 个十六进制字符。题库任何改动（题干、键名、legend、总指令）都会让本值
  * 变化——样本里记下它，配合 git 历史即可取得该版本完整题目；改题目必须重调 Jev
  * 不能沿用旧回答冒充新题结果，本值就是对账锚。
  */
 export const QUESTION_SET_ID = createHash('sha256')
-  .update(JSON.stringify([GLOBAL_INSTRUCTION, SOURCE_QUESTIONS, SNIPPET_LEVELS]))
+  .update(
+    JSON.stringify([
+      GLOBAL_INSTRUCTION,
+      SOURCE_QUESTIONS,
+      SNIPPET_LEVELS,
+      EXPLICIT_YEAR_PATTERN.source,
+      temporalQuestionText(0),
+    ])
+  )
   .digest('hex')
   .slice(0, 12);
 
@@ -121,12 +140,14 @@ export function buildState(
 }
 
 /**
- * 构造题目表：十道来源级 noul 题 + 每片段一道 score 题（`snip{i}`），每题
- * instructions 前缀总指令加空格，score 题带三档 criteria。
- * @param nSnips 幸存片段数（state.snippets.length）
+ * 构造题目表：十道来源题、每片段一道评分题；传正文时，带年份片段另有时间题。
+ * 每题 instructions 前缀总指令加空格，score 题带三档 criteria。
+ * @param input 幸存片段正文；历史回放可只传数量以重建旧题集合
  * @example Object.keys(buildQuestions(3)).length === 13
  */
-export function buildQuestions(nSnips: number): Record<string, JevQuestion> {
+export function buildQuestions(input: number | readonly string[]): Record<string, JevQuestion> {
+  // 数量形式供历史录制回放使用；生产传入正文，只为实际带年份的片段追加题目。
+  const nSnips = typeof input === 'number' ? input : input.length;
   const questions: Record<string, JevQuestion> = {};
   for (const [key, text] of Object.entries(SOURCE_QUESTIONS)) {
     questions[key] = { type: 'noul', instructions: `${GLOBAL_INSTRUCTION} ${text}` };
@@ -137,6 +158,9 @@ export function buildQuestions(nSnips: number): Record<string, JevQuestion> {
       instructions: `${GLOBAL_INSTRUCTION} How useful is \`source.snippets[${i}]\` for \`intent\`?`,
       criteria: SNIPPET_LEVELS,
     };
+    if (typeof input !== 'number' && hasExplicitYear(input[i])) {
+      questions[`time_snip${i}`] = { type: 'noul', instructions: temporalQuestionText(i) };
+    }
   }
   return questions;
 }

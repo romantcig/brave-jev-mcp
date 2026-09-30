@@ -29,6 +29,8 @@ import {
   DEFAULT_JEV_MODEL,
   DEFAULT_THRESHOLDS,
   GLOBAL_INSTRUCTION,
+  EXPLICIT_YEAR_PATTERN,
+  temporalQuestionText,
   QUESTION_SET_ID,
   SNIPPET_LEVELS,
   SOURCE_QUESTIONS,
@@ -221,10 +223,18 @@ const answeredText = (body: CapturedRequest): string => {
 describe('QUESTION_SET_ID', () => {
   it('is 12 lowercase hex chars derived from the normalized question bank (recipe pinned)', () => {
     assert.match(QUESTION_SET_ID, /^[0-9a-f]{12}$/);
-    // 食谱镜像：数组包裹 [总指令, 题表, legend] 的规范化 JSON SHA-256 前 12 位——
+    // 食谱镜像：常规题库、年份选择条件与时间题模板的规范化 JSON SHA-256 前 12 位——
     // 意外改配方（键序、包裹方式）会在这里红
     const expected = createHash('sha256')
-      .update(JSON.stringify([GLOBAL_INSTRUCTION, SOURCE_QUESTIONS, SNIPPET_LEVELS]))
+      .update(
+        JSON.stringify([
+          GLOBAL_INSTRUCTION,
+          SOURCE_QUESTIONS,
+          SNIPPET_LEVELS,
+          EXPLICIT_YEAR_PATTERN.source,
+          temporalQuestionText(0),
+        ])
+      )
       .digest('hex')
       .slice(0, 12);
     assert.equal(QUESTION_SET_ID, expected);

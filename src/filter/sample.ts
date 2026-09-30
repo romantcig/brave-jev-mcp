@@ -146,6 +146,8 @@ export type SampleJevSentSource = {
   not_dispatched_reason?: 'skipped' | 'too_large' | 'breaker_open';
   /** 是否提交了片段评分题（实发 questions 含 score 题即 snip{i}） */
   snip_questions_sent: boolean;
+  /** 实际发出的时间题键；从客户端派发捕获取得，旧记录或没有该类题时省略。 */
+  temporal_questions_sent?: string[];
   /**
    * 是否收到可解析响应（HTTP 200 且 answers 形状校验通过）——不等于"来源裁决
    * 有效"，后者见 source_verdict_valid（二次复审 R1 余项拆分）
@@ -368,6 +370,9 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
           ? 0
           : Object.values(record.questions).filter((question) => question.type === 'score').length;
       const row = rows.get(record.src);
+      const temporalKeys = Object.keys(record.questions ?? {}).filter((key) =>
+        /^time_snip\d+$/.test(key)
+      );
       return {
         src: record.src,
         url: record.url,
@@ -378,6 +383,7 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
           ? { not_dispatched_reason: record.not_dispatched_reason }
           : {}),
         snip_questions_sent: record.snip_questions_sent,
+        ...(temporalKeys.length > 0 ? { temporal_questions_sent: temporalKeys } : {}),
         answered: record.answered,
         source_verdict_valid: record.source_verdict_valid,
         snippets: record.snippet_keys.map((key, position) => ({

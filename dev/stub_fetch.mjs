@@ -1,3 +1,4 @@
+import { hasExplicitYear, temporalQuestionText } from '../dist/filter/jev/questions.js';
 /**
  * stdio 冒烟预加载桩（D-17）：`node --import <本文件> dist/index.js --transport stdio`
  * 启动真服务器进程，在应用求值前替换 globalThis.fetch——Brave 与 Jev 两个网络出口
@@ -144,7 +145,7 @@ globalThis.fetch = async (input, init) => {
   const questions = body?.questions ?? {};
   const questionKeys = Object.keys(questions);
   const snipKeys = questionKeys.filter((key) => /^snip\d+$/.test(key));
-  const sourceKeys = questionKeys.filter((key) => !/^snip\d+$/.test(key));
+  const sourceKeys = questionKeys.filter((key) => !/^(?:snip|time_snip)\d+$/.test(key));
   const expectedSourceKeys = Object.keys(recordedQuestions);
   if (JSON.stringify([...sourceKeys].sort()) !== JSON.stringify([...expectedSourceKeys].sort())) {
     return fail(
@@ -196,7 +197,17 @@ globalThis.fetch = async (input, init) => {
     return fail(`state query/intent drifted from the expected fixture for ${id}`);
   }
 
+  // 新时间题没有旧录制：冒烟使用明确的合成零值，真实效果由 live 实验验证。
+  const response = structuredClone(entry.response);
+  const expectedTimeKeys = snippets.flatMap((text, i) => hasExplicitYear(text) ? [`time_snip${i}`] : []);
+  const actualTimeKeys = questionKeys.filter(key => /^time_snip\d+$/.test(key));
+  if (JSON.stringify(expectedTimeKeys.sort()) !== JSON.stringify(actualTimeKeys.sort())) return fail('temporal question selection mismatch');
+  for (const key of expectedTimeKeys) {
+    const i = Number(key.slice('time_snip'.length));
+    if (questions[key]?.type !== 'noul' || questions[key]?.instructions !== temporalQuestionText(i)) return fail('temporal question template mismatch');
+    response.answers[key] = {type: 'noul', noul: 0};
+  }
   jevReplays += 1;
   console.error(`[smoke-replay] jev ${id} (#${jevReplays}) -> 200`);
-  return Response.json(entry.response);
+  return Response.json(response);
 };

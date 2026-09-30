@@ -814,10 +814,14 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `log: per_source ${id} must carry the ten source-level answers`
         );
         assert.deepEqual(
-          Object.keys(answers).sort(),
+          Object.keys(answers).filter(key => !/^time_snip\d+$/.test(key)).sort(),
           SOURCE_QUESTION_KEYS,
           `log: per_source ${id} answers must cover exactly the recorded source-level questions`
         );
+        // 仅离线冒烟的新增时间题使用合成零值；旧十题仍逐键对账。
+        for (const [key, value] of Object.entries(answers)) {
+          if (/^time_snip\d+$/.test(key)) assert.equal(value, 0);
+        }
         // snippet_scores 齐全：数组、长度等于该源候选数真值（录制 snip 键数）、全有限数
         assert.ok(
           Array.isArray(row.snippet_scores),

@@ -1083,7 +1083,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
   it('cuts tail snippets and their snip questions when the 32k limit is exceeded (cut_tail)', async () => {
     // 尾片段 34000 个词 ≈ 34000 tokens：(estState + max estQ) × 1.15 远超 32000，
     // 砍掉尾部大片段后余下 4 个小片段满足限额
-    const big = 'word '.repeat(34000);
+    const big = 'Measured in 2024. ' + 'word '.repeat(34000);
     const bigState = buildState(
       's0',
       'https://a.example/',
@@ -1105,7 +1105,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify({
         state: bigState,
-        questions: buildQuestions(5),
+        questions: buildQuestions(bigState.source.snippets),
       });
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -1117,6 +1117,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
         'the oversized tail snippet must be cut'
       );
       assert.equal(Object.hasOwn(capturedBody.questions, 'snip4'), false);
+      assert.equal(Object.hasOwn(capturedBody.questions, 'time_snip4'), false);
       assert.ok(Object.hasOwn(capturedBody.questions, 'snip3'));
       assert.ok(Object.hasOwn(capturedBody.questions, 'is_off_topic'));
       assert.deepEqual(bigState.source.snippets.length, 5, 'input state must not be mutated');
@@ -1130,7 +1131,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
   it('drops all snippet questions when the 64k limit is exceeded (source_only_questions)', async () => {
     // 500 个小片段：单题很小（32k 不超），片段题总和 × 1.15 超 64000 → 去掉全部
     // snip 题（来源级十题保留、state 片段保留）
-    const snippets = Array.from({ length: 500 }, (_, i) => `small snippet ${i}.`);
+    const snippets = Array.from({ length: 500 }, (_, i) => `small snippet ${i}, measured in 2024.`);
     const wideState = buildState('s0', 'https://a.example/', 'Title', snippets, 'q', 'i');
     let capturedBody:
       | { state: { source: { snippets: string[] } }; questions: Record<string, unknown> }
@@ -1145,7 +1146,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify({
         state: wideState,
-        questions: buildQuestions(500),
+        questions: buildQuestions(snippets),
       });
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));

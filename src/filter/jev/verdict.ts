@@ -15,7 +15,7 @@
  */
 
 import { CJK_SEGMENT, SCRIPT_PATTERN } from '../tokenize.js';
-import { SNIPPET_LEVELS } from './questions.js';
+import { hasExplicitYear, SNIPPET_LEVELS, TEMPORAL_SNIPPET_DROP } from './questions.js';
 import type {
   FilterStats,
   JevThresholds,
@@ -164,7 +164,7 @@ export function applySourceVerdicts(
 }
 
 /**
- * 步 7 前半：片段 score 删除。state 构建时的幸存片段序（runJevStage 按 kept
+ * 步 7 前半：带年份片段的时间判断与常规 score 删除。state 构建时的幸存片段序（runJevStage 按 kept
  * 过滤后的顺序）与 per_source.snippet_scores 按位置对齐，score < snippetMin
  * （严格小于，连续值比较——夹具实证 1.62/1.77，不是整数档位，Pitfall 3）的
  * 片段置 kept = false、reason = 'score'；等于保留。
@@ -203,6 +203,16 @@ export function applySnippetScores(
       if (score < thresholds.snippetMin) {
         survivors[i].kept = false;
         survivors[i].reason = 'score';
+        continue;
+      }
+      const timeMismatch = usableProbability(row.answers?.[`time_snip${i}`]);
+      if (
+        timeMismatch !== undefined &&
+        timeMismatch >= TEMPORAL_SNIPPET_DROP &&
+        hasExplicitYear(survivors[i].text)
+      ) {
+        survivors[i].kept = false;
+        survivors[i].reason = 'time_mismatch';
       }
     }
   }
