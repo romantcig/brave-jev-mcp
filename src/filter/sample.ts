@@ -38,7 +38,7 @@
  * 重建 payload，不触碰已序列化引用）。
  *
  * 写入（实施计划第三节"文件组织与读取"）：UTF-8、两空格缩进、文件末尾换行、
- * 字段顺序稳定、正文原样；目标 `log_dir/samples/YYYY-MM-DD/<request_id>.json`
+ * 字段顺序稳定、正文原样；目标 `log_dir/samples/YYYY-MM-DD/<HHmmss>-<请求摘要>.json`
  * （request_id 为 UUID，多进程唯一）；**临时文件 + 同目录 rename** 的单次原子
  * 语义——绝不留下可误读为完整成功记录的半截 JSON。写入失败（目录建不出、写
  * 中途失败、rename 失败）返回 status 'failed'，stderr 恰一行可定位告警（含目标
@@ -50,6 +50,7 @@
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { FILTER_RULES_VERSION } from './version.js';
 import { QUESTION_SET_ID } from './jev/questions.js';
 import {
@@ -74,7 +75,7 @@ import type {
 // 记录类型（字段顺序即序列化顺序，保持稳定方便阅读与比较）
 // ---------------------------------------------------------------------------
 
-/** 成功请求样本的 final_return：实际返回的两块内容（payload 的 output.status_line 带 sample 后缀）。 */
+/** 成功请求样本的 final_return：实际返回的两块内容（状态行只在第二块，含 sample 后缀）。 */
 export type SampleFinalReturn = {
   /** 实际返回的第一块 JSON（过滤结果 + output 摘要 + parameter_adjustments） */
   payload: unknown;
@@ -247,7 +248,7 @@ export type SampleRecord = {
 export type AllocatedSamplePath = {
   /** 状态行 ` sample: ` 后缀用的绝对路径（可直接访问） */
   absolute: string;
-  /** JSONL 信封 sample.path 用的相对 log_dir 路径：`samples/<日期>/<request_id>.json` */
+  /** JSONL 信封 sample.path 用的相对 log_dir 路径：`samples/<日期>/<HHmmss>-<请求摘要>.json` */
   relative: string;
   /** 分配时刻的 Date（writer 内部锚点，调用方原样传回 save 即可） */
   capturedAt: Date;
@@ -274,7 +275,7 @@ export type SampleInput = {
    * 规则重建候选（off / no_key 为空表）
    */
   jevDispatch: JevDispatchRecord[];
-  /** 实际返回第一块 JSON（含 output.status_line 带 sample 后缀） */
+  /** 实际返回第一块 JSON（含输出规模，不重复携带状态行） */
   payload: unknown;
   /** 实际返回第二块状态行文本（含 sample 后缀）；无状态行为 null */
   statusLine: string | null;
@@ -542,7 +543,13 @@ export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHoo
   return {
     allocatePath(requestId: string): AllocatedSamplePath {
       const capturedAt = new Date();
-      const relative = `samples/${localDateStamp(capturedAt)}/${requestId}.json`;
+      // 文件名保留本地时分秒与请求摘要；完整 request_id 仍在样本和日志中关联。
+      // 摘要取 60 位，不直接截 UUID 前缀；同秒并发请求也有独立后缀。
+      const time = [capturedAt.getHours(), capturedAt.getMinutes(), capturedAt.getSeconds()]
+        .map((part) => String(part).padStart(2, '0'))
+        .join('');
+      const suffix = createHash('sha256').update(requestId).digest('base64url').slice(0, 10);
+      const relative = `samples/${localDateStamp(capturedAt)}/${time}-${suffix}.json`;
       return { absolute: resolve(config.logDir, relative), relative, capturedAt };
     },
     save(input: SampleInput): SampleWriteStatus {

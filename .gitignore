@@ -18,3 +18,8 @@ CLAUDE.local.md
 notes/
 PLAN.md
 .claude/
+AGENTS.md
+AGENT_LEARNINGS.md
+.zcode/
+.zcodeignore
+dev/filter-*.ts

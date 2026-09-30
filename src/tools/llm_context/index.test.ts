@@ -308,9 +308,15 @@ describe(`${name} (status line and JSONL log)`, () => {
     assert.ok(statusLine.startsWith('[filter] '), statusLine);
     assert.ok(!statusLine.includes('\n'), 'status line must be a single line');
 
-    // D-08 同源红线：状态行文本与 JSON 块内 stats.output.status_line 逐字相同
+    // 状态行只返回一次，并与日志逐字同源
     const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
-    assert.equal(payload.output.status_line, statusLine);
+    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
+    await flushWrites();
+    const logFile = readdirSync(logDir).find((file) => file.endsWith('.jsonl'))!;
+    const loggedOutput = JSON.parse(readFileSync(join(logDir, logFile), 'utf8').trim()).output as {
+      status_line: string;
+    };
+    assert.equal(loggedOutput.status_line, statusLine);
   });
 
   it('records freshness only when the request carries it and omits both optional request keys otherwise', async () => {
@@ -530,7 +536,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
   /** 从返回第二块剥出 sample 绝对路径（无后缀返回 undefined）。 */
   const samplePathOf = (content: { text: string }[]): string | undefined => {
     if (content.length < 2) return undefined;
-    const marker = ' sample: ';
+    const marker =
+      ' sample for filter debugging - original results, filtered results, Jev decisions: ';
     const at = content[1].text.indexOf(marker);
     return at === -1 ? undefined : content[1].text.slice(at + marker.length);
   };
@@ -547,12 +554,14 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const content = result.content as { text: string }[];
     assert.equal(content.length, 2);
 
-    // 状态行末尾 sample: <绝对路径>，指向真实存在的文件（SC3）
+    // 状态行末尾 sample for filter debugging - original results, filtered results, Jev decisions: <绝对路径>，指向真实存在的文件（SC3）
     const statusLine = content[1].text;
-    const marker = ' sample: ';
+    const marker =
+      ' sample for filter debugging - original results, filtered results, Jev decisions: ';
     const markerAt = statusLine.indexOf(marker);
     assert.ok(markerAt !== -1, `status line must carry the sample path: ${statusLine}`);
     const sampleAbsPath = statusLine.slice(markerAt + marker.length);
+    assert.ok(!sampleAbsPath.includes('\\'), '展示路径不能包含反斜杠');
     assert.ok(existsSync(sampleAbsPath), `sample file must exist: ${sampleAbsPath}`);
 
     type SampleShape = {
@@ -591,11 +600,14 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       ['https://good.example/post', 'https://empty.example/']
     );
 
-    // final_return 与实际返回逐字段一致（payload 含同一条 sample 路径的状态行）
+    // final_return 与实际返回逐字段一致，状态行只存在于第二块
     const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
     assert.deepEqual(sample.final_return.payload, payload);
     assert.equal(sample.final_return.status_line, statusLine);
-    assert.equal(payload.output.status_line, statusLine);
+    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
+    await flushWrites();
+    const loggedOutput = firstRecord(logDir).output as { status_line: string };
+    assert.equal(loggedOutput.status_line, statusLine);
 
     // jev 判断与实发映射（v2 捕获口径）：s0 answered、空源 s1 是 skipped 派发记录
     assert.equal(sample.jev.status, 'ok');
@@ -621,13 +633,13 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       [['0', true, true, true]]
     );
 
-    // JSONL 关联：request_id 三处同值（样本文件名 / 信封 / 记录），信封指针 saved
+    // JSONL 关联：样本与日志 request_id 同值，信封指针指向短文件名
     await flushWrites();
     const record = firstRecord(logDir);
     assert.equal(record.request_id, sample.request_id);
-    assert.ok(sampleAbsPath.endsWith(`${sample.request_id}.json`));
+    assert.match(basename(sampleAbsPath), /^[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
     // 信封记相对 log_dir 路径：samples/<日期>/<request_id>.json（正斜杠口径）
-    const relativePath = `samples/${basename(dirname(sampleAbsPath))}/${sample.request_id}.json`;
+    const relativePath = `samples/${basename(dirname(sampleAbsPath))}/${basename(sampleAbsPath)}`;
     assert.deepEqual(record.sample, { path: relativePath, status: 'saved' });
   });
 
@@ -643,14 +655,21 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
 
     // SC1 验收口径（04-04 R2 更新）：过滤内容与过滤统计一致，test 独有的样本定位
     // 元信息允许存在——剥除 sample 后缀（两载体）之外，test 独有的纯样本状态行
-    // （`[filter] sample: <路径>`，零删除时生成）视为与"无状态行"等价
+    // （`[filter] sample for filter debugging - original results, filtered results, Jev decisions: <路径>`，零删除时生成）视为与"无状态行"等价
     const normalize = (result: unknown): { payload: unknown; statusLine: string } => {
       const content = (result as { content: { text: string }[] }).content;
       const payload = JSON.parse(content[0].text) as { output?: { status_line?: string } };
       const cut = (line: string | undefined): string | undefined => {
         if (line === undefined) return undefined;
-        if (line.startsWith('[filter] sample: ')) return undefined; // test 独有的纯样本行
-        const at = line.indexOf(' sample: ');
+        if (
+          line.startsWith(
+            '[filter] sample for filter debugging - original results, filtered results, Jev decisions: '
+          )
+        )
+          return undefined; // test 独有的纯样本行
+        const at = line.indexOf(
+          ' sample for filter debugging - original results, filtered results, Jev decisions: '
+        );
         return at === -1 ? line : line.slice(0, at);
       };
       if (payload.output?.status_line !== undefined) {
@@ -666,7 +685,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const onPayload = JSON.parse((onResult as { content: { text: string }[] }).content[0].text) as {
       output: { status_line: string };
     };
-    assert.ok(!onPayload.output.status_line.includes(' sample: '));
+    assert.equal(Object.hasOwn(onPayload.output, 'status_line'), false);
   });
 
   it('a zero-removal on search has no status line while its test twin gains the sample-only entry (review R2)', async () => {
@@ -685,10 +704,13 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.equal(onContent.length, 1);
     const testContent = (testResult as { content: { text: string }[] }).content;
     assert.equal(testContent.length, 2);
-    assert.match(testContent[1]?.text ?? '', /^\[filter\] sample: /);
+    assert.match(
+      testContent[1]?.text ?? '',
+      /^\[filter\] sample for filter debugging - original results, filtered results, Jev decisions: /
+    );
     const testPayload = JSON.parse(testContent[0].text) as { output: { status_line?: string } };
     const onPayloadZero = JSON.parse(onContent[0].text) as { output: { status_line?: string } };
-    assert.match(testPayload.output.status_line ?? '', /^\[filter\] sample: /);
+    assert.equal(Object.hasOwn(testPayload.output, 'status_line'), false);
     delete testPayload.output.status_line;
     delete onPayloadZero.output.status_line;
     assert.deepEqual(
@@ -731,7 +753,10 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     // 04-04 R2：零删除且原本无状态行 → 生成仅含样本定位的状态行——每次成功保存
     // 的 test 搜索都有样本入口（v1 恰好漏掉这批最可能暴露漏网内容的搜索）
     assert.equal(content.length, 2);
-    assert.match(content[1]?.text ?? '', /^\[filter\] sample: /);
+    assert.match(
+      content[1]?.text ?? '',
+      /^\[filter\] sample for filter debugging - original results, filtered results, Jev decisions: /
+    );
     const sampleAbsPath = samplePathOf(content);
     assert.ok(sampleAbsPath, 'the sample-only status line must carry the path');
     assert.ok(existsSync(sampleAbsPath), `sample file must exist: ${sampleAbsPath}`);
@@ -742,7 +767,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
     assert.deepEqual(finalReturn.payload, payload);
     assert.equal(finalReturn.status_line, content[1]?.text);
-    assert.equal(payload.output.status_line, content[1]?.text);
+    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
     // final_return 与实际返回逐字段一致（payload 无 output.status_line 可言——本就无状态行）
     assert.deepEqual(finalReturn.payload, JSON.parse(content[0].text));
   });
@@ -762,9 +787,18 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const content = result.content as { text: string }[];
     // 状态行第二块仍在（drop case 本有状态行），但绝无 sample 路径（两载体同源剥净）
     assert.equal(content.length, 2);
-    assert.ok(!content[1]?.text.includes(' sample: '), JSON.stringify(content));
+    assert.ok(
+      !content[1]?.text.includes(
+        ' sample for filter debugging - original results, filtered results, Jev decisions: '
+      ),
+      JSON.stringify(content)
+    );
     const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
-    assert.ok(!payload.output.status_line?.includes(' sample: '));
+    assert.ok(
+      !payload.output.status_line?.includes(
+        ' sample for filter debugging - original results, filtered results, Jev decisions: '
+      )
+    );
 
     await flushWrites();
     const record = firstRecord(logDir);
@@ -791,7 +825,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     };
     assert.deepEqual(payload.grounding.generic, []);
     assert.deepEqual(payload.sources, {});
-    assert.match(payload.output.status_line, /dropped 2 of 2 sources: 2 empty/);
+    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
+    assert.match(content[1].text, /dropped 2 of 2 sources: 2 empty/);
     assert.ok(samplePathOf(content) !== undefined);
 
     const { sample, sampleAbsPath } = readSingleSample(logDir);
@@ -938,8 +973,8 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
         const record = JSON.parse(lines[0]) as Record<string, unknown>;
         assert.equal(record.request_id, sample.request_id);
         assert.equal((record.error as { stage: string }).stage, 'brave');
-        // 样本文件名 = request_id.json（多进程唯一性的落点）
-        assert.equal(fileName, `${sample.request_id}.json`);
+        // 文件名缩短；完整 request_id 仍在样本与日志中关联
+        assert.match(fileName, /^[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
       } finally {
         await client.close();
       }
@@ -1051,7 +1086,8 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
       assert.equal(sample.status, 'saved');
       // 指针对得上真实文件：samples/<日期>/<request_id>.json 且 request_id 同值
       assert.ok(existsSync(join(logDir, sample.path)));
-      assert.ok(sample.path.endsWith(`${String(record.request_id)}.json`));
+      const saved = JSON.parse(readFileSync(join(logDir, sample.path), 'utf8'));
+      assert.equal(saved.request_id, record.request_id);
     } finally {
       rmSync(logDir, { recursive: true, force: true });
     }

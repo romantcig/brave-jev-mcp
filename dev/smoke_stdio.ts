@@ -639,7 +639,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     // --- 4. 状态行（D-02 形状 + D-08 同源 + D-06；04-02 sample 后缀两态）---
     // default 夹具 off 无来源丢弃（12→12）只有片段删除（76→59）：dropped 段按
     // D-04 条件可有可无，形状断言两态都接受；片段总数段必然在；test 模式末尾可
-    // 多出 ` sample: <绝对路径>` 后缀（CONTEXT：样本定位元信息），off/on 绝不出现
+    // 多出 ` sample for filter debugging - original results, filtered results, Jev decisions: <绝对路径>` 后缀（CONTEXT：样本定位元信息），off/on 绝不出现
     const statusLine = content[1]?.text;
     assert.ok(
       statusLine.startsWith('[filter] '),
@@ -648,17 +648,21 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     assert.ok(!statusLine.includes('\n'), 'status line: must be a single line');
     assert.match(
       statusLine,
-      /^\[filter\] (dropped \d+ of \d+ sources: .+; )?\d+ snippets? removed(; .+)?( sample: .+)?$/,
+      /^\[filter\] (dropped \d+ of \d+ sources: .+; )?\d+ snippets? removed(; .+)?( sample for filter debugging - original results, filtered results, Jev decisions: .+)?$/,
       `status line: D-02 shape mismatch — ${statusLine}`
     );
     if (runMode === 'test') {
       assert.ok(
-        statusLine.includes(' sample: '),
+        statusLine.includes(
+          ' sample for filter debugging - original results, filtered results, Jev decisions: '
+        ),
         `status line: test mode must carry the sample suffix — ${statusLine}`
       );
     } else {
       assert.ok(
-        !statusLine.includes(' sample: '),
+        !statusLine.includes(
+          ' sample for filter debugging - original results, filtered results, Jev decisions: '
+        ),
         `status line: ${runMode} must not carry a sample suffix — ${statusLine}`
       );
     }
@@ -667,9 +671,9 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       `status line: the unchecked segment must not appear in ${runMode} (default fixture is fully answered) — ${statusLine}`
     );
     assert.equal(
-      payload.output?.status_line,
-      statusLine,
-      'status line: must be verbatim-identical to payload.output.status_line (D-08)'
+      Object.hasOwn(payload.output ?? {}, 'status_line'),
+      false,
+      '状态行只在第二个文本块返回，正文不重复携带'
     );
 
     // --- 5. 临时 log_dir（R-11 #6：固定夹具一次成功调用恰一条成功记录）---
@@ -842,56 +846,64 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
 
       // --- 7.5 样本断言（04-02 SC3 全链，test 模式独有）---
       if (runMode === 'test') {
-        const marker = ' sample: ';
+        const marker =
+          ' sample for filter debugging - original results, filtered results, Jev decisions: ';
         const markerAt = statusLine.indexOf(marker);
-        assert.ok(markerAt !== -1, `sample: test status line must carry the path — ${statusLine}`);
+        assert.ok(
+          markerAt !== -1,
+          `sample for filter debugging - original results, filtered results, Jev decisions: test status line must carry the path — ${statusLine}`
+        );
         const sampleAbsPath = statusLine.slice(markerAt + marker.length);
         // 先写后返（SC3）：callTool 返回时样本文件必须已经真实存在——路径不存在
         // 或文件缺失都说明写入顺序坏了
         assert.ok(
           existsSync(sampleAbsPath),
-          `sample: the status-line path must exist at return time — ${sampleAbsPath}`
+          `sample for filter debugging - original results, filtered results, Jev decisions: the status-line path must exist at return time — ${sampleAbsPath}`
         );
         const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
         // 04-04 R1 返修：format_version 3（实发派发捕获口径）；v1 是阶梯前重建口径
-        assert.equal(sample.format_version, 3, 'sample: format_version must be 3');
+        assert.equal(
+          sample.format_version,
+          3,
+          'sample for filter debugging - original results, filtered results, Jev decisions: format_version must be 3'
+        );
         assert.equal(
           sample.request_id,
           record.request_id,
-          'sample: request_id must match the JSONL record (three-way correlation)'
+          'sample for filter debugging - original results, filtered results, Jev decisions: request_id must match the JSONL record (three-way correlation)'
         );
         assert.equal(
           record.sample?.status,
           'saved',
-          'sample: the JSONL envelope must record the sample as saved'
+          'sample for filter debugging - original results, filtered results, Jev decisions: the JSONL envelope must record the sample as saved'
         );
         assert.ok(
           sample.final_return?.payload !== undefined,
-          'sample: final_return payload must be present'
+          'sample for filter debugging - original results, filtered results, Jev decisions: final_return payload must be present'
         );
         // final_return 与实际返回逐字段一致（含同一条 sample 路径的状态行）
         assert.deepEqual(
           sample.final_return?.payload,
           payload,
-          'sample: final_return must be field-identical to the actual return'
+          'sample for filter debugging - original results, filtered results, Jev decisions: final_return must be field-identical to the actual return'
         );
         assert.equal(
           sample.final_return?.status_line,
           statusLine,
-          'sample: status_line must equal the second text block'
+          'sample for filter debugging - original results, filtered results, Jev decisions: status_line must equal the second text block'
         );
         // pre_filter 携带完整原始响应（schema 校验前捕获，未被管道修改）
         assert.equal(
           sample.pre_filter?.grounding?.generic?.length,
           nRecordedSources,
-          'sample: pre_filter must carry the full pre-filter response'
+          'sample for filter debugging - original results, filtered results, Jev decisions: pre_filter must carry the full pre-filter response'
         );
         // 实发映射（04-04 R1 v2 捕获口径）：keep 来源恰 12（本夹具全部来源
         // answered），片段三维全 true（无阶梯降级、分数收齐、全部进入实发 state）
         assert.equal(
           sample.jev?.sent?.length,
           nRecordedSources,
-          'sample: sent must cover every candidate source'
+          'sample for filter debugging - original results, filtered results, Jev decisions: sent must cover every candidate source'
         );
         for (const entry of sample.jev?.sent ?? []) {
           assert.ok(
@@ -901,7 +913,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
                 snippet.score_question_sent === true &&
                 snippet.scored === true
             ),
-            `sample: ${entry.src ?? '(missing src)'} snippets must all be dispatched and scored in the fully-answered fixture`
+            `sample for filter debugging - original results, filtered results, Jev decisions: ${entry.src ?? '(missing src)'} snippets must all be dispatched and scored in the fully-answered fixture`
           );
         }
       }
@@ -1243,14 +1255,18 @@ try {
           const parsed = JSON.parse(jsonBlock.text) as { output?: { status_line?: string } };
           const line = parsed.output?.status_line;
           if (typeof line === 'string') {
-            const at = line.indexOf(' sample: ');
+            const at = line.indexOf(
+              ' sample for filter debugging - original results, filtered results, Jev decisions: '
+            );
             if (at !== -1) parsed.output.status_line = line.slice(0, at);
           }
           jsonBlock.text = JSON.stringify(parsed);
         }
         const statusBlock = content[1];
         if (statusBlock?.type === 'text') {
-          const at = statusBlock.text.indexOf(' sample: ');
+          const at = statusBlock.text.indexOf(
+            ' sample for filter debugging - original results, filtered results, Jev decisions: '
+          );
           if (at !== -1) statusBlock.text = statusBlock.text.slice(0, at);
         }
         return { content };

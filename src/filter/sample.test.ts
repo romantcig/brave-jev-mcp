@@ -1037,10 +1037,7 @@ describe('createSampleWriter', () => {
     const requestId = '99999999-2222-3333-4444-555555555555';
     const path = writer.allocatePath(requestId);
     // 相对路径口径：samples/<本地日期>/<request_id>.json
-    assert.match(
-      path.relative,
-      /^samples\/\d{4}-\d{2}-\d{2}\/99999999-2222-3333-4444-555555555555\.json$/
-    );
+    assert.match(path.relative, /^samples\/\d{4}-\d{2}-\d{2}\/[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
 
     const outcome = writer.save({
       requestId,
@@ -1088,7 +1085,7 @@ describe('createSampleWriter', () => {
     assert.deepEqual(outcome, { status: 'saved' });
     // 原子形状：目标目录里只有最终文件，无 .tmp 残留
     const dateDir = join(logDir, 'samples', path.relative.split('/')[1]);
-    assert.deepEqual(readdirSync(dateDir), [`${requestId}.json`]);
+    assert.deepEqual(readdirSync(dateDir), [path.relative.split('/').at(-1)]);
   });
 
   it('leaves no parseable half record when the write fails midway (hooks injection)', async () => {
@@ -1310,10 +1307,7 @@ describe('createSampleWriter', () => {
       assert.equal(isAbsolute(path.absolute), true);
       assert.equal(path.absolute, resolve(process.cwd(), relativeDir, path.relative));
       // JSONL 信封的相对指针不受影响：仍相对日志目录（正斜杠口径）
-      assert.match(
-        path.relative,
-        /^samples\/\d{4}-\d{2}-\d{2}\/aaaaaaa4-2222-3333-4444-555555555555\.json$/
-      );
+      assert.match(path.relative, /^samples\/\d{4}-\d{2}-\d{2}\/[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
 
       const outcome = writer.save({
         requestId,

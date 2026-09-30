@@ -214,34 +214,40 @@ export const execute = async (params: QueryParams) => {
     );
     filtered.stats.brave.latency_ms = braveLatencyMs;
     // test 模式状态行末尾追加 sample 后缀（SC3；04-04 R2 扩展）：零删除且原本无
-    // 状态行时，saved 口径生成仅含 `[filter] sample: <路径>` 的状态行——每次成功
+    // 状态行时，saved 口径生成仅含 `[filter] sample for filter debugging - original results, filtered results, Jev decisions: <路径>` 的状态行——每次成功
     // 保存的 test 搜索都有样本定位入口。乐观构造（与 04-02 同法：先按 saved 口径
     // 设好、写入失败再剥回）——样本里存的 final_return.status_line 必须与实际返回
-    // 逐字一致，而实际返回取决于写入结果，只能先按成功口径构造。第二块与 JSON 块
-    // 内 output.status_line 都从 stats.output.status_line 出（D-08 同源不破）。
-    const sampleSuffix = samplePath !== undefined ? ` sample: ${samplePath.absolute}` : '';
+    // 逐字一致，而实际返回取决于写入结果，只能先按成功口径构造。第二块与日志均从
+    // stats.output.status_line 出，正文 JSON 不再重复输出状态行。
+    // 展示路径使用正斜杠，避免文本渲染将 Windows 反斜杠当作转义符。
+    const displaySamplePath = samplePath?.absolute.replaceAll('\\', '/');
+    const sampleSuffix =
+      displaySamplePath !== undefined
+        ? ` sample for filter debugging - original results, filtered results, Jev decisions: ${displaySamplePath}`
+        : '';
     const baseLine = filtered.stats.output.status_line;
     const hadLine = typeof baseLine === 'string';
     const savedLine =
       hadLine === true
         ? `${baseLine}${sampleSuffix}`
         : samplePath !== undefined
-          ? `[filter] sample: ${samplePath.absolute}`
+          ? `[filter] sample for filter debugging - original results, filtered results, Jev decisions: ${displaySamplePath}`
           : undefined;
     if (savedLine !== undefined) {
       filtered.stats.output.status_line = savedLine;
     }
-    // 第一个 JSON 块在过滤结果之上附加统计摘要（stats.output，含 status_line）：
-    // 状态行第二块与 JSON 块内 output.status_line 逐字同源（D-08/LOG-03 红线），
-    // 模型也能直接读到幸存规模与 token 估算。闭包封装：写入失败剥后缀后重建。
-    const buildPayload = (): unknown =>
-      withAdjustments(
+    // 正文只附加输出规模，状态行单独返回一次；日志仍保留完整 stats.output。
+    // 使用副本，避免省略正文中的状态行时影响日志与样本第二块。
+    const buildPayload = (): unknown => {
+      const { status_line: _statusLine, ...output } = filtered!.stats.output;
+      return withAdjustments(
         {
           ...filtered!.result,
-          output: filtered!.stats.output,
-        } as FilteredResponse & { output: FilterStats['output'] },
+          output,
+        } as FilteredResponse & { output: Omit<FilterStats['output'], 'status_line'> },
         raised
       );
+    };
     payload = buildPayload();
     // 先写后返（SC3）：样本写成功才带着样本路径返回；写失败剥回原状照常返回
     // 搜索内容、stderr 一行、JSONL 记 failed——绝不返回仿佛文件已存在的路径。
