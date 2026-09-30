@@ -17,5 +17,5 @@
  * 包版本号冒充实现标识。
  */
 
-/** 3 = 明确非一手组稳定排序及页面/栏目名单；2 = 评分裁决与记录共用 [0,2] 校验。 */
-export const FILTER_RULES_VERSION = 'filter-rules-3';
+/** 4 = 带年份片段的时间判断；3 = 明确非一手组稳定排序及页面/栏目名单。 */
+export const FILTER_RULES_VERSION = 'filter-rules-4';

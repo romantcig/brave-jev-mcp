@@ -677,7 +677,7 @@ const runJevStage = async (
       request.params.query,
       request.intent
     );
-    const questions = buildQuestions(candidate.snippets.length);
+    const questions = buildQuestions(state.source.snippets);
     const startedAt = Date.now();
 
     let outcome: ClassifyOutcome;
@@ -727,6 +727,15 @@ const runJevStage = async (
       // 来源回答原样收集，裁决有效性在 runOnChain 完成后从实际裁决结果取得。
       const answers: Record<string, number> = {};
       for (const key of sourceKeys) {
+        const answer = outcome.answers[key];
+        if (answer?.kind === 'noul') answers[key] = answer.probability;
+      }
+      // 只消费实际提问且仍在实发片段范围内的时间回答；降级砍尾后不能串位。
+      const sentQuestions = outcome.dispatch?.questions ?? questions;
+      const sentCount = outcome.dispatch?.state.source.snippets.length ?? candidate.snippets.length;
+      for (let i = 0; i < sentCount; i += 1) {
+        const key = `time_snip${i}`;
+        if (questions[key] === undefined || sentQuestions[key] === undefined) continue;
         const answer = outcome.answers[key];
         if (answer?.kind === 'noul') answers[key] = answer.probability;
       }
