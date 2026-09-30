@@ -414,3 +414,40 @@ describe('applyNovelty', () => {
     assert.equal(table[1].snippets[0].kept, false);
   });
 });
+
+describe('低置信一手排序回归', () => {
+  it('0.08 与 0.09 的变化不再让后面的来源抢先参与去重', () => {
+    const table = [source(0, []), source(1, []), source(2, [])];
+    for (const p of [0.08, 0.09, 0.1]) {
+      const judged = judgedMap({
+        s0: answered({ is_primary: 0.08 }),
+        s1: answered({ is_primary: p }),
+        s2: answered({ is_primary: 0.9 }),
+      });
+      assert.deepEqual(seedingOrder(table, judged, 'test'), [2, 0, 1]);
+      assert.deepEqual(seedingOrder(table, judged, 'on'), [2, 0, 1]);
+    }
+  });
+  it('后面的弱分数来源不能通过元素重合删掉 Brave 在前的报道', () => {
+    const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
+    applyNovelty(
+      table,
+      judgedMap({ s0: answered({ is_primary: 0.08 }), s1: answered({ is_primary: 0.09 }) }),
+      'test',
+      thresholds,
+      makeStats()
+    );
+    assert.equal(table[0].snippets[0].kept, true);
+    assert.equal(table[1].snippets[0].kept, false);
+  });
+  it('越界概率属于未判定组，不能取得一手优先权', () => {
+    assert.deepEqual(
+      seedingOrder(
+        [source(0, []), source(1, [])],
+        judgedMap({ s0: answered({ is_primary: 2 }), s1: answered({ is_primary: 0.1 }) }),
+        'on'
+      ),
+      [1, 0]
+    );
+  });
+});

@@ -53,16 +53,42 @@ export function isFeedUrl(raw: string): boolean {
 }
 
 /**
- * 黑名单匹配：在**规范 host**（小写、去 `www.`，由调用方归一化）上比对——条目
+ * 黑名单匹配：在**规范 host**（小写、去 `www.`，由调用方归一化）上比对——主机条目
  * 命中其自身与任意子域（结构性农场常按语言分子域，Assumption A13）。
- * @returns host 是某条目或其子域时为真
+ * 完整 URL 条目仅命中精确主机和路径；末尾斜杠限定栏目，其他路径精确匹配。
+ * @returns 命中整站规则或指定页面/栏目时为真
  * @example isBlocklisted('farm.example', new Set(['farm.example'])) === true
  * @example isBlocklisted('sub.farm.example', new Set(['farm.example'])) === true
  * @example isBlocklisted('notfarm.example', new Set(['farm.example'])) === false
  */
-export function isBlocklisted(canonicalHost: string, blocklist: ReadonlySet<string>): boolean {
+export function isBlocklisted(
+  canonicalHost: string,
+  blocklist: ReadonlySet<string>,
+  rawUrl?: string
+): boolean {
   if (blocklist.has(canonicalHost)) return true;
   for (const entry of blocklist) {
+    if (/^https?:\/\//i.test(entry)) {
+      if (!rawUrl) continue;
+      try {
+        const rule = new URL(entry);
+        const candidate = new URL(rawUrl);
+        if (!['http:', 'https:'].includes(candidate.protocol)) continue;
+        const ruleHost = rule.hostname.toLowerCase().replace(/^www\./, '');
+        const candidateHost = candidate.hostname.toLowerCase().replace(/^www\./, '');
+        // URL 规则只命中精确主机，不自动扩展到所有子域；协议不影响同一页面身份。
+        if (ruleHost !== canonicalHost || candidateHost !== canonicalHost) continue;
+        if (rule.username || rule.password || rule.search || rule.hash || rule.port) continue;
+        if (
+          candidate.pathname === rule.pathname ||
+          (rule.pathname.endsWith('/') && candidate.pathname.startsWith(rule.pathname))
+        )
+          return true;
+      } catch {
+        // 不可解析的 URL 不匹配。
+      }
+      continue;
+    }
     if (canonicalHost.endsWith(`.${entry}`)) return true;
   }
   return false;

@@ -242,7 +242,7 @@ const prefilterSnippets = (
 
 /**
  * 步 4 的规范 host：小写、去 `www.` 前缀；解析失败返回 `null`（不判 feed 也不判
- * 黑名单，方向保守）。黑名单与 feed 判定只看 host，端口不参与。
+ * 黑名单，方向保守）。host 规范化不包含端口；栏目规则另检查原始 URL 路径。
  */
 const canonicalHostOf = (raw: string): string | null => {
   try {
@@ -269,7 +269,7 @@ const dropNonArticles = (table: WorkSource[], config: FilterConfig, stats: Filte
       stats.local.feed_hits += 1;
       continue;
     }
-    if (isBlocklisted(host, config.blocklist)) {
+    if (isBlocklisted(host, config.blocklist, source.url)) {
       source.verdict = 'drop';
       source.reason = 'blocklist';
       stats.local.blocklist_hits += 1;

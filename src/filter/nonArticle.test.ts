@@ -164,3 +164,34 @@ describe('isOneLiner', () => {
     assert.equal(isOneLiner([{ text: 'x'.repeat(200) }], queryTerms), false);
   });
 });
+
+describe('页面与栏目匹配边界', () => {
+  it('栏目规则不屏蔽站点其他路径、相似前缀或其他主机', () => {
+    const rules = new Set(['https://farm.example/news/flash/']);
+    assert.equal(
+      isBlocklisted('farm.example', rules, 'https://www.farm.example/news/flash/item?q=1'),
+      true
+    );
+    for (const url of [
+      'https://farm.example/docs/item',
+      'https://farm.example/news/flashback/item',
+      'https://sub.farm.example/news/flash/item',
+      'https://notfarm.example/news/flash/item',
+      'https://farm.example/NEWS/flash/item',
+    ]) {
+      assert.equal(isBlocklisted(new URL(url).hostname, rules, url), false);
+    }
+  });
+  it('没有末尾斜杠的规则只匹配单页', () => {
+    const rules = new Set(['https://farm.example/news/item']);
+    assert.equal(
+      isBlocklisted('farm.example', rules, 'http://farm.example/news/item#section'),
+      true
+    );
+    assert.equal(
+      isBlocklisted('farm.example', rules, 'https://farm.example/news/item/child'),
+      false
+    );
+    assert.equal(isBlocklisted('farm.example', rules), false);
+  });
+});

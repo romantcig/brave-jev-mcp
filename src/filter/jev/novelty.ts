@@ -186,7 +186,10 @@ export function extractFingerprints(text: string): Set<string> {
   return fp;
 }
 
-/** judged 行的 is_primary 概率；无 answered 答案或非有限数时返回 undefined（未判定组）。 */
+/** 明确偏向非一手的概率区间只作同组处理，不比较组内微差。 */
+const NON_PRIMARY_TIE_MAX = 0.1;
+
+/** 一手优先级：明确非一手（概率 <= 0.1）同组沿用 Brave 序，其余按原概率排序，无效答案归未判定组。 */
 const primaryOf = (
   judged: ReadonlyMap<string, NoveltyJudgedRow> | undefined,
   index: number
@@ -195,13 +198,21 @@ const primaryOf = (
   const row = judged.get(`s${index}`);
   if (row === undefined || row.status !== 'answered') return undefined;
   const probability = row.answers?.is_primary;
-  return probability !== undefined && Number.isFinite(probability) ? probability : undefined;
+  return probability !== undefined &&
+    Number.isFinite(probability) &&
+    probability >= 0 &&
+    probability <= 1
+    ? probability > NON_PRIMARY_TIE_MAX
+      ? probability
+      : 0
+    : undefined;
 };
 
 /**
  * 播种顺序（与输出顺序分开）：off 模式或无 judged 答案时即 Brave 序；
- * test 与 on 按 is_primary 概率降序（同分按 Brave 序——比较器显式加 Brave 序
- * 平局裁决，不依赖引擎排序稳定性），未判定来源排已判定之后按 Brave 序（保守：
+ * test 与 on 对 is_primary > 0.1 的来源按概率降序，其余已判定来源保持 Brave 序。
+ * 同分按 Brave 序——比较器显式加 Brave 序
+ * 平局裁决，不依赖引擎排序稳定性；未判定来源排已判定之后按 Brave 序（保守：
  * 不抢先占有事实扩大删除面，A3）。
  * @returns 参与播种的 keep 来源 index 序列（被丢来源不参与）
  * @example 两来源 is_primary 0.9 与 0.5 → 0.9 先播种

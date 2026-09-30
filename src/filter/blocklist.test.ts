@@ -31,3 +31,20 @@ describe('DEFAULT_BLOCKLIST', () => {
     assert.deepEqual([...DEFAULT_BLOCKLIST], [...parseBlocklist(DEFAULT_BLOCKLIST_TEXT)]);
   });
 });
+
+describe('页面与栏目名单解析', () => {
+  it('规范主机但保留路径大小写与末尾斜杠', () => {
+    assert.deepEqual(
+      [...parseBlocklist('https://WWW.Farm.EXAMPLE/News/flash/\nhttps://farm.example/News/item')],
+      ['https://farm.example/News/flash/', 'https://farm.example/News/item']
+    );
+  });
+  it('含鉴权、查询、片段或自定义端口的 URL 条目不参与屏蔽', () => {
+    assert.equal(
+      parseBlocklist(
+        'https://user:pass@farm.example/x\nhttps://farm.example/x?q=1\nhttps://farm.example/x#part\nhttps://farm.example:123/x'
+      ).size,
+      0
+    );
+  });
+});

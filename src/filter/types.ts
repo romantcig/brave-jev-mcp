@@ -36,7 +36,7 @@ export type FilterRequest = {
 
 /**
  * 单个 JSON 配置文件解析出的配置（EMBED-05；字段与校验见 config.ts）。
- * `blocklist` 是黑名单文本解析出的规范 host 集合；`logDir` 是 JSONL 日志目录
+ * `blocklist` 是黑名单文本解析出的规范 host 或页面/栏目 URL 集合；`logDir` 是 JSONL 日志目录
  * （Phase 3 消费，本批只解析）；`toolDescriptionFile` 是工具描述的仓库外覆盖文件。
  */
 export type FilterConfig = {

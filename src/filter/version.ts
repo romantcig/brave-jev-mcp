@@ -17,5 +17,5 @@
  * 包版本号冒充实现标识。
  */
 
-/** 2 = 评分裁决与记录共用 [0,2] 校验；1 = 04-04 首轮实发派发记录版本。 */
-export const FILTER_RULES_VERSION = 'filter-rules-2';
+/** 3 = 明确非一手组稳定排序及页面/栏目名单；2 = 评分裁决与记录共用 [0,2] 校验。 */
+export const FILTER_RULES_VERSION = 'filter-rules-3';
