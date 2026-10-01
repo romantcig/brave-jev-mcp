@@ -59,6 +59,8 @@ export type {
   FilterRequest,
   FilterResult,
   FilterStats,
+  GitHubCleanupAction,
+  GitHubCleanupRule,
   JevCandidateDetailed,
   JevDispatchPayload,
   JevDispatchRecord,

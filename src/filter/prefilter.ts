@@ -108,18 +108,43 @@ export const TITLE_RESIDUAL_MAX = 40;
 export const TITLE_LINE_MIN = 20;
 
 /**
- * 统一代码区域识别（第二十轮复审 R2）：逐行标记是否处于代码区域，标题重复行与
- * 引用块两个新增剥离共用同一份结果。围栏状态机记录**开栏字符与长度**，闭栏必须
- * 同字符、长度不小于开栏且无尾随文字（CommonMark 规则）——外层四反引号包内层
- * 三反引号的 Markdown 示例里，内层围栏（含其"闭栏"）都是示例内容，不会提前闭合。
- * 四空格缩进行按代码保护（宁多保护、无误删方向）。
- * @returns 与行数组等长的标记：true = 该行处于代码区域，不参与新增剥离判定
+ * 行首缩进的列数：空格记 1 列，Tab 按 CommonMark tab stop 展开到下一个 4 列倍数
+ * ——单个 Tab 即达 4 列，"2 空格 + Tab"也是 4 列。按**字符数**判断（`\s{4,}`）会把
+ * 这些缩进误放行（审查 R1）。
  */
-const codeRegionFlags = (lines: readonly string[]): boolean[] => {
+const indentColumns = (line: string): number => {
+  let columns = 0;
+  for (let at = 0; at < line.length; at += 1) {
+    const char = line[at];
+    if (char === ' ') columns += 1;
+    else if (char === '\t') columns += 4 - (columns % 4);
+    else break;
+  }
+  return columns;
+};
+
+/**
+ * 统一代码区域识别（第二十轮复审 R2；filter-rules-9 增强）：逐行标记是否处于代码
+ * 区域，标题重复行、引用块两个新增剥离与步 3 的 GitHub 界面清洗共用同一份结果。
+ * 三层状态机：
+ * - 围栏：记录**开栏字符与长度**，闭栏必须同字符、长度不小于开栏且无尾随文字
+ *   （CommonMark 规则）——外层四反引号包内层三反引号的 Markdown 示例里，内层围栏
+ *   （含其"闭栏"）都是示例内容，不会提前闭合。未闭合保护到末尾。
+ * - 缩进代码：按 `indentColumns` ≥ 4 列判定（宁多保护、无误删方向）。
+ * - 内联代码跨度：行内反引号 run 的开闭跟踪——开启行、跨行内部行与闭合行整体
+ *   受保护（删任何一行都会拆散跨度，审查 R1）；同一行内自洽开闭的不标记，保持
+ *   既有判定面。围栏与缩进代码内的反引号是代码内容，不参与跨度状态；围栏是块级
+ *   结构，进入时清掉段落内未闭合的跨度。
+ * 引用行与引用懒续行由 githubCleanup.ts 叠加，不在此放宽（不能为复用而削弱保护）。
+ * @returns 与行数组等长的标记：true = 该行处于代码区域，不参与删除判定
+ */
+export const codeRegionFlags = (lines: readonly string[]): boolean[] => {
   const flags: boolean[] = [];
   let fenced = false;
   let fenceChar = '';
   let fenceLen = 0;
+  /** 未闭合内联代码跨度等待的闭合反引号串长度；0 = 无。 */
+  let spanClose = 0;
   for (const line of lines) {
     if (fenced) {
       flags.push(true);
@@ -135,9 +160,33 @@ const codeRegionFlags = (lines: readonly string[]): boolean[] => {
       fenceChar = opening[2][0];
       fenceLen = opening[2].length;
       flags.push(true);
+      spanClose = 0;
       continue;
     }
-    flags.push(/^\s{4,}/.test(line));
+    if (indentColumns(line) >= 4) {
+      flags.push(true);
+      continue;
+    }
+    const insideSpanAtStart = spanClose > 0;
+    for (let at = 0; at < line.length; ) {
+      // 跨度外的反斜杠转义按对消费：奇数个转义下一反引号，偶数个不影响开栏。
+      // 跨度内反斜杠是代码字面量，不能阻止等长反引号闭合。
+      if (spanClose === 0 && line[at] === '\\') {
+        at += 2;
+        continue;
+      }
+      if (line[at] !== '`') {
+        at += 1;
+        continue;
+      }
+      const start = at;
+      while (line[at] === '`') at += 1;
+      const run = at - start;
+      // 等长反引号串闭合 code span；不等长的 run 在跨度内是内容。
+      if (spanClose === 0) spanClose = run;
+      else if (run === spanClose) spanClose = 0;
+    }
+    flags.push(insideSpanAtStart || spanClose > 0);
   }
   return flags;
 };

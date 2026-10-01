@@ -41,6 +41,7 @@ import {
   SHORT_SNIPPET_MAX,
   stripBoilerplateLines,
 } from './prefilter.js';
+import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { buildQuestions, buildState } from './jev/questions.js';
 import { planAllRequest, projectSourceAnswers, snippetCountOfState } from './jev/context.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
@@ -61,6 +62,7 @@ import type {
   FilterRequest,
   FilterResult,
   FilterStats,
+  GitHubCleanupAction,
   JevCandidate,
   JevCandidateDetailed,
   JevDispatchRecord,
@@ -90,6 +92,8 @@ type WorkSnippet = {
   kept: boolean;
   reason?: SnippetRemovalReason;
   truncated?: boolean;
+  /** 步 3 GitHub 界面清洗的动作明细（test/on 生效）；投影到统计表 github_cleanup */
+  githubCleanup?: GitHubCleanupAction[];
   /** 步 2 从同页来源并入时记原来源索引；此时 `index` 是它在原来源里的片段索引 */
   mergedFrom?: number;
 };
@@ -181,16 +185,20 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
 const PAYWALL_MARKERS: readonly string[] = [...PAYWALL_MARKERS_EN, ...PAYWALL_MARKERS_ZH];
 
 /**
- * 步 3 片段预筛（含付费墙截断）：顺序固定为付费墙截断 → 样板行剥离（前缀行 →
- * 标题重复行 → 引用块，见 stripBoilerplateLines）→ 短且无实词 → 页内逐字重复
- * （RULES-03/ordering）。被删片段留在原位只翻 `kept`；重复判定按原序只与同来源内
- * **已幸存**片段比，保留先出现者。`snippets_prefiltered` 记 nav 与 boilerplate
- * 两类之和，`dup_removed` 单独记，`paywall_truncated` 只记截断后保留的。
+ * 步 3 片段预筛（含付费墙截断）：顺序固定为付费墙截断 → 样板行剥离（GitHub 界面
+ * 清洗 → 前缀行 → 标题重复行 → 引用块，GitHub 子步仅 test/on 生效、off 不应用——
+ * 清洗属 Jev 过滤链的文本准备，见 stripBoilerplateLines 与 githubCleanup.ts）→
+ * 短且无实词 → 页内逐字重复（RULES-03/ordering）。被删片段留在原位只翻 `kept`；
+ * 重复判定按原序只与同来源内**已幸存**片段比，保留先出现者。`snippets_prefiltered`
+ * 记 nav 与 boilerplate 两类之和，`dup_removed` 单独记，`paywall_truncated` 只记
+ * 截断后保留的，`github_cleanup_actions` 记 GitHub 清洗动作数（清洗后为空的片段
+ * 整片删走 boilerplate 语义）。
  */
 const prefilterSnippets = (
   table: WorkSource[],
   stats: FilterStats,
-  terms: ReadonlySet<string>
+  terms: ReadonlySet<string>,
+  cleanGitHub: boolean
 ): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
@@ -217,6 +225,24 @@ const prefilterSnippets = (
         }
         snippet.text = paywall.text;
         stats.local.paywall_truncated += 1;
+      }
+
+      // GitHub 平台界面行清洗（filter-rules-9）：样板行剥离阶段内的专门子步，
+      // 位于通用前缀/标题/引用剥离之前——先剥平台专属界面行，剩余文本再走通用
+      // 子步。清洗后为空按既有 boilerplate 整片删语义处理；动作明细进统计表。
+      if (cleanGitHub) {
+        const github = cleanGitHubBoilerplate(snippet.text, source.url);
+        if (github.actions.length > 0) {
+          snippet.githubCleanup = github.actions;
+          stats.local.github_cleanup_actions += github.actions.length;
+          if (github.text === '') {
+            snippet.kept = false;
+            snippet.reason = 'boilerplate';
+            stats.local.snippets_prefiltered += 1;
+            continue;
+          }
+          snippet.text = github.text;
+        }
       }
 
       const stripped = stripBoilerplateLines(snippet.text, BOILERPLATE_PREFIXES, source.title);
@@ -332,8 +358,9 @@ const runLocalRules = (
 ): void => {
   splitJsonLd(table, stats); // 步 1：JSON-LD 分流
   stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
-  // 步 3 片段预筛：付费墙截断 → 样板剥离 → 短无实词 → 页内逐字重复（顺序固定）
-  prefilterSnippets(table, stats, terms);
+  // 步 3 片段预筛：付费墙截断 → 样板剥离（GitHub 清洗仅 test/on）→ 短无实词 →
+  // 页内逐字重复（顺序固定）
+  prefilterSnippets(table, stats, terms, config.mode !== 'off');
   dropNonArticles(table, config, stats); // 步 4：feed URL 与结构性黑名单
 };
 
@@ -408,6 +435,7 @@ const projectSource = (source: WorkSource): SourceStats => {
     kept: snippet.kept,
     ...(snippet.reason !== undefined ? { reason: snippet.reason } : {}),
     ...(snippet.truncated !== undefined ? { truncated: snippet.truncated } : {}),
+    ...(snippet.githubCleanup !== undefined ? { github_cleanup: snippet.githubCleanup } : {}),
     ...(snippet.mergedFrom !== undefined ? { merged_from: snippet.mergedFrom } : {}),
     chars: snippet.text.length,
   }));

@@ -39,6 +39,7 @@ export const zeroLocal: Readonly<LocalStats> = Object.freeze({
   budget_trimmed_snippets: 0,
   novelty_removed: 0,
   cross_source_dup_removed: 0,
+  github_cleanup_actions: 0,
   novelty: [],
 });
 

@@ -518,6 +518,12 @@ export type LocalStats = {
   /** 步 7 后半被跨来源 5-gram 逐字重复删除的片段数（02-04；用户已定决策 5 的独立计数） */
   cross_source_dup_removed: number;
   /**
+   * 步 3 GitHub 平台界面文字清洗的动作总数（filter-rules-9；删行与剥按钮后缀
+   * 各计一条，整片清空片段的动作也计入——明细在逐片段 SnippetStats.github_cleanup，
+   * 两处口径一致可对账）。
+   */
+  github_cleanup_actions: number;
+  /**
    * 步 7 后半的新颖度指纹明细（D-10）：只为发生过指纹新颖度删除的来源记条目，
    * `fp_total` 是该来源被删片段指纹的并集大小，`novel` 是其中对幸存指纹并集而言
    * 首次出现 novel 的指纹串——测试模式审核"这个来源为什么被删"的证据。只存指纹串
@@ -536,6 +542,35 @@ export type NoveltySourceDetail = {
   novel: string[];
 };
 
+/**
+ * GitHub 平台界面清洗的动作规则名（filter-rules-9 五条首批；实现见 githubCleanup.ts）。
+ */
+export type GitHubCleanupRule =
+  | 'repo_nav'
+  | 'copy_branch_button'
+  | 'search_block'
+  | 'tag_compare'
+  | 'reactions_unavailable';
+
+/**
+ * GitHub 平台界面清洗的单条动作（filter-rules-9）：只记规则与行号，绝不记正文
+ * （LOG-03）——内容凭行号回 pre_filter 原文对齐（行号相对进入清洗时的片段文本，
+ * 即步 3 付费墙截断之后）。
+ */
+export type GitHubCleanupAction = {
+  rule: GitHubCleanupRule;
+  /** 命中行号（1 起） */
+  line: number;
+  /** 行内局部剥除（分支复制按钮后缀，前文分支文本保留）；整行删除省略 */
+  partial?: boolean;
+};
+
+/** cleanGitHubBoilerplate 的返回：清洗后文本（未命中为原文本）与逐动作清单。 */
+export type GitHubCleanupResult = {
+  text: string;
+  actions: GitHubCleanupAction[];
+};
+
 /** 统计表里单个片段的裁决；只有索引、标记与字符数，不含正文（LOG-03）。 */
 export type SnippetStats = {
   index: number;
@@ -546,6 +581,12 @@ export type SnippetStats = {
   truncated?: boolean;
   /** 步 2 从同页来源并入的片段：原来源的 Brave 索引；此时 `index` 是它在原来源里的片段索引 */
   merged_from?: number;
+  /**
+   * 步 3 GitHub 平台界面清洗的动作明细（filter-rules-9；test/on 生效、off 不应用）。
+   * 可选键向后兼容：旧记录无此键，新记录对旧读取方是未知键（样本 format_version
+   * 不因此递增）。整片清空（reason 'boilerplate'）与局部剥离都带。
+   */
+  github_cleanup?: GitHubCleanupAction[];
   chars: number;
 };
 

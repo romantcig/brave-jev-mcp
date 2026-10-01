@@ -477,6 +477,44 @@ describe('stripBoilerplateLines — title-repeat lines (第二十轮)', () => {
     );
   });
 
+  it('protects tab-indented code by indent columns, not char count (filter-rules-9 审查 R1)', () => {
+    // 单个 Tab 即达 4 列（CommonMark tab stop）——字符数判断会把缩进代码行
+    // 误放行给标题重复行剥离；"2 空格 + Tab"的混合缩进同样 4 列
+    const tabbed = ['Try it:', '\tgit status --short', '\techo done', '\tgit status --short'].join(
+      '\n'
+    );
+    assert.equal(
+      stripBoilerplateLines(tabbed, BOILERPLATE_PREFIXES, 'git status --short').text,
+      tabbed
+    );
+
+    const mixed = ['Try it:', '  \tgit status --short'].join('\n');
+    assert.equal(
+      stripBoilerplateLines(mixed, BOILERPLATE_PREFIXES, 'git status --short').text,
+      mixed
+    );
+  });
+
+  it('protects lines inside a cross-line inline code span (filter-rules-9 审查 R1)', () => {
+    // 开启行、跨行内部行与闭合行整体受保护——删任何一行都会拆散 code span；
+    // 标题重复行剥离不得把跨度内与来源标题同名的文本当堆叠剥掉
+    const snippet = ['Run `git', 'status --short', 'now` to check.'].join('\n');
+    assert.equal(
+      stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'status --short').text,
+      snippet
+    );
+  });
+
+  it('转义反引号不使跨行代码中的重复标题失去保护', () => {
+    const tick = String.fromCharCode(96);
+    const slash = String.fromCharCode(92);
+    const snippet = `Use ${slash}${tick} literally, then ${tick}first\nstatus --short\nstatus --short\nlast${tick}`;
+    assert.equal(
+      stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'status --short').text,
+      snippet
+    );
+  });
+
   it('rejects byline matches whose residual is longer than the line or lacks a marker', () => {
     // 回放实测回归："- reddit API shut down" 这类短标签行与 title 的前缀残差
     // （26 码元）比行（20 码元）还长——不是署名；": 10 outlets compared" 是副标题

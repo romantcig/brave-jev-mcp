@@ -182,6 +182,7 @@ const emptyStats = (mode: FilterStats['mode']): FilterStats => ({
     budget_trimmed_snippets: 0,
     novelty_removed: 0,
     cross_source_dup_removed: 0,
+    github_cleanup_actions: 0,
     novelty: [],
   },
   sources: [],
@@ -1601,5 +1602,95 @@ describe('createSampleWriter', () => {
     assert.notEqual(sampleA.filter_rules_version, sampleB.filter_rules_version);
     assert.equal(sampleA.filter_rules_version, 'rules-A');
     assert.equal(sampleB.filter_rules_version, 'rules-B');
+  });
+  it('records GitHub UI cleanup actions traceable to pre_filter lines and the cleaned final payload (filter-rules-9)', async () => {
+    const logDir = join(root, 'github-cleanup', 'logs');
+    const config = configOf(logDir);
+    const ghPayload: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://github.com/lotillc/redlib-loti',
+            title: 'redlib-loti',
+            snippets: [
+              '## Repository files navigation\n# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
+            ],
+          },
+          {
+            url: 'https://github.com/HexRaysSA/ida-mcp/pull/8',
+            title: 'ida-mcp PR 8',
+            snippets: [
+              'migrate-mcp HexRaysSA/ida-mcp:migrate-mcp Copy head branch name to clipboard\nBrave browser patch discussion.',
+            ],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+    const { result, stats, jev_dispatch, jev_requests } = await filterLlmContext(
+      ghPayload,
+      { params: { query: QUERY }, intent: INTENT },
+      config,
+      { classify: keepAllClassify }
+    );
+    const payload = result;
+    const writer = createSampleWriter(config);
+    const requestId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const path = writer.allocatePath(requestId);
+    assert.deepEqual(
+      writer.save({
+        requestId,
+        path,
+        originalParams: { query: QUERY },
+        braveParams: { query: QUERY },
+        filterParams: { query: QUERY },
+        intent: INTENT,
+        preFilter: ghPayload,
+        stats,
+        jevDispatch: jev_dispatch,
+        jevRequests: jev_requests,
+        payload,
+        statusLine: null,
+      }),
+      { status: 'saved' }
+    );
+
+    const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
+      pre_filter: BraveLlmContextResponse;
+      final_return: { payload: { grounding: { generic: { snippets: string[] }[] } } } | null;
+      outcome?: {
+        local: { github_cleanup_actions: number };
+        sources: { snippets: { github_cleanup?: unknown }[] }[];
+      };
+    };
+
+    // 计数与逐片段动作进 outcome（v4 可选键，format_version 不因增补递增）
+    assert.equal(sample.outcome?.local.github_cleanup_actions, 5);
+    const repoRow = sample.outcome?.sources[0].snippets[0];
+    assert.deepEqual(repoRow?.github_cleanup, [
+      { rule: 'repo_nav', line: 1 },
+      { rule: 'search_block', line: 2 },
+      { rule: 'search_block', line: 3 },
+      { rule: 'search_block', line: 5 },
+    ]);
+    assert.deepEqual(sample.outcome?.sources[1].snippets[0].github_cleanup, [
+      { rule: 'copy_branch_button', line: 1, partial: true },
+    ]);
+
+    // 动作行号可回溯 pre_filter 原文：行号-1 恰是界面行
+    const original = sample.pre_filter.grounding.generic[0].snippets[0] as string;
+    const lines = original.split('\n');
+    assert.equal(lines[0], '## Repository files navigation');
+    assert.equal(lines[1], '# Saved searches');
+    assert.equal(lines[2], '# Search code, repositories, users, issues, pull requests...');
+    assert.equal(lines[4], '# Provide feedback');
+    // 原始 pre_filter 未被清洗改写（原地不修改）
+    assert.ok(original.startsWith('## Repository files navigation'));
+
+    // 最终返回来自同一份清洗后文本
+    assert.deepEqual(sample.final_return?.payload.grounding.generic[0].snippets, [
+      'Private front-end for Reddit, a brave browser project.',
+    ]);
   });
 });

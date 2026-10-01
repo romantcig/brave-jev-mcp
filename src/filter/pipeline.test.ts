@@ -18,6 +18,7 @@ import type {
   JevAllState,
   JevAnswer,
   JevQuestion,
+  JevState,
 } from './types.js';
 import { ALL_LIMIT_32K, ALL_LIMIT_64K } from './jev/context.js';
 
@@ -2178,5 +2179,161 @@ describe('six-question all-context request organization (FULL_CONTEXT_ROLLOUT_PL
         ['https://example.com/post', 1],
       ]
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 步 3 GitHub 平台界面清洗（filter-rules-9）：test/on 在 Jev 派发前清洗且最终返回
+// 同步干净（Jev 输入与最终输出同一份清洗后文本）；off 不应用本次清洗；动作明细
+// 进统计表（github_cleanup_actions 计数 + 逐片段 github_cleanup）。
+// ---------------------------------------------------------------------------
+
+describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
+  const ghPayload = (): BraveLlmContextResponse => ({
+    grounding: {
+      generic: [
+        {
+          url: 'https://github.com/lotillc/redlib-loti',
+          title: 'redlib-loti',
+          snippets: [
+            '## Repository files navigation\n# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
+          ],
+        },
+        {
+          url: 'https://github.com/HexRaysSA/ida-mcp/pull/8',
+          title: 'ida-mcp PR 8',
+          snippets: [
+            'migrate-mcp HexRaysSA/ida-mcp:migrate-mcp Copy head branch name to clipboard\nBrave browser patch discussion.',
+          ],
+        },
+        {
+          url: 'https://example.com/post',
+          title: 'Example Post',
+          snippets: ['Example snippet about brave.'],
+        },
+      ],
+      map: [],
+    },
+    sources: {},
+  });
+
+  /** 捕获实收 state 的全保留 classify（六题全 0、片段分满分——只裁 keep）。 */
+  const capturingClassify =
+    (captured: JevState[]): ClassifyDeps['classify'] =>
+    async ({ state }) => {
+      captured.push(JSON.parse(JSON.stringify(state)) as JevState);
+      return {
+        status: 'answered',
+        model: DEFAULT_JEV_MODEL,
+        answers: {
+          has_original_reasoning: { kind: 'noul', probability: 0 },
+          is_template_filler: { kind: 'noul', probability: 0 },
+          is_off_topic: { kind: 'noul', probability: 0 },
+          is_listing: { kind: 'noul', probability: 0 },
+          self_deprecated: { kind: 'noul', probability: 0 },
+          stale: { kind: 'noul', probability: 0 },
+          snip0: { kind: 'score', score: 2 },
+        },
+        input_tokens: 10,
+      };
+    };
+
+  const stateOf = (captured: JevState[], id: string): JevState => {
+    const found = captured.find((state) => 'source' in state && state.source.id === id);
+    assert.ok(found, `state ${id} captured`);
+    return found;
+  };
+
+  it('test/on: UI lines are stripped before classify, body kept; final output shares the cleaned text', async () => {
+    // test 与 on 共用同一清洗实现与接入位置，两种模式都用假 Jev 客户端真实跑通
+    for (const mode of ['test', 'on'] as const) {
+      const captured: JevState[] = [];
+      const { result, stats } = await filterLlmContext(
+        ghPayload(),
+        request,
+        { ...offConfig, mode },
+        {
+          classify: capturingClassify(captured),
+        }
+      );
+
+      // Jev 输入（实收 state）：界面行已清掉、正文还在、按钮后缀已剥
+      const repoState = stateOf(captured, 's0');
+      assert.ok('source' in repoState);
+      assert.deepEqual(repoState.source.snippets, [
+        'Private front-end for Reddit, a brave browser project.',
+      ]);
+      const prState = stateOf(captured, 's1');
+      assert.ok('source' in prState);
+      assert.deepEqual(prState.source.snippets, [
+        'migrate-mcp HexRaysSA/ida-mcp:migrate-mcp\nBrave browser patch discussion.',
+      ]);
+
+      // 最终实际返回与 Jev 输入同一份清洗后文本（同步干净）
+      assert.deepEqual(
+        result.grounding.generic.map((item) => [item.url, item.snippets]),
+        [
+          [
+            'https://github.com/lotillc/redlib-loti',
+            ['Private front-end for Reddit, a brave browser project.'],
+          ],
+          [
+            'https://github.com/HexRaysSA/ida-mcp/pull/8',
+            ['migrate-mcp HexRaysSA/ida-mcp:migrate-mcp\nBrave browser patch discussion.'],
+          ],
+          ['https://example.com/post', ['Example snippet about brave.']],
+        ]
+      );
+
+      // 计数与逐片段动作（4 = repo_nav + search_block×3；1 = copy_branch_button）
+      assert.equal(stats.local.github_cleanup_actions, 5);
+      const repoRow = stats.sources[0].snippets[0];
+      assert.deepEqual(repoRow.github_cleanup, [
+        { rule: 'repo_nav', line: 1 },
+        { rule: 'search_block', line: 2 },
+        { rule: 'search_block', line: 3 },
+        { rule: 'search_block', line: 5 },
+      ]);
+      assert.equal(repoRow.chars, 'Private front-end for Reddit, a brave browser project.'.length);
+      assert.deepEqual(stats.sources[1].snippets[0].github_cleanup, [
+        { rule: 'copy_branch_button', line: 1, partial: true },
+      ]);
+      // 非 GitHub 来源无动作键
+      assert.equal(stats.sources[2].snippets[0].github_cleanup, undefined);
+    }
+  });
+
+  it('off: cleanup is not applied — GitHub UI lines stay verbatim, no action accounting', async () => {
+    const captured: JevState[] = [];
+    const { result, stats } = await filterLlmContext(ghPayload(), request, offConfig, {
+      classify: capturingClassify(captured),
+    });
+
+    assert.equal(stats.local.github_cleanup_actions, 0);
+    assert.equal(stats.sources[0].snippets[0].github_cleanup, undefined);
+    // 界面行逐字保留（off 连 Jev 也不跑，但本地样板剥离照旧——通用前缀表无这些行）
+    assert.ok(
+      result.grounding.generic[0].snippets[0]?.startsWith('## Repository files navigation')
+    );
+    assert.ok(result.grounding.generic[0].snippets[0]?.includes('# Saved searches'));
+    const prSnippet = result.grounding.generic[1].snippets[0] ?? '';
+    assert.ok(prSnippet.includes('Copy head branch name to clipboard'));
+    assert.deepEqual(captured, []); // off 不派发
+  });
+
+  it('no_key (test/on without classify) still cleans: same config semantics as test/on', async () => {
+    // 两种模式的无 key 路径都走同一本地规则链，清洗照常应用
+    for (const mode of ['test', 'on'] as const) {
+      const { result, stats } = await filterLlmContext(ghPayload(), request, {
+        ...offConfig,
+        mode,
+      });
+
+      assert.equal(stats.jev?.status, 'no_key');
+      assert.equal(stats.local.github_cleanup_actions, 5);
+      assert.deepEqual(result.grounding.generic[0].snippets, [
+        'Private front-end for Reddit, a brave browser project.',
+      ]);
+    }
   });
 });
