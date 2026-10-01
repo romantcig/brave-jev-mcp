@@ -22,6 +22,7 @@ export {
   type ConfigWarn,
 } from './config.js';
 export { createJevClassifier, hasJevKey } from './jev/client.js';
+export { compactResponse } from './compact.js';
 export { QUESTION_SET_ID } from './jev/questions.js';
 export { resolveToolDescription } from './description.js';
 export { createLogWriter } from './logging.js';

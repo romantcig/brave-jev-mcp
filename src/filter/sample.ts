@@ -83,7 +83,7 @@ import type {
 
 /** 成功请求样本的 final_return：实际返回的两块内容（状态行只在第二块，含 sample 后缀）。 */
 export type SampleFinalReturn = {
-  /** 实际返回的第一块 JSON（过滤结果 + output 摘要 + parameter_adjustments） */
+  /** 实际返回的第一块 JSON（精简过滤结果 + 可选 parameter_adjustments） */
   payload: unknown;
   /** 实际返回的第二块状态行文本（含 ` sample: <绝对路径>` 后缀）；无状态行时为 null */
   status_line: string | null;

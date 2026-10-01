@@ -13,6 +13,7 @@ import { LlmContextSearchApiResponseSchema } from './schemas/output.js';
 import {
   applyMinimumValues,
   applyOverfetch,
+  compactResponse,
   createJevClassifier,
   createLogWriter,
   createSampleWriter,
@@ -28,9 +29,7 @@ import type {
   ClassifyDeps,
   FilterConfig,
   FilterDeps,
-  FilteredResponse,
   FilterResult,
-  FilterStats,
   LogSamplePointer,
   LogWriteMeta,
   LogWriter,
@@ -70,7 +69,8 @@ export const description = `
           change the keyword strategy.
         - Search serially; go parallel only when confident of each query.
 
-    When relaying results, cite the source URLs from the "sources" map.
+    When relaying results, cite the URL returned with each content item.
+    Source age, when available, is included with that item; it is not a verified publication date.
 `.trim();
 
 // 进程级配置惰性单例（EMBED-05）：第一次需要时解析 `JEV_FILTER_CONFIG_FILE`，之后
@@ -236,18 +236,9 @@ export const execute = async (params: QueryParams) => {
     if (savedLine !== undefined) {
       filtered.stats.output.status_line = savedLine;
     }
-    // 正文只附加输出规模，状态行单独返回一次；日志仍保留完整 stats.output。
-    // 使用副本，避免省略正文中的状态行时影响日志与样本第二块。
-    const buildPayload = (): unknown => {
-      const { status_line: _statusLine, ...output } = filtered!.stats.output;
-      return withAdjustments(
-        {
-          ...filtered!.result,
-          output,
-        } as FilteredResponse & { output: Omit<FilterStats['output'], 'status_line'> },
-        raised
-      );
-    };
+    // 展示层合并重复元数据，规模统计只进日志；状态行单独返回一次。
+    // 样本仍保存实际发出的精简载荷，过滤输入与 stats 均不改动。
+    const buildPayload = (): unknown => compactResponse(withAdjustments(filtered!.result, raised));
     payload = buildPayload();
     // 先写后返（SC3）：样本写成功才带着样本路径返回；写失败剥回原状照常返回
     // 搜索内容、stderr 一行、JSONL 记 failed——绝不返回仿佛文件已存在的路径。

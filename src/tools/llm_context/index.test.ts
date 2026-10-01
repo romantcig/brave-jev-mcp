@@ -140,7 +140,7 @@ describe(name, () => {
     assert.equal(tool.inputSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
   });
 
-  it('returns text-only content with trimmed sources and a single Brave request', async () => {
+  it('返回正文及日期，省略重复来源表与规模统计，只请求一次 Brave', async () => {
     const result = await getClient().callTool({
       name,
       arguments: {
@@ -155,29 +155,14 @@ describe(name, () => {
     const content = result.content as { text: string }[];
     const payload = JSON.parse(content[0].text);
 
-    // off 模式是结构直通：幸存来源与片段逐条等于输入
-    assert.deepEqual(payload.grounding.generic, braveResponse.grounding.generic);
+    // off 模式正文不变，元数据中的 ISO 日期移动到对应条目。
+    assert.deepEqual(payload.grounding.generic, [
+      { ...braveResponse.grounding.generic[0], age: ['2026-09-16'] },
+      braveResponse.grounding.generic[1],
+    ]);
     assert.deepEqual(payload.grounding.map, []);
-
-    // sources 只留 title / hostname / age；age 只留首个 ISO 日期，空数组时省略键
-    assert.deepEqual(Object.keys(payload.sources), [
-      'https://search.brave.com/',
-      'https://example.com/post',
-    ]);
-    assert.deepEqual(payload.sources['https://search.brave.com/'], {
-      title: 'Brave Search',
-      hostname: 'search.brave.com',
-      age: ['2026-09-16'],
-    });
-    assert.deepEqual(Object.keys(payload.sources['https://search.brave.com/']).sort(), [
-      'age',
-      'hostname',
-      'title',
-    ]);
-    assert.deepEqual(payload.sources['https://example.com/post'], {
-      title: 'Example Post',
-      hostname: 'example.com',
-    });
+    assert.equal(Object.hasOwn(payload, 'sources'), false);
+    assert.equal(Object.hasOwn(payload, 'output'), false);
 
     // 整个调用只打一次 Brave，且 intent 没有转发给 Brave
     assert.equal(calls, 1);
@@ -309,8 +294,8 @@ describe(`${name} (status line and JSONL log)`, () => {
     assert.ok(!statusLine.includes('\n'), 'status line must be a single line');
 
     // 状态行只返回一次，并与日志逐字同源
-    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
-    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
+    const payload = JSON.parse(content[0].text) as Record<string, unknown>;
+    assert.equal(Object.hasOwn(payload, 'output'), false);
     await flushWrites();
     const logFile = readdirSync(logDir).find((file) => file.endsWith('.jsonl'))!;
     const loggedOutput = JSON.parse(readFileSync(join(logDir, logFile), 'utf8').trim()).output as {
@@ -598,10 +583,10 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     );
 
     // final_return 与实际返回逐字段一致，状态行只存在于第二块
-    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
+    const payload = JSON.parse(content[0].text) as Record<string, unknown>;
     assert.deepEqual(sample.final_return.payload, payload);
     assert.equal(sample.final_return.status_line, statusLine);
-    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
+    assert.equal(Object.hasOwn(payload, 'output'), false);
     await flushWrites();
     const loggedOutput = firstRecord(logDir).output as { status_line: string };
     assert.equal(loggedOutput.status_line, statusLine);
@@ -651,11 +636,12 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const onResult = await getClient().callTool({ name, arguments: args });
 
     // SC1 验收口径（04-04 R2 更新）：过滤内容与过滤统计一致，test 独有的样本定位
-    // 元信息允许存在——剥除 sample 后缀（两载体）之外，test 独有的纯样本状态行
+    // 元信息允许存在——剥除状态行 sample 后缀之外，test 独有的纯样本状态行
     // （`[filter] sample for filter debugging - original results, filtered results, Jev decisions: <路径>`，零删除时生成）视为与"无状态行"等价
     const normalize = (result: unknown): { payload: unknown; statusLine: string } => {
       const content = (result as { content: { text: string }[] }).content;
-      const payload = JSON.parse(content[0].text) as { output?: { status_line?: string } };
+      const payload = JSON.parse(content[0].text) as Record<string, unknown>;
+      assert.equal(Object.hasOwn(payload, 'output'), false);
       const cut = (line: string | undefined): string | undefined => {
         if (line === undefined) return undefined;
         if (
@@ -669,20 +655,15 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
         );
         return at === -1 ? line : line.slice(0, at);
       };
-      if (payload.output?.status_line !== undefined) {
-        const stripped = cut(payload.output.status_line);
-        if (stripped === undefined) delete payload.output.status_line;
-        else payload.output.status_line = stripped;
-      }
       return { payload, statusLine: cut(content[1]?.text) ?? '' };
     };
     assert.deepEqual(normalize(testResult), normalize(onResult));
 
     // on 模式本来就没有后缀（剥除是 no-op）——顺带锁住
-    const onPayload = JSON.parse((onResult as { content: { text: string }[] }).content[0].text) as {
-      output: { status_line: string };
-    };
-    assert.equal(Object.hasOwn(onPayload.output, 'status_line'), false);
+    const onPayload = JSON.parse(
+      (onResult as { content: { text: string }[] }).content[0].text
+    ) as Record<string, unknown>;
+    assert.equal(Object.hasOwn(onPayload, 'output'), false);
   });
 
   it('a zero-removal on search has no status line while its test twin gains the sample-only entry (review R2)', async () => {
@@ -705,11 +686,10 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       testContent[1]?.text ?? '',
       /^\[filter\] sample for filter debugging - original results, filtered results, Jev decisions: /
     );
-    const testPayload = JSON.parse(testContent[0].text) as { output: { status_line?: string } };
-    const onPayloadZero = JSON.parse(onContent[0].text) as { output: { status_line?: string } };
-    assert.equal(Object.hasOwn(testPayload.output, 'status_line'), false);
-    delete testPayload.output.status_line;
-    delete onPayloadZero.output.status_line;
+    const testPayload = JSON.parse(testContent[0].text) as Record<string, unknown>;
+    const onPayloadZero = JSON.parse(onContent[0].text) as Record<string, unknown>;
+    assert.equal(Object.hasOwn(testPayload, 'output'), false);
+    assert.equal(Object.hasOwn(onPayloadZero, 'output'), false);
     assert.deepEqual(
       testPayload,
       onPayloadZero,
@@ -761,11 +741,11 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const { sample } = readSingleSample(logDir);
     const finalReturn = sample.final_return as { payload: unknown; status_line: string | null };
     // final_return 与实际返回逐字段一致：状态行就是这条纯样本定位行
-    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
+    const payload = JSON.parse(content[0].text) as Record<string, unknown>;
     assert.deepEqual(finalReturn.payload, payload);
     assert.equal(finalReturn.status_line, content[1]?.text);
-    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
-    // final_return 与实际返回逐字段一致（payload 无 output.status_line 可言——本就无状态行）
+    assert.equal(Object.hasOwn(payload, 'output'), false);
+    // final_return 与实际返回逐字段一致（正文不附统计与状态行）
     assert.deepEqual(finalReturn.payload, JSON.parse(content[0].text));
   });
 
@@ -790,12 +770,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       ),
       JSON.stringify(content)
     );
-    const payload = JSON.parse(content[0].text) as { output: { status_line?: string } };
-    assert.ok(
-      !payload.output.status_line?.includes(
-        ' sample for filter debugging - original results, filtered results, Jev decisions: '
-      )
-    );
+    const payload = JSON.parse(content[0].text) as Record<string, unknown>;
+    assert.equal(Object.hasOwn(payload, 'output'), false);
 
     await flushWrites();
     const record = firstRecord(logDir);
@@ -817,12 +793,10 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     // 过滤后为空返回空（不补回），状态行第二块仍在（2 of 2 丢弃）
     const payload = JSON.parse(content[0].text) as {
       grounding: { generic: unknown[] };
-      sources: Record<string, unknown>;
-      output: { status_line: string };
     };
     assert.deepEqual(payload.grounding.generic, []);
-    assert.deepEqual(payload.sources, {});
-    assert.equal(Object.hasOwn(payload.output, 'status_line'), false);
+    assert.equal(Object.hasOwn(payload, 'sources'), false);
+    assert.equal(Object.hasOwn(payload, 'output'), false);
     assert.match(content[1].text, /dropped 2 of 2 sources: 2 empty/);
     assert.ok(samplePathOf(content) !== undefined);
 
@@ -1199,7 +1173,10 @@ describe(`${name} (no jev key, mode on)`, () => {
       // 零值对象——pipeline.test.ts 的未注入 classify 用例已锁该记账）
       assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
       const payload = JSON.parse((result.content as { text: string }[])[0].text);
-      assert.deepEqual(payload.grounding.generic, braveResponse.grounding.generic);
+      assert.deepEqual(payload.grounding.generic, [
+        { ...braveResponse.grounding.generic[0], age: ['2026-09-16'] },
+        braveResponse.grounding.generic[1],
+      ]);
 
       // 一行带 [jev-filter] 前缀的 stderr 说明
       assert.equal(errors.length, 1, `expected exactly one stderr line, got ${errors.length}`);

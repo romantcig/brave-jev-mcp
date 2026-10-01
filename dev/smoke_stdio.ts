@@ -14,7 +14,7 @@
  * 三模式行为断言（R-11，E 包假绿缺口的收口；期望全部来自固定发布夹具契约）：
  *   - 三模式共同：返回 content 恰两个 text 块（本夹具必有删除 → 状态行必在）；
  *     content[0] JSON 里 grounding.generic[] 的片段扁平总数独立清点（不信任
- *     output.n_snippets 自报值，同时断言两者一致）；幸存来源 URL 序与逐 URL 幸存
+ *     日志 output.n_snippets 自报值，同时断言两者一致）；幸存来源 URL 序与逐 URL 幸存
  *     片段索引身份（位置级文本形态匹配——off/test 对照期望文件 final 节、on 对照
  *     ON_KEPT_SNIPPETS 常数，F-05）；日志 sources 裁决表与 content 逐 URL 对账；
  *     临时 log_dir 恰一条
@@ -420,7 +420,6 @@ type ContentBlock = { type: string; text: string };
 
 type SmokePayload = {
   grounding?: { generic?: Array<{ url: string; snippets?: string[] }> };
-  output?: { status_line?: string; n_snippets?: number };
 };
 
 type PerSourceRecord = {
@@ -448,7 +447,7 @@ type SmokeLogRecord = {
   } | null;
   shadow_diff?: unknown;
   sources?: Array<{ url?: string; verdict?: string; snippets?: Array<{ kept?: boolean }> }>;
-  output?: unknown;
+  output?: { status_line?: string; n_snippets?: number };
   error?: unknown;
 };
 
@@ -639,11 +638,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
         );
       });
     }
-    assert.equal(
-      payload.output?.n_snippets,
-      counted,
-      'return: output.n_snippets must equal the independently counted snippets'
-    );
+    assert.equal(Object.hasOwn(payload, 'output'), false, '规模统计只写日志');
 
     // --- 4. 状态行（D-02 形状 + D-08 同源 + D-06；04-02 sample 后缀两态）---
     // default 夹具 off 无来源丢弃（12→12）只有片段删除（76→59）：dropped 段按
@@ -680,7 +675,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       `status line: the unchecked segment must not appear in ${runMode} (default fixture is fully answered) — ${statusLine}`
     );
     assert.equal(
-      Object.hasOwn(payload.output ?? {}, 'status_line'),
+      Object.hasOwn(payload, 'output'),
       false,
       '状态行只在第二个文本块返回，正文不重复携带'
     );
@@ -716,6 +711,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       'log: the record must be a success record (no error field)'
     );
     assert.ok(record.output !== undefined, 'log: the record must carry the stats body (output)');
+    assert.equal(record.output.n_snippets, counted, '日志片段计数须与实际返回逐条对账');
     assert.equal(record.mode, runMode, 'log: record mode must match the config (D-16)');
     assert.equal(
       record.model_config,
@@ -1273,24 +1269,12 @@ try {
     // T-04-01-2 双载体互证：test 与 on 的完整 content 数组逐字段相同（同夹具同
     // 预加载桩，两模式各自独立 spawn）——含每个 text 块，不是只比第一个 JSON 块。
     // 04-02 修订：比较前剥除 test 的 sample 后缀（CONTEXT 允许 test 多出样本定位
-    // 元信息；两载体同法归一——JSON 块重序列化、状态行截断，两侧同函数处理）
+    // 元信息；只截断状态行，正文没有样本后缀，两侧同函数处理）
     const testRun = runs.get('test');
     const onRun = runs.get('on');
     if (testRun !== undefined && onRun !== undefined) {
       const stripSampleSuffix = (run: ModeResult): ModeResult => {
         const content: ContentBlock[] = run.content.map((block) => ({ ...block }));
-        const jsonBlock = content[0];
-        if (jsonBlock?.type === 'text') {
-          const parsed = JSON.parse(jsonBlock.text) as { output?: { status_line?: string } };
-          const line = parsed.output?.status_line;
-          if (typeof line === 'string') {
-            const at = line.indexOf(
-              ' sample for filter debugging - original results, filtered results, Jev decisions: '
-            );
-            if (at !== -1) parsed.output.status_line = line.slice(0, at);
-          }
-          jsonBlock.text = JSON.stringify(parsed);
-        }
         const statusBlock = content[1];
         if (statusBlock?.type === 'text') {
           const at = statusBlock.text.indexOf(
