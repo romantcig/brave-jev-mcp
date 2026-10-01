@@ -194,6 +194,38 @@ describe('filterLlmContext', () => {
     assert.equal(stats.local.snippets_prefiltered, 1);
   });
 
+  for (const mode of ['off', 'test', 'on'] as const) {
+    it(`${mode} 模式的本地预筛保留引用首段事实和混合摘要整块`, async () => {
+      const snippets = [
+        [
+          '### Sources & References',
+          '- Cloudflare must obtain browser approval before issuing classical certificates · Official · Accessed September 2026',
+          '- Post quantum certificate issuance remains dependent on client support · Official · Accessed September 2026',
+        ].join('\n'),
+        [
+          '### Sources & References',
+          '- CA application Cloudflare·Official·Accessed September 2026',
+          '- CA deployment guide Cloudflare·Official·Accessed September 2026',
+          '- Cloudflare · Browser approval is still required before issuing certificates. · Accessed September 2026',
+        ].join('\n'),
+      ];
+      for (const text of snippets) {
+        const data = payload();
+        data.grounding.generic = [
+          { ...data.grounding.generic[0], title: 'Certificate evidence', snippets: [text] },
+        ];
+        const { result, stats } = await filterLlmContext(
+          data,
+          { params: { query: 'Cloudflare certificates' }, intent: 'Cloudflare certificates' },
+          { ...offConfig, mode }
+        );
+
+        assert.deepEqual(result.grounding.generic[0]?.snippets, [text]);
+        assert.equal(stats.local.snippets_prefiltered, 0);
+      }
+    });
+  }
+
   it('truncates a snippet at a paywall marker line and counts it', async () => {
     const data = payload();
     data.grounding.generic[0].snippets[0] =

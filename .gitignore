@@ -11,6 +11,7 @@ __pycache__/
 
 # private notes (Jev performance info restricted by TypeSafe MCA)
 notes/private-*.md
+filter-notes.md
 CLAUDE.local.md
 
 # planning system stays local, never published

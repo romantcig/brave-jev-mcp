@@ -174,10 +174,11 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
 const PAYWALL_MARKERS: readonly string[] = [...PAYWALL_MARKERS_EN, ...PAYWALL_MARKERS_ZH];
 
 /**
- * 步 3 片段预筛（含付费墙截断）：顺序固定为付费墙截断 → 样板行剥离 → 短且无实词 →
- * 页内逐字重复（RULES-03/ordering）。被删片段留在原位只翻 `kept`；重复判定按原序
- * 只与同来源内**已幸存**片段比，保留先出现者。`snippets_prefiltered` 记 nav 与
- * boilerplate 两类之和，`dup_removed` 单独记，`paywall_truncated` 只记截断后保留的。
+ * 步 3 片段预筛（含付费墙截断）：顺序固定为付费墙截断 → 样板行剥离（前缀行 →
+ * 标题重复行 → 引用块，见 stripBoilerplateLines）→ 短且无实词 → 页内逐字重复
+ * （RULES-03/ordering）。被删片段留在原位只翻 `kept`；重复判定按原序只与同来源内
+ * **已幸存**片段比，保留先出现者。`snippets_prefiltered` 记 nav 与 boilerplate
+ * 两类之和，`dup_removed` 单独记，`paywall_truncated` 只记截断后保留的。
  */
 const prefilterSnippets = (
   table: WorkSource[],

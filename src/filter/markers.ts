@@ -53,6 +53,9 @@ export const BOILERPLATE_PREFIXES: readonly string[] = [
   'On this page',
   'Related articles',
   'Read next',
+  // 媒体页内嵌的付费情报服务推广（GlobalData 系媒体网络通用 CTA 块，2026-10 样本）
+  'Go deeper with GlobalData',
+  'Access deeper industry intelligence',
   // 中文条目
   '分享',
   '广告',

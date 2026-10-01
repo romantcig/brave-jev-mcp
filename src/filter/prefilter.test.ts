@@ -6,6 +6,7 @@ import {
   isNearDuplicate,
   isShortWithoutTerms,
   isTitleOnly,
+  isTitleRepeatLine,
   matchesPrefix,
   MIN_SHINGLES,
   NEAR_DUP_COVERAGE,
@@ -14,6 +15,8 @@ import {
   SHINGLE_N,
   SHORT_SNIPPET_MAX,
   stripBoilerplateLines,
+  TITLE_LINE_MIN,
+  TITLE_RESIDUAL_MAX,
 } from './prefilter.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 
@@ -305,5 +308,392 @@ describe('isNearDuplicate', () => {
     const survivor = shingles(tokenize(SAMPLE4_SKILL_0), SHINGLE_N);
 
     assert.equal(isNearDuplicate(candidate, survivor), true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 第二十轮（2026-10-01 四类漏网）：标题重复行、引用块
+//
+// 以下合成片段按 2026-10-01 真实搜索样本（仓库外落盘）的漏网形态**改写**而成，
+// 形状保真、正文不入库。GPT-6 审核 F2 修正后：标题行只在同片段出现 ≥2 次才剥
+// （保留首次，唯一命中可能是面包屑后的正文 H1 或代码区域里的同名命令），署名残差
+// 必须带署名/分隔记号；引用块复审 R1 收紧为"间隔号分段后除首段外全是 ≤20 码元的
+// 无标点来源标签 + 条目 ≥2 整块统一"，摘要条目（含无句号与中文）整块保留；复审
+// R2 后标题与引用共用代码区域识别（围栏字符/长度/闭栏规则 + 缩进代码）。乱码碎词
+// 原型经审核证实误删真实代码与品牌名短句（F1），整条撤下未接入。
+// ---------------------------------------------------------------------------
+
+describe('stripBoilerplateLines — title-repeat lines (第二十轮)', () => {
+  const NEWS_TITLE = 'Cloudflare to launch public certificate authority with quantum-safe tech';
+
+  it('strips repeats after the first when the title line occurs twice or more (byline tolerance)', () => {
+    // 投资站形态：Brave 的 title 字段带署名后缀（by 记号），片段内三次重复不带；
+    // 重复 ≥2 剥首次之后的所有命中——×3 堆叠降为 ×1 + 发布时间行
+    const snippet = [
+      `# ${NEWS_TITLE}`,
+      'Published Sep 29, 2026, 09:04 AM',
+      NEWS_TITLE,
+      NEWS_TITLE,
+    ].join('\n');
+
+    const { text, emptied } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      `${NEWS_TITLE} By Investing.com`
+    );
+
+    assert.equal(text, `# ${NEWS_TITLE}\nPublished Sep 29, 2026, 09:04 AM`);
+    assert.equal(emptied, false);
+  });
+
+  it('empties a pure title stack so the whole snippet dies (isTitleOnly fallback)', () => {
+    // aivy 形态：标题连抄两遍、无任何正文——剥重复后只剩标题行，按标题唯一语义整片删
+    const { text, emptied } = stripBoilerplateLines(
+      `${NEWS_TITLE}\n${NEWS_TITLE}`,
+      BOILERPLATE_PREFIXES,
+      NEWS_TITLE
+    );
+
+    assert.equal(text, NEWS_TITLE);
+    assert.equal(emptied, true);
+  });
+
+  it('keeps the H1 lead and byline while stripping the repeated title (ua.news fixture shape)', () => {
+    // 夹具实测形态：H1 + 署名行 + 重复标题——首次出现是正文结构，重复的才剥
+    const snippet = [
+      `# ${NEWS_TITLE}`,
+      'Lev Shevtsov 18 September 2026 21:58',
+      '',
+      NEWS_TITLE,
+    ].join('\n');
+
+    const { text, emptied } = stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, NEWS_TITLE);
+
+    assert.equal(text, `# ${NEWS_TITLE}\nLev Shevtsov 18 September 2026 21:58`);
+    assert.equal(emptied, false);
+  });
+
+  it('keeps a snippet whose only title line is the first non-empty line (H1 lead)', () => {
+    // 正常页面片段以自己的 H1 开头是 2026-10 语料 114 个片段的形态，绝不碰
+    const snippet = [
+      '# Reddit API Shut Down in 2026: What Still Works',
+      'Reddit killed unauthenticated requests in May 2026 — here is what still works now.',
+    ].join('\n');
+
+    const { text, emptied } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      'Reddit API Shut Down in 2026: What Still Works'
+    );
+
+    assert.equal(text, snippet);
+    assert.equal(emptied, false);
+  });
+
+  it('keeps a single trailing title line: one occurrence proves no repetition (audit F2)', () => {
+    // "非第一行"不是重复证明——正文后的唯一标题行可能是页面结构的一部分，
+    // 审核反例（围栏代码里的同名命令）与面包屑 H1 都靠这条保命
+    const snippet = [
+      'The announcement comes as quantum computers capable of breaking encryption are anticipated within years.',
+      NEWS_TITLE,
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, NEWS_TITLE);
+
+    assert.equal(text, snippet);
+  });
+
+  it('keeps a breadcrumb-led snippet whose only H1 equals the source title (audit F2)', () => {
+    // The Register 夹具实测形态：栏目标签在 H1 之前，H1 是正文唯一的标题行
+    const snippet = [
+      'ai and ml',
+      '# TypeSafe AI debuts model for machines that plays Doom',
+      "Jev doesn't chat. It produces typed probabilistic decisions.",
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      'TypeSafe AI debuts model for machines that plays Doom'
+    );
+
+    assert.equal(text, snippet);
+  });
+
+  it('keeps fenced code whose command equals the source title, even twice (audit F2)', () => {
+    // 审核反例：来源标题 git status --short，围栏代码里同名命令出现两次——
+    // 围栏内的行不是 SEO 堆叠
+    const snippet = ['```sh', 'git status --short', 'echo done', 'git status --short', '```'].join(
+      '\n'
+    );
+
+    const { text } = stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'git status --short');
+
+    assert.equal(text, snippet);
+  });
+
+  it('tracks fence length and char: inner triple fence inside quadruple fence is content (复审 R2)', () => {
+    // 外层四反引号包"用三反引号演示围栏"的 Markdown 文档——内层围栏与它的闭栏
+    // 都是示例内容，布尔翻转会把内层第二次出现的命令误当堆叠剥掉
+    const snippet = [
+      '````markdown',
+      '```sh',
+      'git status --short',
+      'echo done',
+      'git status --short',
+      '```',
+      '````',
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'git status --short');
+
+    assert.equal(text, snippet);
+  });
+
+  it('does not let a tilde fence be closed by backticks and protects indented code (复审 R2)', () => {
+    const tildeSnippet = [
+      '~~~~',
+      '```sh',
+      'git status --short',
+      '```',
+      'git status --short',
+      '~~~~',
+    ].join('\n');
+    assert.equal(
+      stripBoilerplateLines(tildeSnippet, BOILERPLATE_PREFIXES, 'git status --short').text,
+      tildeSnippet
+    );
+
+    // 四空格缩进代码（无围栏）里的重复命令同样保护
+    const indented = [
+      'Try it:',
+      '    git status --short',
+      '    echo done',
+      '    git status --short',
+    ].join('\n');
+    assert.equal(
+      stripBoilerplateLines(indented, BOILERPLATE_PREFIXES, 'git status --short').text,
+      indented
+    );
+  });
+
+  it('rejects byline matches whose residual is longer than the line or lacks a marker', () => {
+    // 回放实测回归："- reddit API shut down" 这类短标签行与 title 的前缀残差
+    // （26 码元）比行（20 码元）还长——不是署名；": 10 outlets compared" 是副标题
+    // 续写，长度条件证明不了署名，必须带 by/via/分隔记号（审核 F2）
+    assert.equal(TITLE_LINE_MIN, 20);
+    assert.equal(TITLE_RESIDUAL_MAX, 40);
+    assert.equal(
+      isTitleRepeatLine('reddit API shut down', 'reddit api shut down in 2026: what still works'),
+      false
+    );
+    assert.equal(
+      isTitleRepeatLine(
+        'Google Unveils Gemini 4 Argon With 1M-Token Limit, Launching Soon for Subscribers',
+        'google unveils gemini 4 argon with 1m-token limit, launching soon for subscribers: 10 outlets compared'
+      ),
+      false
+    );
+    assert.equal(
+      isTitleRepeatLine(NEWS_TITLE, `${NEWS_TITLE.toLowerCase()} by investing.com`),
+      true
+    );
+  });
+});
+
+describe('stripBoilerplateLines — reference blocks (第二十轮)', () => {
+  it('strips a heading plus its signature items and lets the orphan heading die downstream', () => {
+    // my-ssl 形态：列表符 + 间隔号 + Accessed 月 年 的纯书目条目整块剥掉，
+    // 剩下的孤立小节标题由短无实词兜底
+    const snippet = [
+      '## Next steps',
+      '### Sources & References',
+      '- Building a certificate authority for the whole Internet Cloudflare·Official·Accessed September 2026',
+      '- Building a post-quantum certificate authority Cloudflare Investor Relations·Official·Accessed September 2026',
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      'Cloudflare Is Becoming a Certificate Authority'
+    );
+
+    assert.equal(text, '## Next steps');
+  });
+
+  it('keeps the whole block when an item carries a factual summary (audit F3)', () => {
+    // 审核反例：条目本体含句读 = 有信息量的内容说明，格式签名证明不了它是占位符；
+    // 拿不准就整块保留
+    const snippet = [
+      '### Sources & References',
+      '- Cloudflare · The acquisition transfers an existing trust anchor; it does not automatically enable post-quantum browser certificates. · Accessed September 2026',
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      'Cloudflare Is Becoming a Certificate Authority'
+    );
+
+    assert.equal(text, snippet);
+  });
+
+  it('keeps summaries without an English period and Chinese summaries (复审 R1)', () => {
+    // 复审反例：去掉英文句号、换成中文句读，信息量不变——句读判据之外的
+    // 分段结构判据（长文本落在中间段）必须同样拦住
+    const periodless = [
+      '### Sources & References',
+      '- Cloudflare · The acquisition transfers an existing trust anchor; it does not automatically enable post-quantum browser certificates · Accessed September 2026',
+    ].join('\n');
+    const chinese = [
+      '### Sources & References',
+      '- Cloudflare · 此次交易收购已有信任锚，不会自动启用后量子浏览器证书。 · Accessed September 2026',
+    ].join('\n');
+
+    assert.equal(
+      stripBoilerplateLines(
+        periodless,
+        BOILERPLATE_PREFIXES,
+        'Cloudflare Is Becoming a Certificate Authority'
+      ).text,
+      periodless
+    );
+    assert.equal(
+      stripBoilerplateLines(
+        chinese,
+        BOILERPLATE_PREFIXES,
+        'Cloudflare Is Becoming a Certificate Authority'
+      ).text,
+      chinese
+    );
+  });
+
+  it('keeps the whole block when a uniform prefix block is followed by a summary item (复审 R1)', () => {
+    // "整块保护"合同：先收集整块再决定——纯书目条目 + 带摘要条目混排时，
+    // 标题行与纯书目条目不许被先行剥掉
+    const snippet = [
+      '### Sources & References',
+      '- Building a certificate authority for the whole Internet Cloudflare·Official·Accessed September 2026',
+      '- Cloudflare · The acquisition transfers an existing trust anchor; it does not automatically enable post-quantum browser certificates. · Accessed September 2026',
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      'Cloudflare Is Becoming a Certificate Authority'
+    );
+
+    assert.equal(text, snippet);
+  });
+
+  for (const [label, summaries] of [
+    [
+      '英文条件与依赖关系',
+      [
+        'Cloudflare must obtain browser approval before issuing classical certificates',
+        'Post quantum certificate issuance remains dependent on client support',
+      ],
+    ],
+    [
+      '英文否定与限制',
+      [
+        'Purchasing a root does not automatically enable browser certificate issuance',
+        'Classical certificates become available only after browser approval',
+      ],
+    ],
+    ['中文无标点摘要', ['签发传统证书需要先取得浏览器批准', '后量子证书仍依赖客户端支持']],
+  ] as const) {
+    it(`保留首段含${label}的多条引用`, () => {
+      const snippet = [
+        '### Sources & References',
+        ...summaries.map((summary) => `- ${summary} · Official · Accessed September 2026`),
+      ].join('\n');
+
+      assert.deepEqual(stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'CA evidence'), {
+        text: snippet,
+        emptied: false,
+      });
+    });
+  }
+
+  const twoReferences = [
+    '### Sources & References',
+    '- CA application Cloudflare·Official·Accessed September 2026',
+    '- CA deployment guide Cloudflare·Official·Accessed September 2026',
+  ];
+
+  for (const [label, explanation] of [
+    [
+      '第三条含摘要',
+      '- Cloudflare · The acquisition transfers an existing trust anchor; browser approval is still required. · Accessed September 2026',
+    ],
+    ['条目后有说明段', 'Browser approval is still required before certificate issuance.'],
+    ['下级小节含说明', '#### Limits\nBrowser approval is still required.'],
+  ]) {
+    it(`两条纯书目后${label}时整块保留`, () => {
+      const snippet = [...twoReferences, '', explanation].join('\n');
+
+      assert.equal(
+        stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'CA evidence').text,
+        snippet
+      );
+    });
+  }
+
+  it('完整纯书目块在下一同级小节前结束，保留后续小节', () => {
+    const nextSection = '### Deployment\nCloudflare still needs browser approval.';
+    const snippet = [...twoReferences, '', nextSection].join('\n');
+
+    assert.equal(
+      stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'CA evidence').text,
+      nextSection
+    );
+  });
+
+  it('keeps a single-item reference block (复审 R1: 模板依据不足)', () => {
+    // 一条条目构不成"统一模板列表"的证据，保守保留
+    const snippet = [
+      '### Sources & References',
+      '- Building a certificate authority for the whole Internet Cloudflare·Official·Accessed September 2026',
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      'Cloudflare Is Becoming a Certificate Authority'
+    );
+
+    assert.equal(text, snippet);
+  });
+
+  it('keeps a reference example inside a code fence (复审 R2)', () => {
+    // 围栏里的 Sources & References 示例是文档内容，标题与条目都不参与判定
+    const snippet = [
+      '```markdown',
+      '### Sources & References',
+      '- CA application Cloudflare·Official·Accessed September 2026',
+      '- CA guide Cloudflare·Official·Accessed September 2026',
+      '```',
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(
+      snippet,
+      BOILERPLATE_PREFIXES,
+      'Cloudflare Is Becoming a Certificate Authority'
+    );
+
+    assert.equal(text, snippet);
+  });
+
+  it('leaves a heading alone when no item carries the reference signature', () => {
+    // 无间隔号、无 accessed/年份的普通列表是真实内容，双条件不齐就不动
+    const snippet = [
+      '## Further reading',
+      '- A deep essay about certificate lifetimes and revocation',
+    ].join('\n');
+
+    const { text } = stripBoilerplateLines(snippet, BOILERPLATE_PREFIXES, 'Some title');
+
+    assert.equal(text, snippet);
   });
 });
