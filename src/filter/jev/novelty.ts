@@ -2,9 +2,13 @@
  * 步 7 后半：跨来源 5-gram 逐字去重与片段级事实指纹增量新颖度（VERDICT-03）。
  *
  * 只依赖 tokenize.ts / prefilter.ts 的度量导出与最小行类型，不 import pipeline.ts
- * （budget.ts 先例：最小行类型结构上满足管道工作表，杜绝循环导入）。按播种序
+ * （budget.ts 先例：最小行类型结构上满足管道工作表，杜绝循环导入）。按 Brave 原序
  * 遍历只翻 `kept` / `reason` 标记，不 sort、不 filter 出新数组（RULES-08）——
  * 幸存者保持 Brave 原序由调用方重建输出保证。
+ *
+ * 播种序即 Brave 原序（filter-rules-5，2026-10-01）：v3 曾按 is_primary 概率降序
+ * 播种，两轮五题删除实验的七个场景消融均未显示该排序的独立输出收益，随当事方题
+ * 退出请求一并取消——去重谁先参与与最终输出排列都按原始来源索引。
  *
  * 依据：notes/dedup-and-rewrite-policy.md（元素定义、算法、播种顺序、论证段保护——
  * 逐字权威）、02-RESEARCH.md「片段级：score 删除与指纹新颖度」、用户已定决策 5
@@ -14,7 +18,6 @@
 import { isNearDuplicate, SHINGLE_N } from '../prefilter.js';
 import { STOPWORDS, shingles, tokenize } from '../tokenize.js';
 import type {
-  FilterMode,
   FilterStats,
   JevThresholds,
   NoveltySourceDetail,
@@ -41,9 +44,8 @@ export type NoveltySourceRow = {
 
 /**
  * judged 行的最小形状：runJevStage 的 per_source 行（`JevPerSourceStats`）结构上
- * 满足。只读 `status` 与 `answers` 里的 is_primary（播种序）与
- * has_original_reasoning（论证段保护）——failed/skipped/breaker_open 来源按未判定
- * 殿后（保守，A3）。
+ * 满足。只读 `status` 与 `answers` 里的 has_original_reasoning（论证段保护）——
+ * failed/skipped/breaker_open 来源无论证答案，不享受保护。
  */
 export type NoveltyJudgedRow = {
   status: 'answered' | 'failed' | 'skipped' | 'breaker_open';
@@ -186,58 +188,8 @@ export function extractFingerprints(text: string): Set<string> {
   return fp;
 }
 
-/** 明确偏向非一手的概率区间只作同组处理，不比较组内微差。 */
-const NON_PRIMARY_TIE_MAX = 0.1;
-
-/** 一手优先级：明确非一手（概率 <= 0.1）同组沿用 Brave 序，其余按原概率排序，无效答案归未判定组。 */
-const primaryOf = (
-  judged: ReadonlyMap<string, NoveltyJudgedRow> | undefined,
-  index: number
-): number | undefined => {
-  if (judged === undefined) return undefined;
-  const row = judged.get(`s${index}`);
-  if (row === undefined || row.status !== 'answered') return undefined;
-  const probability = row.answers?.is_primary;
-  return probability !== undefined &&
-    Number.isFinite(probability) &&
-    probability >= 0 &&
-    probability <= 1
-    ? probability > NON_PRIMARY_TIE_MAX
-      ? probability
-      : 0
-    : undefined;
-};
-
 /**
- * 播种顺序（与输出顺序分开）：off 模式或无 judged 答案时即 Brave 序；
- * test 与 on 对 is_primary > 0.1 的来源按概率降序，其余已判定来源保持 Brave 序。
- * 同分按 Brave 序——比较器显式加 Brave 序
- * 平局裁决，不依赖引擎排序稳定性；未判定来源排已判定之后按 Brave 序（保守：
- * 不抢先占有事实扩大删除面，A3）。
- * @returns 参与播种的 keep 来源 index 序列（被丢来源不参与）
- * @example 两来源 is_primary 0.9 与 0.5 → 0.9 先播种
- * @example off 模式（judged 传了也忽略）→ 全 Brave 序
- */
-export function seedingOrder(
-  table: ReadonlyArray<NoveltySourceRow>,
-  judged: ReadonlyMap<string, NoveltyJudgedRow> | undefined,
-  mode: FilterMode
-): number[] {
-  const keepIndices = table.filter((entry) => entry.verdict === 'keep').map((entry) => entry.index);
-  if (mode === 'off' || judged === undefined) return keepIndices;
-
-  const judgedInBraveOrder = keepIndices.filter((index) => primaryOf(judged, index) !== undefined);
-  const unjudgedInBraveOrder = keepIndices.filter(
-    (index) => primaryOf(judged, index) === undefined
-  );
-  const primaryDescending = [...judgedInBraveOrder].sort(
-    (a, b) => (primaryOf(judged, b) ?? 0) - (primaryOf(judged, a) ?? 0) || a - b
-  );
-  return [...primaryDescending, ...unjudgedInBraveOrder];
-}
-
-/**
- * 步 7 后半：按播种序遍历 keep 来源的幸存片段（score 删除后的 kept 片段）。
+ * 步 7 后半：按 Brave 原序遍历 keep 来源的幸存片段（score 删除后的 kept 片段）。
  *
  * 每片段的判定顺序固定：
  * 1. **跨来源 5-gram 逐字 dup 先行**（通稿转载、页内标题导语重抽）——片段的
@@ -261,13 +213,11 @@ export function seedingOrder(
 export function applyNovelty(
   table: NoveltySourceRow[],
   judged: ReadonlyMap<string, NoveltyJudgedRow> | undefined,
-  mode: FilterMode,
   thresholds: JevThresholds,
   stats: FilterStats,
   onNoveltyDeletion?: (info: NoveltyDeletionInfo) => void
 ): ReadonlyMap<number, JevSideDeletionFlags> {
   const flags = new Map<number, JevSideDeletionFlags>();
-  const byIndex = new Map(table.map((entry) => [entry.index, entry]));
   const shingleUnion = new Set<string>();
   const fingerprintUnion = new Set<string>();
 
@@ -310,9 +260,9 @@ export function applyNovelty(
     );
   };
 
-  for (const index of seedingOrder(table, judged, mode)) {
-    const sourceRow = byIndex.get(index);
-    if (sourceRow === undefined || sourceRow.verdict !== 'keep') continue;
+  for (const sourceRow of table) {
+    if (sourceRow.verdict !== 'keep') continue;
+    const index = sourceRow.index;
     const exempt = reasoningProtected(index);
 
     for (const snippet of sourceRow.snippets) {
@@ -358,8 +308,8 @@ export function applyNovelty(
     }
   }
   // 明细写回（替换式，绝不 mutate 载体浅拷贝共享的 zeroLocal.novelty 空数组）；
-  // 条目按首次命中删除的顺序排列——off 按 Brave 序，test 与 on 按 is_primary 播种
-  // 序；统计投影与输出仍按 Brave 序，不为此重排数据（C-03）
+  // 条目按首次命中删除的顺序排列——即 Brave 原序；统计投影与输出同序，不为此重排
+  // 数据（C-03）
   if (noveltyDetails.length > 0) {
     stats.local.novelty = noveltyDetails;
   }

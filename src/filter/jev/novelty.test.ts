@@ -4,7 +4,6 @@ import { DEFAULT_THRESHOLDS } from './questions.js';
 import {
   applyNovelty,
   extractFingerprints,
-  seedingOrder,
   type JevSideDeletionFlags,
   type NoveltyJudgedRow,
   type NoveltySnippetRow,
@@ -14,8 +13,8 @@ import { createFilterStats } from '../stats.js';
 import type { FilterStats, JevThresholds } from '../types.js';
 
 // ---------------------------------------------------------------------------
-// 纯函数直测（无需网络与夹具）：五类指纹元素正反例、判据与保护边界、播种序、
-// 跨源 5-gram 先于指纹。依据 notes/dedup-and-rewrite-policy.md（逐字权威）。
+// 纯函数直测（无需网络与夹具）：五类指纹元素正反例、判据与保护边界、Brave 原序
+// 播种、跨源 5-gram 先于指纹。依据 notes/dedup-and-rewrite-policy.md（逐字权威）。
 // ---------------------------------------------------------------------------
 
 const thresholds: JevThresholds = { ...DEFAULT_THRESHOLDS };
@@ -141,61 +140,6 @@ describe('extractFingerprints', () => {
   });
 });
 
-describe('seedingOrder', () => {
-  it('seeds answered sources by is_primary descending', () => {
-    const table = [source(0, []), source(1, [])];
-    const judged = judgedMap({
-      s0: answered({ is_primary: 0.5 }),
-      s1: answered({ is_primary: 0.9 }),
-    });
-
-    assert.deepEqual(seedingOrder(table, judged, 'on'), [1, 0]);
-  });
-
-  it('breaks is_primary ties by Brave order', () => {
-    const table = [source(0, []), source(1, [])];
-    const judged = judgedMap({
-      s0: answered({ is_primary: 0.8 }),
-      s1: answered({ is_primary: 0.8 }),
-    });
-
-    assert.deepEqual(seedingOrder(table, judged, 'on'), [0, 1]);
-  });
-
-  it('places unjudged sources after judged ones in Brave order', () => {
-    const table = [source(0, []), source(1, []), source(2, []), source(3, [])];
-    const judged = judgedMap({
-      s0: answered({ is_primary: 0.9 }),
-      s1: { status: 'failed' },
-      s2: answered({ is_primary: 0.5 }),
-      s3: answered({}), // answered 但无 is_primary 答案 → 未判定组
-    });
-
-    assert.deepEqual(seedingOrder(table, judged, 'on'), [0, 2, 1, 3]);
-  });
-
-  it('uses pure Brave order in off mode even when judged rows exist', () => {
-    const table = [source(0, []), source(1, [])];
-    const judged = judgedMap({
-      s0: answered({ is_primary: 0.5 }),
-      s1: answered({ is_primary: 0.9 }),
-    });
-
-    assert.deepEqual(seedingOrder(table, judged, 'off'), [0, 1]);
-    assert.deepEqual(seedingOrder(table, undefined, 'on'), [0, 1]);
-  });
-
-  it('excludes dropped sources from the seeding order', () => {
-    const table = [
-      source(0, [], { verdict: 'drop', reason: 'off_topic' }),
-      source(1, []),
-      source(2, []),
-    ];
-
-    assert.deepEqual(seedingOrder(table, undefined, 'on'), [1, 2]);
-  });
-});
-
 describe('applyNovelty', () => {
   it('keeps a snippet with fewer than MIN_FACTS fingerprints even when nothing is novel', () => {
     // s0 播种 3 个事实；s1 同三事实改写 → fp.size 3 < MIN_FACTS，不判重复（保守留）
@@ -205,7 +149,7 @@ describe('applyNovelty', () => {
     ];
     const stats = makeStats();
 
-    applyNovelty(table, undefined, 'off', thresholds, stats);
+    applyNovelty(table, undefined, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, true);
     assert.equal(table[1].snippets[0].reason, undefined);
@@ -216,7 +160,7 @@ describe('applyNovelty', () => {
     const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
     const stats = makeStats();
 
-    applyNovelty(table, undefined, 'off', thresholds, stats);
+    applyNovelty(table, undefined, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, false);
     assert.equal(table[1].snippets[0].reason, 'novelty');
@@ -227,7 +171,7 @@ describe('applyNovelty', () => {
     const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_NOVEL1)])];
     const stats = makeStats();
 
-    applyNovelty(table, undefined, 'off', thresholds, stats);
+    applyNovelty(table, undefined, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, false);
     assert.equal(table[1].snippets[0].reason, 'novelty');
@@ -238,7 +182,7 @@ describe('applyNovelty', () => {
     const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_NOVEL2)])];
     const stats = makeStats();
 
-    applyNovelty(table, undefined, 'off', thresholds, stats);
+    applyNovelty(table, undefined, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, true);
     assert.equal(stats.local.novelty_removed, 0);
@@ -250,7 +194,7 @@ describe('applyNovelty', () => {
     const judged = judgedMap({ s1: answered({ has_original_reasoning: 0.7 }) });
     const stats = makeStats();
 
-    applyNovelty(table, judged, 'on', thresholds, stats);
+    applyNovelty(table, judged, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, true);
     assert.equal(table[1].snippets[0].reason, undefined);
@@ -274,7 +218,7 @@ describe('applyNovelty', () => {
     ];
     const stats = makeStats();
 
-    applyNovelty(table, undefined, 'off', thresholds, stats);
+    applyNovelty(table, undefined, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, false);
     assert.equal(table[1].snippets[1].kept, true);
@@ -289,7 +233,7 @@ describe('applyNovelty', () => {
     const judged = judgedMap({ s1: answered({ has_original_reasoning: 0.69 }) });
     const stats = makeStats();
 
-    applyNovelty(table, judged, 'on', thresholds, stats);
+    applyNovelty(table, judged, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, false);
     assert.equal(table[1].snippets[0].reason, 'novelty');
@@ -302,7 +246,7 @@ describe('applyNovelty', () => {
     const judged = judgedMap({ s1: answered({ has_original_reasoning: 0.7 }) });
     const stats = makeStats();
 
-    applyNovelty(table, judged, 'on', thresholds, stats);
+    applyNovelty(table, judged, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, false);
     assert.equal(table[1].snippets[0].reason, 'dup');
@@ -315,7 +259,7 @@ describe('applyNovelty', () => {
     const table = [source(0, [snippet(0, DUPFP_A)]), source(1, [snippet(0, DUPFP_B)])];
     const stats = makeStats();
 
-    applyNovelty(table, undefined, 'off', thresholds, stats);
+    applyNovelty(table, undefined, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, false);
     assert.equal(table[1].snippets[0].reason, 'dup');
@@ -323,8 +267,10 @@ describe('applyNovelty', () => {
     assert.equal(stats.local.novelty_removed, 0);
   });
 
-  it('seeds by is_primary order so the higher-primary source keeps its facts', () => {
-    // s1 primary 0.9 先播种并幸存；s0（Brave 序在前但 primary 0.5）同事实改写被删
+  it('processes sources in Brave order and ignores is_primary answers entirely', () => {
+    // s0 Brave 在前但 is_primary 0.5，s1 is_primary 0.9——filter-rules-5 起排序取消，
+    // 旧答案里的当事方概率不影响去重谁先参与：s0 先播种幸存，s1 同事实改写被删
+    // （与 filter-rules-4 相反：当时 s1 按概率先播种幸存、s0 被删）
     const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
     const judged = judgedMap({
       s0: answered({ is_primary: 0.5 }),
@@ -332,26 +278,28 @@ describe('applyNovelty', () => {
     });
     const stats = makeStats();
 
-    applyNovelty(table, judged, 'on', thresholds, stats);
-
-    assert.equal(table[1].snippets[0].kept, true);
-    assert.equal(table[0].snippets[0].kept, false);
-    assert.equal(table[0].snippets[0].reason, 'novelty');
-    assert.equal(stats.local.novelty_removed, 1);
-  });
-
-  it('seeds in Brave order in off mode even when judged rows exist', () => {
-    const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
-    const judged = judgedMap({
-      s0: answered({ is_primary: 0.5 }),
-      s1: answered({ is_primary: 0.9 }),
-    });
-    const stats = makeStats();
-
-    applyNovelty(table, judged, 'off', thresholds, stats);
+    applyNovelty(table, judged, thresholds, stats);
 
     assert.equal(table[0].snippets[0].kept, true);
     assert.equal(table[1].snippets[0].kept, false);
+    assert.equal(table[1].snippets[0].reason, 'novelty');
+    assert.equal(stats.local.novelty_removed, 1);
+  });
+
+  it('lets a failed source occupy its Brave position with the failure-keep boundary intact', () => {
+    // s0 请求失败按"留"（SAFE-01）；未判定殿后分组取消后，它按 Brave 原位先参与
+    // 去重——s1 的同事实改写被删，而 applyNovelty 绝不翻来源级 verdict
+    const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
+    const judged = judgedMap({ s0: { status: 'failed' } });
+    const stats = makeStats();
+
+    applyNovelty(table, judged, thresholds, stats);
+
+    assert.equal(table[0].verdict, 'keep');
+    assert.equal(table[0].snippets[0].kept, true);
+    assert.equal(table[1].snippets[0].kept, false);
+    assert.equal(table[1].snippets[0].reason, 'novelty');
+    assert.equal(stats.local.novelty_removed, 1);
   });
 
   it('ignores dropped sources when seeding and deleting', () => {
@@ -362,7 +310,7 @@ describe('applyNovelty', () => {
     ];
     const stats = makeStats();
 
-    const markers = applyNovelty(table, undefined, 'off', thresholds, stats);
+    const markers = applyNovelty(table, undefined, thresholds, stats);
 
     assert.equal(table[1].snippets[0].kept, true);
     assert.equal(stats.local.novelty_removed, 0);
@@ -382,7 +330,6 @@ describe('applyNovelty', () => {
     const markers: ReadonlyMap<number, JevSideDeletionFlags> = applyNovelty(
       table,
       undefined,
-      'off',
       thresholds,
       stats
     );
@@ -401,7 +348,7 @@ describe('applyNovelty', () => {
     ];
     const stats = makeStats();
 
-    applyNovelty(table, undefined, 'off', thresholds, stats);
+    applyNovelty(table, undefined, thresholds, stats);
 
     assert.deepEqual(
       table.map((entry) => entry.index),
@@ -412,42 +359,5 @@ describe('applyNovelty', () => {
     assert.equal(table[0].snippets[0].kept, true);
     assert.equal(table[0].snippets[1].kept, true);
     assert.equal(table[1].snippets[0].kept, false);
-  });
-});
-
-describe('低置信一手排序回归', () => {
-  it('0.08 与 0.09 的变化不再让后面的来源抢先参与去重', () => {
-    const table = [source(0, []), source(1, []), source(2, [])];
-    for (const p of [0.08, 0.09, 0.1]) {
-      const judged = judgedMap({
-        s0: answered({ is_primary: 0.08 }),
-        s1: answered({ is_primary: p }),
-        s2: answered({ is_primary: 0.9 }),
-      });
-      assert.deepEqual(seedingOrder(table, judged, 'test'), [2, 0, 1]);
-      assert.deepEqual(seedingOrder(table, judged, 'on'), [2, 0, 1]);
-    }
-  });
-  it('后面的弱分数来源不能通过元素重合删掉 Brave 在前的报道', () => {
-    const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
-    applyNovelty(
-      table,
-      judgedMap({ s0: answered({ is_primary: 0.08 }), s1: answered({ is_primary: 0.09 }) }),
-      'test',
-      thresholds,
-      makeStats()
-    );
-    assert.equal(table[0].snippets[0].kept, true);
-    assert.equal(table[1].snippets[0].kept, false);
-  });
-  it('越界概率属于未判定组，不能取得一手优先权', () => {
-    assert.deepEqual(
-      seedingOrder(
-        [source(0, []), source(1, [])],
-        judgedMap({ s0: answered({ is_primary: 2 }), s1: answered({ is_primary: 0.1 }) }),
-        'on'
-      ),
-      [1, 0]
-    );
   });
 });

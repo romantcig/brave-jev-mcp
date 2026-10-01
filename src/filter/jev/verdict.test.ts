@@ -22,18 +22,14 @@ import type { VerdictSourceRow } from './verdict.js';
 // 构造辅助：最小行类型工作表 + 合成 judged 答案 + 带 per_source 行的 stats
 // ---------------------------------------------------------------------------
 
-/** 十道来源级 noul 概率的合成基底：全 0（全部远离丢弃门槛）。 */
+/** 六道来源级 noul 概率的合成基底：全 0（全部远离丢弃门槛）。 */
 const ZERO_ANSWERS: Readonly<Record<string, number>> = Object.freeze({
-  worth_keeping: 0,
-  is_primary: 0,
   has_original_reasoning: 0,
-  is_attributed_rewrite: 0,
   is_template_filler: 0,
   is_off_topic: 0,
   is_listing: 0,
   self_deprecated: 0,
   stale: 0,
-  paywalled: 0,
 });
 
 /** 在全 0 基底上覆写指定题的概率。 */
@@ -199,7 +195,10 @@ describe('applySourceVerdicts', () => {
     assert.equal(row.verdict, 'keep');
   });
 
-  it('never drops on the record-only questions no matter how high they answer', () => {
+  it('ignores legacy v3 answers no matter how high they answer (historical replay defense)', () => {
+    // 2026-10-01 六题精简后 worth_keeping / is_attributed_rewrite / paywalled 不再
+    // 提问；旧十题录制回放时 judged.answers 可能仍带旧键高概率——裁决链只读六键，
+    // 绝不因额外旧键丢弃来源（旧键原样保留在传入的 answers 对象里）
     const { table, row, stats } = singleSource({
       is_attributed_rewrite: 0.99,
       paywalled: 0.99,
@@ -208,7 +207,6 @@ describe('applySourceVerdicts', () => {
     applySourceVerdicts(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
     assert.equal(table[0].verdict, 'keep');
     assert.equal(row.verdict, 'keep');
-    // 概率照记进 per_source.answers（VERDICT-01 只记不丢）
     assert.equal(row.answers?.is_attributed_rewrite, 0.99);
     assert.equal(row.answers?.paywalled, 0.99);
     assert.equal(row.answers?.worth_keeping, 0.99);

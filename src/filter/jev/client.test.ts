@@ -135,14 +135,14 @@ describe('buildRequest', () => {
     assert.equal(request.questions, questions);
   });
 
-  it('carries ten source-level questions plus one per snippet, each prefixed with the global instruction', () => {
+  it('carries six source-level questions plus one per snippet, each prefixed with the global instruction', () => {
     const request = buildRequest(
       buildState('s1', 'https://b.example/', 'T', ['a', 'b', 'c'], 'q', 'i'),
       buildQuestions(3),
       DEFAULT_JEV_MODEL
     );
 
-    assert.equal(Object.keys(request.questions).length, 13);
+    assert.equal(Object.keys(request.questions).length, 9);
     for (const question of Object.values(request.questions)) {
       assert.match(
         question.instructions,
@@ -329,7 +329,7 @@ for (const [name, recording] of Object.entries({
       assert.equal(jev.input_tokens, expectedSum);
     });
 
-    it('records the ten source-level probabilities per source exactly as recorded', () => {
+    it('records the current source-level probabilities per source exactly as recorded', () => {
       for (const row of jev.per_source) {
         const entry = recording.results[row.src];
         assert.ok(entry, `recording missing ${row.src}`);
@@ -467,7 +467,7 @@ describe('createJevClassifier', () => {
       };
       assert.equal(body.model, DEFAULT_JEV_MODEL);
       assert.deepEqual(body.state, state);
-      assert.equal(Object.keys(body.questions).length, 12);
+      assert.equal(Object.keys(body.questions).length, 8);
     } finally {
       globalThis.fetch = saved;
     }
@@ -1130,7 +1130,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
 
   it('drops all snippet questions when the 64k limit is exceeded (source_only_questions)', async () => {
     // 500 个小片段：单题很小（32k 不超），片段题总和 × 1.15 超 64000 → 去掉全部
-    // snip 题（来源级十题保留、state 片段保留）
+    // snip 题（来源级六题保留、state 片段保留）
     const snippets = Array.from({ length: 500 }, (_, i) => `small snippet ${i}, measured in 2024.`);
     const wideState = buildState('s0', 'https://a.example/', 'Title', snippets, 'q', 'i');
     let capturedBody:
@@ -1154,8 +1154,8 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
       assert.ok(capturedBody, 'fetch must have been called');
       assert.equal(
         Object.keys(capturedBody.questions).length,
-        10,
-        'only the ten source-level questions remain'
+        6,
+        'only the six source-level questions remain'
       );
       assert.equal(
         Object.hasOwn(capturedBody.questions, 'snip0'),

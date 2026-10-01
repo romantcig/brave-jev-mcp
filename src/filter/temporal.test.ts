@@ -34,9 +34,7 @@ function classifyWith(
         .filter(([key]) => !key.startsWith('time_'))
         .map(([key, q]) => [
           key,
-          q.type === 'score'
-            ? { kind: 'score', score: 2 }
-            : { kind: 'noul', probability: key === 'is_primary' ? 0.9 : 0 },
+          q.type === 'score' ? { kind: 'score', score: 2 } : { kind: 'noul', probability: 0 },
         ])
     );
     // 未提问的额外回答不得影响不含年份的正文。

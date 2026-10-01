@@ -249,6 +249,8 @@ describe('createSampleWriter', () => {
   });
 
   // 生产客户端接收异常但可解析的响应，核对实发、逐题有效性与实际裁决三种事实。
+  // legacy-extra-answer：旧 v3 十题录制回放时响应多出当前题库外的旧键——验证解析
+  // 层收下额外键、管道按当前六题收集（旧键不进 per_source.answers）、裁决不受影响。
   for (const scenario of [
     'complete',
     'missing-score',
@@ -257,7 +259,7 @@ describe('createSampleWriter', () => {
     'above-range',
     'nonfinite-score',
     'missing-source-answer',
-    'missing-observation-answer',
+    'legacy-extra-answer',
     'source-drop',
   ]) {
     it(`preserves answer evidence without inventing valid scores: ${scenario}`, async () => {
@@ -290,7 +292,8 @@ describe('createSampleWriter', () => {
         if (scenario === 'above-range') answers.snip0.score = 3;
         if (scenario === 'nonfinite-score') answers.snip0.score = 'overflow';
         if (scenario === 'missing-source-answer') delete answers.stale;
-        if (scenario === 'missing-observation-answer') delete answers.worth_keeping;
+        if (scenario === 'legacy-extra-answer')
+          answers.worth_keeping = { type: 'noul', noul: 0.42 };
         if (scenario === 'source-drop') answers.is_off_topic.noul = 1;
         const text = JSON.stringify({
           model: DEFAULT_JEV_MODEL,
@@ -375,6 +378,21 @@ describe('createSampleWriter', () => {
       }
       if (scenario === 'missing-source-answer') {
         assert.equal(sample.jev!.per_source[0].fail_kind, 'validation');
+      }
+      if (scenario === 'legacy-extra-answer') {
+        // 旧键回答被解析层收下、被当前题库的收集层忽略；六键齐全即有效裁决，
+        // 不因响应里多了历史字段而误判 validation 或改变裁决
+        assert.equal(sent.source_verdict_valid, true);
+        const collected = sample.jev!.per_source[0].answers ?? {};
+        assert.deepEqual(Object.keys(collected).sort(), [
+          'has_original_reasoning',
+          'is_listing',
+          'is_off_topic',
+          'is_template_filler',
+          'self_deprecated',
+          'stale',
+        ]);
+        assert.equal(Object.hasOwn(collected, 'worth_keeping'), false);
       }
     });
   }

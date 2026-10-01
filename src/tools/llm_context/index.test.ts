@@ -423,20 +423,16 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
 
   const flushWrites = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-  /** Jev 回放桩：十道来源级题全 0（保留）、片段分全 2（保留）——对 ≤3 片段的夹具通吃。 */
+  /** Jev 回放桩：六道来源级题全 0（保留）、片段分全 2（保留）——对 ≤3 片段的夹具通吃。 */
   const jevReplay = {
     model: 'jev-1.13.0',
     answers: {
-      worth_keeping: { type: 'noul', noul: 0 },
-      is_primary: { type: 'noul', noul: 0 },
       has_original_reasoning: { type: 'noul', noul: 0 },
-      is_attributed_rewrite: { type: 'noul', noul: 0 },
       is_template_filler: { type: 'noul', noul: 0 },
       is_off_topic: { type: 'noul', noul: 0 },
       is_listing: { type: 'noul', noul: 0 },
       self_deprecated: { type: 'noul', noul: 0 },
       stale: { type: 'noul', noul: 0 },
-      paywalled: { type: 'noul', noul: 0 },
       snip0: { type: 'score', score: 2 },
       snip1: { type: 'score', score: 2 },
       snip2: { type: 'score', score: 2 },

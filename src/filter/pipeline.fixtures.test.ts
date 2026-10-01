@@ -634,7 +634,13 @@ const deriveRemovedSnippetIds = (
   return removed;
 };
 
-/** test 相对 off 的差集真值常数（checker 2026-09-29 修订：随 test 语义改名，值不变）。 */
+/**
+ * test 相对 off 的差集真值常数（filter-rules-5，2026-10-01 六题精简 + 取消当事方
+ * 播种序后重标定）：test 的去重播种与 off 同为 Brave 原序，差异只剩 Jev 来源级
+ * 裁决、片段评分与论证保护通道。旧值（排序取消前）default restore 11、strict
+ * restore ['s11'] remove 5——被救回的 datacamp #0、mezha #4、therundown 整源及
+ * 多删的 register/pasquale 段都靠 is_primary 抢先播种，随排序取消与 off 归一。
+ */
 const TEST_DIFF_EXPECTED: Record<
   string,
   {
@@ -648,13 +654,13 @@ const TEST_DIFF_EXPECTED: Record<
     would_drop: [],
     would_remove_snippets: 9,
     would_restore: [],
-    would_restore_snippets: 11,
+    would_restore_snippets: 9,
   },
   jev_release_strict: {
     would_drop: [],
-    would_remove_snippets: 5,
-    would_restore: ['s11'],
-    would_restore_snippets: 5,
+    would_remove_snippets: 2,
+    would_restore: [],
+    would_restore_snippets: 4,
   },
 };
 
@@ -732,7 +738,8 @@ for (const stem of ['jev_release_default', 'jev_release_strict']) {
 
     it('derives the test-vs-off diff from the off and test tables (verdicts really apply)', () => {
       // Jev 裁决真实生效的判别力：裁决不生效（旧 shadow"只算不丢"）时 test 正本走
-      // off 链，差集恒为 0，与这里的 9/5 + s11 救回不等
+      // off 链，差集恒为 0，与这里的 9/9、2/4 不等。filter-rules-5 起播种序 Brave 化，
+      // 差异只剩裁决/评分/论证保护通道（值随 TEST_DIFF_EXPECTED 注释重标定）
       assert.deepEqual(
         deriveTestDiff(offRun.stats.sources, testRun.stats.sources),
         TEST_DIFF_EXPECTED[stem]
@@ -749,22 +756,22 @@ for (const stem of ['jev_release_default', 'jev_release_strict']) {
     }
 
     if (stem === 'jev_release_strict') {
-      it('rescues s11 (therundown) as a whole source: off drops it as rewrite, test keeps it', () => {
-        // test 按 is_primary 播种、保护原创论证段，会救回 off 删掉的内容（审查 R10
-        // 同源）：strict 的 s11（therundown）被 off 判 rewrite 整源丢掉，test 保留
+      it('no longer rescues s11 (therundown): with identity seeding gone test matches off', () => {
+        // filter-rules-4 时 test 按 is_primary 播种让当事方 s11 抢先幸存、救回整源；
+        // filter-rules-5 起播种序 Brave 化，s11 与 Brave 在前的同事实来源同序比较、
+        // 仍被指纹新颖度删光——off 与 test 同判 rewrite（重复的代表来源随排序取消
+        // 而变化：Brave 在前的来源先参与去重，见 notes/dedup-and-rewrite-policy.md）
         const s11Url = 'https://www.therundown.ai/news/typesafe-jev-ai-decisions-software';
         const offRow = offRun.stats.sources.find((source) => source.url === s11Url);
+        const testRow = testRun.stats.sources.find((source) => source.url === s11Url);
         assert.equal(offRow?.verdict, 'drop');
         assert.equal(offRow?.reason, 'rewrite');
-        assert.equal(
-          offRun.result.grounding.generic.some((item) => item.url === s11Url),
-          false,
-          's11 must be absent from the off result'
-        );
+        assert.equal(testRow?.verdict, 'drop', 'test must match off after seeding change');
+        assert.equal(testRow?.reason, 'rewrite');
         assert.equal(
           testRun.result.grounding.generic.some((item) => item.url === s11Url),
-          true,
-          's11 must be present in the test result'
+          false,
+          's11 must be absent from the test result too'
         );
       });
     }

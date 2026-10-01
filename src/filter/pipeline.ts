@@ -56,7 +56,6 @@ import type {
   ClassifyOutcome,
   FilterConfig,
   FilterDeps,
-  FilterMode,
   FilteredResponse,
   FilterRequest,
   FilterResult,
@@ -485,13 +484,13 @@ export async function filterLlmContext(
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
   if (config.mode === 'off') {
     // off：整段跳过 Jev（stats.jev 保持 null），只跑本地链
-    runOffChain(table, undefined, 'off', config.thresholds, stats, queryTerms);
+    runOffChain(table, undefined, config.thresholds, stats, queryTerms);
   } else if (deps?.classify === undefined) {
-    // no_key（on/test 未注入 classify）：全部来源未判定 → Brave 序播种、无 Jev
-    // 答案即无论证段保护（PLAN §3.2 明文设计，用户已定决策 3——off 期望文件的重
-    // 标注是设计意图不是回归；no_key 等价 off 口径，SAFE-01 前置语义）
+    // no_key（on/test 未注入 classify）：全部来源未判定 → 无论证段保护、去重同
+    // Brave 原序（PLAN §3.2 明文设计，用户已定决策 3——off 期望文件的重标注是
+    // 设计意图不是回归；no_key 等价 off 口径，SAFE-01 前置语义）
     stats.jev = createNoKeyJevStats();
-    runOffChain(table, undefined, config.mode, config.thresholds, stats, queryTerms);
+    runOffChain(table, undefined, config.thresholds, stats, queryTerms);
   } else {
     // 步 5 Jev 每源一次请求：全候选一波并发派发（进程级并发闸住 02-05 的
     // createJevClassifier，管道编排层不持状态与限流）——test 与 on 共用此分支
@@ -838,24 +837,23 @@ const runOnChain = (
 ): void => {
   applySourceVerdicts(table, judged, thresholds, stats);
   applySnippetScores(table, judged, thresholds, stats);
-  const jevSideDeletions = applyNovelty(table, judged, 'on', thresholds, stats);
+  const jevSideDeletions = applyNovelty(table, judged, thresholds, stats);
   dropEmptySources(table, stats, queryTerms, jevSideDeletions);
 };
 
 /**
- * off 链：步 7 后半（Brave 序播种的新颖度与跨源逐字去重）→ 步 8。off 模式与
+ * off 链：步 7 后半（Brave 原序的跨源逐字去重与指纹新颖度）→ 步 8。off 模式与
  * no_key（on/test 未注入 classify）等价 off 口径时走这条链；test 与 on 的正式
  * 过滤走 runOnChain——两者不再共用一条链下的双分支（04-01 起旧影子正本路径退役）。
  */
 const runOffChain = (
   table: WorkSource[],
   judged: ReadonlyMap<string, JevPerSourceStats> | undefined,
-  mode: FilterMode,
   thresholds: JevThresholds,
   stats: FilterStats,
   queryTerms: ReadonlySet<string>
 ): void => {
-  const jevSideDeletions = applyNovelty(table, judged, mode, thresholds, stats);
+  const jevSideDeletions = applyNovelty(table, judged, thresholds, stats);
   dropEmptySources(table, stats, queryTerms, jevSideDeletions);
 };
 

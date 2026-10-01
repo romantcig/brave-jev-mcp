@@ -203,7 +203,7 @@ export type JevPerSourceStats = {
   fail_kind?: JevFailKind;
   /** 生效的超限降级级别（02-05 记账） */
   ladder?: JevLadderLevel;
-  /** 来源级十题的 noul 概率（paywalled / rewrite / worth_keeping 也在内） */
+  /** 来源级答案的 noul 概率，键随当次题库（当前六题；历史记录含 v3 十题旧键） */
   answers?: Record<string, number>;
   /** 片段 score，snip0..snipN 顺序，与 state 片段序对齐 */
   snippet_scores?: number[];

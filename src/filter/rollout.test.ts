@@ -45,9 +45,7 @@ it('栏目规则只删除指定路径，跳过其 Jev 请求，保留同站文�
     const answers: Record<string, JevAnswer> = {};
     for (const [key, q] of Object.entries(questions))
       answers[key] =
-        q.type === 'score'
-          ? { kind: 'score', score: 2 }
-          : { kind: 'noul', probability: key === 'is_primary' ? 0.9 : 0 };
+        q.type === 'score' ? { kind: 'score', score: 2 } : { kind: 'noul', probability: 0 };
     return { status: 'answered', answers, model: DEFAULT_JEV_MODEL, input_tokens: 100 };
   };
   const request = {

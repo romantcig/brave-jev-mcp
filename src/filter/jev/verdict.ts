@@ -88,10 +88,9 @@ export const isUsableSnippetScore = (value: unknown): value is number =>
  * 门槛 + CJK 加成即丢、命中即停，首个命中的判定是 reason；全不命中 keep。
  *
  * 只处理 verdict 为 keep 且 judged 为 answered 的来源（失败/跳过/熔断按"留"，
- * SAFE-01）；is_attributed_rewrite / paywalled / worth_keeping 三题只记答案
- * （02-02 已记进 per_source.answers）不丢来源（VERDICT-01）。CJK 占比 >
- * cjkShare（严格大于）时五道丢弃门槛各加 cjkBonus（VERDICT-04，方向保守：
- * 中文来源更难被丢；加成不抬片段 score 门槛）。
+ * SAFE-01）。裁决必需答案即当前六题：五道丢弃题 + 论证题（历史记录含 v3 观察题
+ * 旧键时按额外字段忽略）。CJK 占比 > cjkShare（严格大于）时五道丢弃门槛各加
+ * cjkBonus（VERDICT-04，方向保守：中文来源更难被丢；加成不抬片段 score 门槛）。
  *
  * 裁决回写 `stats.jev.per_source` 对应行的 verdict/reason；判定相关六道概率
  * 任一缺失或超出 [0,1] 时整来源防御式跳过（保守不丢）并在该行记 fail_kind

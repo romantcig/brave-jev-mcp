@@ -17,5 +17,6 @@
  * 包版本号冒充实现标识。
  */
 
-/** 4 = 带年份片段的时间判断；3 = 明确非一手组稳定排序及页面/栏目名单。 */
-export const FILTER_RULES_VERSION = 'filter-rules-4';
+/** 5 = 来源题精简为六道并取消当事方播种排序（去重与输出统一 Brave 原序）；
+ *  4 = 带年份片段的时间判断；3 = 明确非一手组稳定排序及页面/栏目名单。 */
+export const FILTER_RULES_VERSION = 'filter-rules-5';

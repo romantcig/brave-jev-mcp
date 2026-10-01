@@ -1,10 +1,16 @@
-"""对一份 Brave 夹具跑 Jev v3 题库（TypeSafe 直连），输出逐来源裁决表并把原始响应存到 fixtures/<name>.jev.json。
+"""【历史录制工具 — v3 十题版,2026-09-25 定稿】对一份 Brave 夹具跑 Jev v3 题库（TypeSafe 直连），输出逐来源裁决表并把原始响应存到 fixtures/<name>.jev.json。
+
+⚠ 当前生产题库是六题精简版（2026-10-01，权威定义在 src/filter/jev/questions.ts，
+  QUESTION_SET_ID 对账）：本脚本内置的 SOURCE_QUESTIONS 是 v3 历史十题快照，且缺
+  少后来加入的时间题（time_snip*）——它只能用于复现 2026-09 的历史探测录制（如两
+  份 fixtures/*.jev.json 夹具），其输出不再代表当前生产会发送的请求。新的六题验
+  证走 TypeScript 生产生成器（dev/filter-*.ts 实验入口），不使用本脚本。
 用法: python dev/jev_probe.py fixtures/jev_release_default.json "<intent>"
 后端：TypeSafe 直连（noul 协议，顺序执行）；key 从环境变量 TYPESAFE_API_KEY 读（官方 SDK 同名）。代理从 HTTPS_PROXY 环境变量读，未设则直连。
 OpenRouter / Vercel 网关通道已于 2026-09-24 退役（见 notes/decisions-log.md）。
 候选集先由 dev/dump_local_rules.ts 跑本地规则（步 1–4）：只对幸存来源发请求、对幸存片段录答案——
 录好的 .jev.json 与管道步 5 发送的 state 逐源逐片段对齐（02-01 重录口径）。
-题库与阈值集中在 SOURCE_QUESTIONS / THRESHOLDS，改策略只改这里。
+题库与阈值集中在 SOURCE_QUESTIONS / THRESHOLDS——仅作 v3 历史快照维护，不再随生产题库更新。
 """
 import json, subprocess, sys, time, urllib.request
 from pathlib import Path
@@ -82,6 +88,13 @@ def verdict(a, n_snips):
 
 def main():
     fx = Path(sys.argv[1])
+    # 防覆盖先于任何动作（包括免费 dump 与付费请求）——否则花完钱才发现写不了盘
+    out = fx.with_suffix(".jev.json")
+    if out.exists():
+        raise SystemExit(
+            f"refusing to overwrite existing recording: {out}\n"
+            "move the existing .jev.json away first, or record to a fixture stem without one"
+        )
     # 候选集来自 dump 脚本：本地规则步 1–4 的幸存来源与幸存片段
     dump = json.loads(subprocess.run(
         ["node","--import","tsx","dev/dump_local_rules.ts",str(fx)],
@@ -95,7 +108,6 @@ def main():
         state = {"query":query,"intent":intent,"source":{"id":sid,"url":c["url"],"title":c["title"],"snippets":c["snippets"]}}
         code, resp, dt = call(key, state, build_questions(len(c["snippets"])))
         results[sid] = {"url":c["url"],"http":code,"latency_s":dt,"response":resp}
-    out = fx.with_suffix(".jev.json")
     json.dump({"intent":intent,"backend":"direct","model":MODEL,"thresholds":THRESHOLDS,"questions":{k:f"{GLOBAL_INSTRUCTION} {v}" for k,v in SOURCE_QUESTIONS.items()},"levels":SNIPPET_LEVELS,"results":results}, open(out,"w",encoding="utf-8"), ensure_ascii=False, indent=1)
     print(f"{'src':4} {'verdict':14} keep prim reas rewr fill off  list sdep stale payw  snips kept/total  tok   s   url")
     tot_tok=0; tot_chars_in=0; tot_chars_kept=0

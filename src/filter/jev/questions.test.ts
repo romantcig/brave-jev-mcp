@@ -1,8 +1,8 @@
 /**
- * 题库常量单测：十键齐全、总指令前缀、计数公式、state 形状，以及 probe ↔ 生产
- * 的深比较门禁——两份重录 `.jev.json` 夹具的顶层 questions / levels 与本表
- * 逐字对账，probe 录制题库与生产题库任何一侧改动都会在这里红（02-01 三处
- * 同源对齐的根基）。
+ * 题库常量单测：六键齐全（2026-10-01 精简后）、总指令前缀、计数公式、state 形状，
+ * 以及历史录制兼容——两份重录 `.jev.json` 夹具是 v3 十题题库的历史证据（不得改写
+ * 冒充新题库），这里只验证其结构完整可读；当前题库契约由 SOURCE_QUESTIONS /
+ * buildQuestions 断言锁定，不再要求旧录制等于当前生成器。
  */
 
 import assert from 'node:assert/strict';
@@ -25,18 +25,14 @@ import {
 const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
 
 describe('SOURCE_QUESTIONS', () => {
-  it('has exactly the ten v3 source-level keys', () => {
+  it('has exactly the six source-level keys after the 2026-10-01 slimming', () => {
     assert.deepEqual(Object.keys(SOURCE_QUESTIONS), [
-      'worth_keeping',
-      'is_primary',
       'has_original_reasoning',
-      'is_attributed_rewrite',
       'is_template_filler',
       'is_off_topic',
       'is_listing',
       'self_deprecated',
       'stale',
-      'paywalled',
     ]);
   });
 
@@ -107,9 +103,9 @@ describe('buildQuestions', () => {
     assert.equal(Object.hasOwn(questions, 'time_source'), false);
   });
 
-  it('returns ten source-level questions plus one score question per snippet', () => {
+  it('returns six source-level questions plus one score question per snippet', () => {
     const questions = buildQuestions(3);
-    assert.equal(Object.keys(questions).length, 13);
+    assert.equal(Object.keys(questions).length, 9);
     assert.deepEqual(
       Object.keys(questions).filter((key) => key.startsWith('snip')),
       ['snip0', 'snip1', 'snip2']
@@ -117,7 +113,17 @@ describe('buildQuestions', () => {
   });
 
   it('returns zero snippet questions for a source without snippets', () => {
-    assert.equal(Object.keys(buildQuestions(0)).length, 10);
+    assert.equal(Object.keys(buildQuestions(0)).length, 6);
+  });
+
+  it('asks six plus snippets plus year snippets for full snippet input', () => {
+    // 题数公式（方案 2.1）：6 + 幸存片段数 + 带年份片段数
+    const questions = buildQuestions([
+      'Measured in January 2024: the response took 80ms.',
+      'The instance list is available as JSON.',
+      'Measurements from 2026 remain below the limit.',
+    ]);
+    assert.equal(Object.keys(questions).length, 6 + 3 + 2);
   });
 
   it('prefixes the global instruction followed by a space into every question', () => {
@@ -165,11 +171,28 @@ describe('buildState', () => {
 });
 
 // ---------------------------------------------------------------------------
-// probe ↔ 生产题库深比较门禁：夹具顶层 questions（含总指令前缀的完整题干）与
-// levels 必须与本表逐键逐字一致——录制口径与生产口径从此锁死。
+// 历史录制兼容：两份 .jev.json 是 2026-09-25 v3 十题题库的真实探测记录（历史证据，
+// 不得修改 questions / answers / model / usage 冒充新题库录制）。2026-10-01 六题
+// 精简后它们不再是当前生成器的投影——这里只验证历史结构完整可读（v3 十键齐全、
+// 总指令前缀、三档 levels），供回放与历史对账；旧回答在新规则下回放属于"固定回
+// 答的规则验证"，不能冒充新题的真实回答。
 // ---------------------------------------------------------------------------
 
-describe('recorded question bank deep compare', () => {
+/** v3 历史十题键（2026-10-01 精简前的完整集合；git 历史 `git log -- src/filter/jev/questions.ts` 可取证）。 */
+const V3_HISTORICAL_KEYS: readonly string[] = [
+  'worth_keeping',
+  'is_primary',
+  'has_original_reasoning',
+  'is_attributed_rewrite',
+  'is_template_filler',
+  'is_off_topic',
+  'is_listing',
+  'self_deprecated',
+  'stale',
+  'paywalled',
+];
+
+describe('historical recording compatibility', () => {
   for (const name of ['jev_release_default', 'jev_release_strict']) {
     describe(name, () => {
       const parsed: unknown = JSON.parse(
@@ -181,15 +204,18 @@ describe('recorded question bank deep compare', () => {
       );
       const recording = parsed as { questions: Record<string, string>; levels: string[] };
 
-      it('locks the ten recorded questions to the constant table verbatim', () => {
-        const expected: Record<string, string> = {};
-        for (const [key, text] of Object.entries(SOURCE_QUESTIONS)) {
-          expected[key] = `${GLOBAL_INSTRUCTION} ${text}`;
+      it('keeps the ten v3 questions readable and untouched as historical evidence', () => {
+        assert.deepEqual(Object.keys(recording.questions), [...V3_HISTORICAL_KEYS]);
+        for (const [key, text] of Object.entries(recording.questions)) {
+          assert.equal(typeof text, 'string', `${key} must remain a string`);
+          assert.ok(
+            text.startsWith(`${GLOBAL_INSTRUCTION} `),
+            `${key} must carry the global instruction prefix`
+          );
         }
-        assert.deepEqual(recording.questions, expected);
       });
 
-      it('locks the three snippet levels to SNIPPET_LEVELS', () => {
+      it('keeps the three snippet levels aligned with the unchanged SNIPPET_LEVELS', () => {
         assert.deepEqual(recording.levels, [...SNIPPET_LEVELS]);
       });
     });

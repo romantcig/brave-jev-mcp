@@ -808,16 +808,12 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
     };
     const answers: Record<string, number> = {};
     for (const key of [
-      'worth_keeping',
-      'is_primary',
       'has_original_reasoning',
-      'is_attributed_rewrite',
       'is_template_filler',
       'is_off_topic',
       'is_listing',
       'self_deprecated',
       'stale',
-      'paywalled',
     ]) {
       answers[key] = 0;
     }
@@ -913,16 +909,12 @@ describe('three-mode semantic matrix (off / test / on)', () => {
         { kind: 'noul'; probability: number } | { kind: 'score'; score: number }
       > = {};
       for (const key of [
-        'worth_keeping',
-        'is_primary',
         'has_original_reasoning',
-        'is_attributed_rewrite',
         'is_template_filler',
         'is_off_topic',
         'is_listing',
         'self_deprecated',
         'stale',
-        'paywalled',
       ]) {
         answers[key] = {
           kind: 'noul',
@@ -1191,19 +1183,22 @@ describe('novelty and cross-source dup (02-04)', () => {
     assert.equal(stats.local.empty_dropped, 0);
   });
 
-  it('three modes keep Brave order while novelty seeding applies off Brave-order and test/on is-primary-order', async () => {
+  it('all three modes seed novelty in Brave order; test and on share one chain output', async () => {
+    // filter-rules-5 起当事方播种序取消：test/on 与 off 的去重播种同为 Brave 原序，
+    // 旧答案里的 is_primary 概率（历史录制回放形态）不影响谁先参与去重
     const judgedAnswers = (primary: number): Record<string, JevAnswer> => {
       const answers: Record<string, JevAnswer> = {};
       for (const key of [
-        'worth_keeping',
-        'is_primary',
         'has_original_reasoning',
-        'is_attributed_rewrite',
         'is_template_filler',
         'is_off_topic',
         'is_listing',
         'self_deprecated',
         'stale',
+        // 历史 v3 键：回放旧回答时可能仍在，新规则必须忽略
+        'worth_keeping',
+        'is_primary',
+        'is_attributed_rewrite',
         'paywalled',
       ]) {
         answers[key] = { kind: 'noul', probability: key === 'is_primary' ? primary : 0 };
@@ -1234,17 +1229,15 @@ describe('novelty and cross-source dup (02-04)', () => {
       { classify }
     );
 
-    // off：Brave 序播种 → s1（改写）被新颖度删除、来源记 rewrite
-    assert.deepEqual(
-      offRun.result.grounding.generic.map((item) => item.url),
-      ['https://origin.example/', 'https://unique.example/']
-    );
-    // test：裁决真实生效（旧 shadow 正本走 off 链、输出与 off 相同的行为退役）——
-    // is_primary 播种 s1（0.9）先播种幸存、s0（0.5）被新颖度删除后整源记 rewrite
-    assert.deepEqual(
-      testRun.result.grounding.generic.map((item) => item.url),
-      ['https://rewrite.example/', 'https://unique.example/']
-    );
+    // 三模式统一 Brave 序播种：s1（改写）被新颖度删除、s0 幸存——test/on 不再因
+    // 当事方概率让 s1 抢先，与 off 同一结果
+    const expected = ['https://origin.example/', 'https://unique.example/'];
+    for (const run of [offRun, testRun, onRun]) {
+      assert.deepEqual(
+        run.result.grounding.generic.map((item) => item.url),
+        expected
+      );
+    }
     // test 与 on 共用同一链：输出逐字段一致
     assert.deepEqual(testRun.result, onRun.result);
     assert.equal(testRun.stats.shadow_diff, null);
