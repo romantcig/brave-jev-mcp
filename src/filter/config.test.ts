@@ -52,7 +52,12 @@ const defaults = (): FilterConfig => ({
   overfetchFactor: 1,
   blocklist: DEFAULT_BLOCKLIST,
   thresholds: { ...DEFAULT_THRESHOLDS },
-  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: DEFAULT_JEV_TIMEOUT_MS, concurrency: 12 },
+  jev: {
+    model: DEFAULT_JEV_MODEL,
+    timeoutMs: DEFAULT_JEV_TIMEOUT_MS,
+    concurrency: 12,
+    contextMode: 'single',
+  },
   logDir: join(homedir(), '.brave-jev', 'logs'),
 });
 
@@ -117,6 +122,7 @@ describe('parseFilterConfigObject: shape and defaults', () => {
       'model',
       'timeoutMs',
       'concurrency',
+      'contextMode',
     ]);
   });
 
@@ -263,6 +269,7 @@ describe('parseFilterConfigObject: jev group', () => {
       model: DEFAULT_JEV_MODEL,
       timeoutMs: DEFAULT_JEV_TIMEOUT_MS,
       concurrency: DEFAULT_JEV_CONCURRENCY,
+      contextMode: 'single',
     });
     assert.equal(lines.length, 1);
     assert.match(lines[0], /config: jev=5 is not an object/);
@@ -647,7 +654,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
         minFacts: 6,
         noveltyMin: 3,
       },
-      jev: { model: 'jev-1.14.0', timeoutMs: 20000, concurrency: 6 },
+      jev: { model: 'jev-1.14.0', timeoutMs: 20000, concurrency: 6, contextMode: 'single' },
       logDir: 'C:/logs/jev',
     });
   });

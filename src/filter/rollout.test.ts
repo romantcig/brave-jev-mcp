@@ -41,6 +41,7 @@ it('栏目规则只删除指定路径，跳过其 Jev 请求，保留同站文�
   };
   const called: string[] = [];
   const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
+    if (!('source' in state)) return { status: 'failed', kind: 'validation' };
     called.push(state.source.url);
     const answers: Record<string, JevAnswer> = {};
     for (const [key, q] of Object.entries(questions))

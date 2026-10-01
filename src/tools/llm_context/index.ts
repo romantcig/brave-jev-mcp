@@ -263,6 +263,8 @@ export const execute = async (params: QueryParams) => {
         stats: filtered.stats,
         // 04-04 R1：实发派发记录原样交给样本层——样本 Jev 段只信它
         jevDispatch: filtered.jev_dispatch,
+        // v4（六题全量上下文）：请求级记录原样交入——实发载荷每请求一份
+        jevRequests: filtered.jev_requests,
         payload,
         statusLine: filtered.stats.output.status_line ?? null,
       });

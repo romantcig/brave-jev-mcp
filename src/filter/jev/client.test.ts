@@ -20,10 +20,13 @@ import type {
   ClassifyDeps,
   FilterConfig,
   FilterRequest,
+  JevAllState,
+  JevQuestion,
 } from '../types.js';
 import { buildRequest, createJevClassifier, hasJevKey, JEVI_ENDPOINT } from './client.js';
 import { parseJevResponse } from './client.js';
 import { DEFAULT_JEV_MODEL, SOURCE_QUESTIONS, buildQuestions, buildState } from './questions.js';
+import { checkAllBudget } from './context.js';
 
 const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
 const expectedRoot = join(fixtureRoot, 'expected');
@@ -103,6 +106,8 @@ const loadExpectedHeader = (
 const replayClassifier =
   (recording: JevRecording): ClassifyDeps['classify'] =>
   async ({ state }) => {
+    // 单来源回放夹具只有单来源 state（'source' in state 收窄，不绕类型联合）
+    if (!('source' in state)) return { status: 'failed', kind: 'validation' };
     const entry = recording.results[state.source.id];
     if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
     const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
@@ -399,6 +404,7 @@ const jevConfig = {
   model: DEFAULT_JEV_MODEL,
   timeoutMs: 15000,
   concurrency: 12,
+  contextMode: 'single' as const,
 };
 
 /** 轮询直到条件成立（并发闸用例的挂起计数同步）；超时失败。 */
@@ -494,6 +500,9 @@ describe('createJevClassifier', () => {
         kind: 'auth',
         detail: '401 unauthorized',
         dispatch: { state, questions: buildQuestions(0) },
+        http_attempts: 1,
+        usage_complete: false,
+        http_status: 401,
       });
       assert.equal(fetchCount, 1);
     } finally {
@@ -529,6 +538,8 @@ describe('createJevClassifier', () => {
         kind: 'timeout',
         detail: 'This operation was aborted',
         dispatch: { state, questions: buildQuestions(0) },
+        http_attempts: 1,
+        usage_complete: false,
       });
       assert.equal(fetchCount, 1, 'a timeout must not be retried');
     } finally {
@@ -561,6 +572,8 @@ describe('createJevClassifier', () => {
         kind: 'network',
         detail: 'fetch failed',
         dispatch: { state, questions: buildQuestions(0) },
+        http_attempts: 3,
+        usage_complete: false,
       });
     } finally {
       globalThis.fetch = saved;
@@ -793,6 +806,9 @@ describe('createJevClassifier retry (SAFE-03)', () => {
         kind: 'auth',
         detail: '403 forbidden',
         dispatch: request,
+        http_attempts: 1,
+        usage_complete: false,
+        http_status: 403,
       });
       assert.equal(counter.calls, 1);
     } finally {
@@ -814,6 +830,9 @@ describe('createJevClassifier retry (SAFE-03)', () => {
         kind: 'validation',
         detail: '404 not found',
         dispatch: request,
+        http_attempts: 1,
+        usage_complete: false,
+        http_status: 404,
       });
       assert.equal(counter.calls, 1);
     } finally {
@@ -837,6 +856,9 @@ describe('createJevClassifier retry (SAFE-03)', () => {
         kind: 'validation',
         detail: '422 state too large',
         dispatch: request,
+        http_attempts: 1,
+        usage_complete: false,
+        http_status: 422,
       });
       assert.equal(counter.calls, 1);
     } finally {
@@ -1635,5 +1657,313 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
     } finally {
       globalThis.fetch = saved;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 全量上下文分支（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T06/T08）：客户端 send 前的
+// checkAllBudget 双限额防御（超限零 HTTP too_large）、预算内全量载荷原样透传、
+// 进程级并发闸对全量请求按同一名额计。
+// ---------------------------------------------------------------------------
+
+describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/T08)', () => {
+  const allState: JevAllState = {
+    query: 'q',
+    intent: 'i',
+    sources: [
+      { id: 's0', url: 'https://a.example/', title: 'A', snippets: ['one'] },
+      { id: 's1', url: 'https://b.example/', title: 'B', snippets: ['two'] },
+    ],
+  };
+  const smallQuestions: Record<string, JevQuestion> = {
+    s0__is_off_topic: { type: 'noul', instructions: 'x' },
+    s1__is_off_topic: { type: 'noul', instructions: 'x' },
+  };
+
+  it('sends the all-context payload unchanged when within budget', async () => {
+    let fetchCount = 0;
+    let capturedInit: RequestInit | undefined;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCount += 1;
+      capturedInit = init;
+      return okResponseOf(defaultRecording.results['s0']);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const outcome = await classifier.classify({ state: allState, questions: smallQuestions });
+
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      // 全量分支不走超限阶梯：state / questions 原样透传，无 ladder 标记
+      assert.equal(outcome.ladder, undefined);
+      assert.equal(fetchCount, 1);
+      const body = JSON.parse(String(capturedInit?.body)) as { state: unknown; questions: unknown };
+      assert.deepEqual(body.state, allState);
+      assert.deepEqual(body.questions, smallQuestions);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('rejects an over-budget all-context request before any HTTP attempt (T06)', async () => {
+    // 5.6 万个单词的题干 ≈ 5.6 万 token——(state + 该题) × 1.15 超过 32k，
+    // 客户端防御在派发前拒绝（规划层预检之外的第二道闸）
+    const hugeQuestions: Record<string, JevQuestion> = {
+      s0__is_off_topic: { type: 'noul', instructions: 'a '.repeat(56000) },
+    };
+    let fetchCount = 0;
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return okResponseOf(defaultRecording.results['s0']);
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const outcome = await classifier.classify({ state: allState, questions: hugeQuestions });
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'too_large');
+      assert.match(outcome.detail ?? '', /32k \(state \+ longest question\)/);
+      assert.equal(outcome.http_attempts, 0);
+      assert.equal(fetchCount, 0, 'an over-budget all request must never reach fetch');
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('admits one all-context request per concurrency slot and queues the rest (T08)', async () => {
+    const responseBody = JSON.stringify(defaultRecording.results['s0'].response);
+    let fetchCalls = 0;
+    let inflight = 0;
+    let peak = 0;
+    const pending: Array<() => void> = [];
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      inflight += 1;
+      peak = Math.max(peak, inflight);
+      await new Promise<void>((resolve) => pending.push(resolve));
+      inflight -= 1;
+      return new Response(responseBody, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(
+        { ...jevConfig, concurrency: 1 },
+        { TYPESAFE_API_KEY: 'k' }
+      );
+      const request = { state: allState, questions: smallQuestions };
+
+      // 两个并发全量请求：并发 1 下必须串行——第一个占住名额，第二个在闸上排队
+      const promises = [classifier.classify(request), classifier.classify(request)];
+      await waitFor(() => fetchCalls >= 1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(fetchCalls, 1, 'only the first all request may enter fetch');
+      assert.equal(pending.length, 1, 'the first fetch must still be held open');
+      assert.equal(peak, 1);
+
+      // 释放第一个：名额交接给排队的第二个，进第二个 fetch（用调用计数等待，
+      // pending 里第一个 resolve 已被取走、不能再用长度计数）
+      pending.shift()!();
+      await waitFor(() => fetchCalls >= 2);
+      assert.ok(peak <= 1, `peak ${peak} must stay at 1`);
+      pending.shift()!();
+      const outcomes = await Promise.all(promises);
+      assert.ok(outcomes.every((outcome) => outcome.status === 'answered'));
+      assert.equal(peak, 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+});
+
+describe('全量接入审查：真实解析与请求账目', () => {
+  const config = parseFilterConfigObject({ mode: 'test', jev: { context_mode: 'all' } });
+  const request = { params: { query: 'brave browser' }, intent: 'Brave browser engineering facts' };
+  const data: BraveLlmContextResponse = {
+    grounding: {
+      generic: [
+        {
+          url: 'https://alpha.example/',
+          title: 'Brave alpha',
+          snippets: [
+            'Brave browser uses an independent renderer process to isolate each browsing context.',
+          ],
+        },
+        {
+          url: 'https://beta.example/',
+          title: 'Brave beta',
+          snippets: [
+            'Brave browser records a distinct connection error when this transport fails.',
+          ],
+        },
+      ],
+      map: [],
+    },
+    sources: {},
+  };
+
+  it('一个来源错型时其他来源仍完成裁决，真实 HTTP 用量只记一次', async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async (_url, init) => {
+      calls += 1;
+      const body = JSON.parse(String(init?.body));
+      const answers: Record<string, unknown> = Object.fromEntries(
+        Object.entries(body.questions).map(([key, value]) => [
+          key,
+          (value as JevQuestion).type === 'score'
+            ? { type: 'score', score: key.startsWith('s0__') ? 'bad' : 0 }
+            : { type: 'noul', noul: key.endsWith('has_reasoning') ? 0.9 : 0.1 },
+        ])
+      );
+      answers.s0__is_off_topic = { type: 'noul', noul: 'bad' };
+      return new Response(
+        JSON.stringify({ model: DEFAULT_JEV_MODEL, answers, usage: { input_tokens: 1234 } })
+      );
+    };
+    try {
+      const result = await filterLlmContext(
+        data,
+        request,
+        config,
+        createJevClassifier(config.jev, { TYPESAFE_API_KEY: 'offline-test' })
+      );
+      assert.equal(calls, 1);
+      assert.equal(result.stats.jev?.n_requests, 1);
+      assert.equal(result.stats.jev?.input_tokens, 1234);
+      const rows = result.stats.jev!.per_source;
+      assert.equal(rows.find((row) => row.src === 's0')?.fail_kind, 'validation');
+      assert.deepEqual(rows.find((row) => row.src === 's1')?.snippet_scores, [0]);
+      assert.equal(rows.find((row) => row.src === 's1')?.verdict, 'keep');
+      assert.deepEqual(
+        result.result.grounding.generic.map((source) => source.url),
+        ['https://alpha.example/']
+      );
+      assert.equal(result.jev_requests[0].usage_complete, true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('顶层答案坏掉仍保留已知用量及 HTTP 状态', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          model: DEFAULT_JEV_MODEL,
+          answers: null,
+          usage: { input_tokens: 1234 },
+        })
+      );
+    try {
+      const result = await filterLlmContext(
+        data,
+        request,
+        config,
+        createJevClassifier(config.jev, { TYPESAFE_API_KEY: 'offline-test' })
+      );
+      assert.equal(result.stats.jev?.input_tokens, 1234);
+      assert.equal(result.jev_requests[0].input_tokens, 1234);
+      assert.equal(result.jev_requests[0].usage_complete, true);
+      assert.equal(result.jev_requests[0].http_status, 200);
+      assert.equal(result.jev_requests[0].fail_kind, 'validation');
+      assert.equal(result.jev_requests[0].answered, false);
+      assert.ok(result.stats.jev?.per_source.every((row) => row.status === 'failed'));
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('重试分别累加已知用量；断连后成功仍标记用量不完整', async () => {
+    const original = globalThis.fetch;
+    try {
+      for (const firstUsage of [undefined, 11]) {
+        let calls = 0;
+        globalThis.fetch = async () => {
+          calls += 1;
+          if (calls === 1) {
+            if (firstUsage === undefined) throw new Error('offline network fixture');
+            return new Response(JSON.stringify({ usage: { input_tokens: firstUsage } }), {
+              status: 500,
+            });
+          }
+          return new Response(
+            JSON.stringify({ model: DEFAULT_JEV_MODEL, answers: {}, usage: { input_tokens: 17 } })
+          );
+        };
+        const result = await filterLlmContext(
+          data,
+          request,
+          config,
+          createJevClassifier(
+            config.jev,
+            { TYPESAFE_API_KEY: 'offline-test' },
+            { sleep: async () => {} }
+          )
+        );
+        assert.equal(result.stats.jev?.n_requests, 1);
+        assert.equal(result.stats.jev?.n_http_attempts, 2);
+        assert.equal(result.stats.jev?.input_tokens, 17 + (firstUsage ?? 0));
+        assert.equal(result.jev_requests[0].usage_complete, firstUsage !== undefined);
+      }
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('单来源降级后仍超 64k 时零 HTTP 拒绝', async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      throw new Error('must not fetch');
+    };
+    try {
+      const state = buildState('s0', 'https://alpha.example/', 'Brave', ['Brave fact'], 'q', 'i');
+      const questions = Object.fromEntries(
+        Object.keys(SOURCE_QUESTIONS).map((key) => [
+          key,
+          {
+            type: 'noul' as const,
+            instructions: 'word '.repeat(13000),
+          },
+        ])
+      );
+      const budget = checkAllBudget(state, questions);
+      assert.ok(budget.estimates.single_limit_estimate < 32000);
+      assert.ok(budget.estimates.total_limit_estimate > 64000);
+      const result = await createJevClassifier(config.jev, {
+        TYPESAFE_API_KEY: 'offline-test',
+      }).classify({ state, questions });
+      assert.equal(result.status, 'failed');
+      if (result.status === 'failed') assert.equal(result.kind, 'too_large');
+      assert.equal(result.http_attempts, 0);
+      assert.equal(calls, 0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('依赖抛出网络异常不伪装成熔断，也不扇出重试', async () => {
+    let calls = 0;
+    const result = await filterLlmContext(data, request, config, {
+      classify: async () => {
+        calls += 1;
+        throw new Error('offline injected failure');
+      },
+    });
+    assert.equal(calls, 1);
+    assert.ok(
+      result.stats.jev?.per_source.every(
+        (row) => row.status === 'failed' && row.fail_kind === 'network'
+      )
+    );
+    assert.ok(result.jev_dispatch.every((row) => row.not_dispatched_reason !== 'breaker_open'));
   });
 });

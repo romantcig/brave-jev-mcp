@@ -1,9 +1,13 @@
 /**
- * 样本写入器单测（04-02；04-04 R1-R5 返修）：记录形状与 pretty 格式、片段配对身份
- * （URL 合并 / JSON-LD 拆分 / 页内重复 / 空源排除）、实发派发映射（真实超限路径 +
- * fetch 桩的深相等、已派发失败保留输入证据、skipped / too_large / breaker_open
- * 分状态）、no_key 如实记账、写入失败路径与目录自愈、相对 log_dir 的绝对路径、
- * 过滤规则版本区分能力、构建异常 fail-open。
+ * 样本写入器单测（04-02；04-04 R1-R5 返修；v4 六题全量上下文请求级载荷）：记录形状
+ * 与 pretty 格式、片段配对身份（URL 合并 / JSON-LD 拆分 / 页内重复 / 空源排除）、
+ * 请求级实发载荷（真实超限路径 + fetch 桩的深相等、已派发失败保留输入证据、
+ * skipped / too_large / breaker_open 分状态）、no_key 如实记账、写入失败路径与目录
+ * 自愈、相对 log_dir 的绝对路径、过滤规则版本区分能力、构建异常 fail-open。
+ *
+ * v4 语义：实发 state / questions / answers / 映射在 jev.requests[]（每逻辑请求
+ * 一份），来源级 sent[] 经 request_id 引用；in_state / score_question_sent 按题目
+ * 映射对实发载荷逐位检查——没有实发载荷（注入面 answered 无 dispatch）就不冒充。
  *
  * 身份与过程映射断言跑真实管道（filterLlmContext + 合成 classify 全保留），
  * 不复述实现——统计投影与候选口径都是生产口径。实发断言用**生产客户端**
@@ -48,6 +52,7 @@ import type {
   FilterResult,
   FilterStats,
   JevDispatchRecord,
+  JevRequestRecord,
   JevState,
 } from './types.js';
 
@@ -60,25 +65,21 @@ const configOf = (logDir: string, concurrency = 12): FilterConfig => ({
   overfetchFactor: 1,
   blocklist: new Set(['farm.example', 'a.farm.example']),
   thresholds: { ...DEFAULT_THRESHOLDS },
-  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency },
+  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency, contextMode: 'single' },
   logDir,
 });
 
-/** 全保留合成 classify：十道来源级题全 0.0（低于一切丢弃门槛），片段分全 2.0。 */
+/** 全保留合成 classify：六道来源级题全 0.0（低于一切丢弃门槛），片段分全 2.0。 */
 const keepAllClassify: ClassifyDeps['classify'] = async () => ({
   status: 'answered',
   model: DEFAULT_JEV_MODEL,
   answers: {
-    worth_keeping: { kind: 'noul', probability: 0 },
-    is_primary: { kind: 'noul', probability: 0 },
     has_original_reasoning: { kind: 'noul', probability: 0 },
-    is_attributed_rewrite: { kind: 'noul', probability: 0 },
     is_template_filler: { kind: 'noul', probability: 0 },
     is_off_topic: { kind: 'noul', probability: 0 },
     is_listing: { kind: 'noul', probability: 0 },
     self_deprecated: { kind: 'noul', probability: 0 },
     stale: { kind: 'noul', probability: 0 },
-    paywalled: { kind: 'noul', probability: 0 },
     snip0: { kind: 'score', score: 2 },
     snip1: { kind: 'score', score: 2 },
     snip2: { kind: 'score', score: 2 },
@@ -155,7 +156,7 @@ const richResponse: BraveLlmContextResponse = {
   },
 };
 
-/** 跑真实管道取生产口径的 FilterResult（stats + 实发派发记录；步 10 状态行已写入）。 */
+/** 跑真实管道取生产口径的 FilterResult（stats + 派发与请求记录；步 10 状态行已写入）。 */
 const runPipeline = async (config: FilterConfig): Promise<FilterResult> =>
   filterLlmContext(richResponse, { params: { query: QUERY }, intent: INTENT }, config, {
     classify: keepAllClassify,
@@ -327,17 +328,44 @@ describe('createSampleWriter', () => {
           preFilter: response,
           stats: result.stats,
           jevDispatch: result.jev_dispatch,
+          jevRequests: result.jev_requests,
           payload: result.result,
           statusLine: result.stats.output.status_line ?? null,
         }).status,
         'saved'
       );
       const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as SampleRecord;
-      const sent = sample.jev!.sent[0];
+      // v4：实发载荷在请求级（single 模式一请求一来源），来源行经 request_id 引用
+      assert.equal(sample.jev!.requests.length, 1);
+      const request = sample.jev!.requests[0]!;
+      const sent = sample.jev!.sent[0]!;
+      assert.equal(sent.request_id, request.request_id);
+      assert.equal(request.mode, 'single');
+      assert.equal(request.requested, 'single');
+      assert.equal(request.effective, 'single');
+      assert.equal(request.fallback_reason, undefined);
+      assert.deepEqual(request.source_ids, ['s0']);
+      assert.equal(request.dispatched, true);
+      assert.equal(request.answered, true);
+      assert.equal(request.usage_complete, true);
+      assert.equal(request.input_tokens, 20);
+      assert.equal(request.model, DEFAULT_JEV_MODEL);
+      assert.ok(typeof request.http_attempts === 'number' && request.http_attempts >= 1);
+      assert.deepEqual(JSON.parse(request.state!), captured[0]!.state);
+      assert.deepEqual(request.questions, captured[0]!.questions);
+      assert.deepEqual(request.mapping, [
+        {
+          source_id: 's0',
+          array_index: 0,
+          snippet_keys: ['0', '1'],
+          question_keys: Object.fromEntries(
+            Object.keys(captured[0]!.questions).map((key) => [key, key])
+          ),
+        },
+      ]);
       assert.equal(sent.dispatched, true);
       assert.equal(sent.answered, true, '收到可解析响应与来源裁决有效性独立');
       assert.equal(sent.source_verdict_valid, scenario !== 'missing-source-answer');
-      assert.deepEqual(JSON.parse(sent.state!), captured[0].state);
       assert.ok(sent.snippets.every((snippet) => snippet.in_state && snippet.score_question_sent));
       const invalidFirst = [
         'missing-score',
@@ -392,6 +420,8 @@ describe('createSampleWriter', () => {
           'self_deprecated',
           'stale',
         ]);
+        // 旧键在请求级原始答案里如实保留（全局键），不进投影
+        assert.equal(Object.hasOwn(request.answers ?? {}, 'worth_keeping'), true);
         assert.equal(Object.hasOwn(collected, 'worth_keeping'), false);
       }
     });
@@ -400,7 +430,7 @@ describe('createSampleWriter', () => {
   it('writes a pretty sample with stable field order, config snapshot and program ids', async () => {
     const logDir = join(root, 'shape', 'logs');
     const config = configOf(logDir);
-    const { stats, jev_dispatch } = await runPipeline(config);
+    const { stats, jev_dispatch, jev_requests } = await runPipeline(config);
     stats.brave.latency_ms = 12;
     const payload = { grounding: { generic: [], map: [] }, output: stats.output };
     const statusLine = stats.output.status_line ?? null;
@@ -418,6 +448,7 @@ describe('createSampleWriter', () => {
       preFilter: richResponse,
       stats,
       jevDispatch: jev_dispatch,
+      jevRequests: jev_requests,
       payload,
       statusLine,
     });
@@ -441,10 +472,11 @@ describe('createSampleWriter', () => {
       'jev',
       'config_snapshot',
       'question_set_id',
+      'context_layout_id',
       'filter_program_version',
       'filter_rules_version',
     ]);
-    assert.equal(sample.format_version, 3);
+    assert.equal(sample.format_version, 4);
     assert.equal(sample.request_id, requestId);
     assert.match(String(sample.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
     assert.equal(sample.mode, 'test');
@@ -467,7 +499,7 @@ describe('createSampleWriter', () => {
     // final_return 原样回放
     assert.deepEqual(sample.final_return, { payload, status_line: statusLine });
 
-    // config_snapshot：十一项阈值 snake_case 投影 + jev 组 + 黑名单排序 + mode
+    // config_snapshot：十一项阈值 snake_case 投影 + jev 组（v4 加 context_mode）+ 黑名单 + mode
     const snapshot = sample.config_snapshot as Record<string, unknown>;
     assert.deepEqual(Object.keys(snapshot), [
       'thresholds',
@@ -493,6 +525,7 @@ describe('createSampleWriter', () => {
       model: DEFAULT_JEV_MODEL,
       timeout_ms: 15000,
       concurrency: 12,
+      context_mode: 'single',
     });
     assert.equal(snapshot.overfetch_factor, 1);
     assert.equal(snapshot.mode, 'test');
@@ -507,7 +540,7 @@ describe('createSampleWriter', () => {
   it('carries stable snippet identities: URL merge (mergedFrom), JSON-LD split (.part), in-page dup and empty-source exclusion', async () => {
     const logDir = join(root, 'identity', 'logs');
     const config = configOf(logDir);
-    const { stats, jev_dispatch } = await runPipeline(config);
+    const { stats, jev_dispatch, jev_requests } = await runPipeline(config);
     const writer = createSampleWriter(config);
     const requestId = '22222222-2222-3333-4444-555555555555';
     const path = writer.allocatePath(requestId);
@@ -522,6 +555,7 @@ describe('createSampleWriter', () => {
         preFilter: richResponse,
         stats,
         jevDispatch: jev_dispatch,
+        jevRequests: jev_requests,
         payload: { output: stats.output },
         statusLine: stats.output.status_line ?? null,
       }),
@@ -532,11 +566,17 @@ describe('createSampleWriter', () => {
       jev: {
         status: string;
         per_source: Array<{ src: string; status: string; snippet_scores?: number[] }>;
+        requests: Array<{
+          request_id: string;
+          mode: string;
+          dispatched: boolean;
+          state: string | null;
+          questions: Record<string, unknown> | null;
+        }>;
         sent: Array<{
           src: string;
-          state: string | null;
+          request_id?: string;
           dispatched: boolean;
-          snip_questions_sent: boolean;
           answered: boolean;
           snippets: Array<{
             snippet: string;
@@ -583,19 +623,24 @@ describe('createSampleWriter', () => {
     assert.equal(perSource.get('s2')?.status, 'answered');
     assert.deepEqual(perSource.get('s2')?.snippet_scores, [2]);
 
-    // 实发映射（v2）：全部步 5 时刻的 keep 来源——s0（含并入片段）、s2（重复片段
+    // 实发映射：全部步 5 时刻的 keep 来源——s0（含并入片段）、s2（重复片段
     // 不在候选）已取得回答；s3 的片段在步 3 已被删光（步 8 才整源 drop），是
     // "无内容可发"的 skipped——不再从 jev 段隐身
     assert.deepEqual(
       sample.jev.sent.map((entry) => entry.src),
       ['s0', 's2', 's3']
     );
-    const s0 = sample.jev.sent[0];
-    // 合成 classify（注入面）无实发载荷：answered 如实记、dispatched 不冒充
+    // 注入面（合成 classify）无实发载荷：每个请求记录存在但 state/questions 为
+    // null——v4 的 in_state / score_question_sent 按映射对实发载荷检查，无载荷
+    // 即 false，绝不按 answered 冒充"已提交"
+    assert.equal(sample.jev.requests.length, 2);
+    assert.ok(
+      sample.jev.requests.every((request) => request.state === null && request.questions === null)
+    );
+    const s0 = sample.jev.sent[0]!;
     assert.equal(s0.dispatched, false);
     assert.equal(s0.answered, true);
-    assert.equal(s0.snip_questions_sent, true);
-    assert.equal(s0.state, null);
+    assert.ok(s0.request_id, 'request_id links the source row to its request record');
     assert.deepEqual(
       s0.snippets.map((snippet) => [
         snippet.snippet,
@@ -613,7 +658,7 @@ describe('createSampleWriter', () => {
     assert.equal(s0.snippets[0]?.text, articleBody);
     assert.equal(s0.snippets[2]?.text, mergedBody);
     // s2：页内重复删掉第二片段，候选只有幸存第一片段
-    const s2 = sample.jev.sent[1];
+    const s2 = sample.jev.sent[1]!;
     assert.deepEqual(
       s2.snippets.map((snippet) => [snippet.snippet, snippet.in_state, snippet.scored]),
       [['0', false, true]]
@@ -621,11 +666,11 @@ describe('createSampleWriter', () => {
     assert.equal(s2.snippets[0]?.text, uniqueBody);
   });
 
-  it('records the real dispatched state deep-equal to the intercepted request when a cut ladder fires (review R1)', async () => {
+  it('records the real dispatched payload deep-equal to the intercepted request when a cut ladder fires (review R1)', async () => {
     // 真实超限路径：生产客户端（createJevClassifier + applyOversizeLadder）+ fetch 桩。
     // 第二片段是 32000 个 CJK 字符（×0.9 ×1.15 余量 > 32k）→ 阶梯砍尾 → 实发 state
-    // 只有第一段；样本必须记录砍后 state 且与截获请求深相等——阶梯前的重建口径（v1
-    // 的病灶）在这里会带两段，当场红。
+    // 只有第一段；样本请求级载荷必须记录砍后 state 且与截获请求深相等——阶梯前的
+    // 重建口径（v1 的病灶）在这里会带两段，当场红。
     const logDir = join(root, 'cut-tail', 'logs');
     const config = configOf(logDir);
     const giant = '資料'.repeat(16000);
@@ -661,6 +706,7 @@ describe('createSampleWriter', () => {
     }
     const lastRequest = captured.at(-1);
     assert.ok(lastRequest, 'the classifier must have dispatched a request');
+    assert.ok('source' in lastRequest.state, 'single dispatches carry a single-source state');
     // 截获请求实证：阶梯把实发 state 砍到只剩第一段、snip 题只剩 snip0
     assert.equal(lastRequest.state.source.snippets.length, 1);
     assert.equal(lastRequest.state.source.snippets[0], articleBody);
@@ -682,6 +728,7 @@ describe('createSampleWriter', () => {
       preFilter: response,
       stats: dispatched.stats,
       jevDispatch: dispatched.jev_dispatch,
+      jevRequests: dispatched.jev_requests,
       payload: { output: dispatched.stats.output },
       statusLine: dispatched.stats.output.status_line ?? null,
     });
@@ -689,11 +736,16 @@ describe('createSampleWriter', () => {
     const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
       jev: {
         per_source: Array<{ src: string; status: string; ladder?: string; sent_snippets?: number }>;
+        requests: Array<{
+          request_id: string;
+          dispatched: boolean;
+          state: string | null;
+          questions: Record<string, unknown> | null;
+        }>;
         sent: Array<{
           src: string;
-          state: string | null;
+          request_id?: string;
           dispatched: boolean;
-          snip_questions_sent: boolean;
           answered: boolean;
           snippets: Array<{
             snippet: string;
@@ -707,13 +759,17 @@ describe('createSampleWriter', () => {
     };
     assert.equal(sample.jev.per_source[0]?.ladder, 'cut_tail');
     assert.equal(sample.jev.per_source[0]?.sent_snippets, 1);
-    const s0 = sample.jev.sent[0];
-    assert.ok(s0);
-    // R1 核心证据：记录的 state 与截获请求的 state 深相等（砍后实发，仅 1 段）
+    // R1 核心证据：请求级记录的实发 state 与截获请求深相等（砍后实发，仅 1 段）
+    assert.equal(sample.jev.requests.length, 1);
+    const request = sample.jev.requests[0]!;
+    assert.equal(request.dispatched, true);
+    assert.ok(request.state, 'dispatched request must carry the input evidence');
+    assert.deepEqual(JSON.parse(request.state), lastRequest.state);
+    assert.deepEqual(request.questions, lastRequest.questions);
+    const s0 = sample.jev.sent[0]!;
+    assert.equal(s0.request_id, request.request_id);
     assert.equal(s0.dispatched, true);
-    assert.ok(s0.state, 'dispatched request must carry the input evidence');
-    assert.deepEqual(JSON.parse(s0.state), lastRequest.state);
-    // 状态三维拆分：第二片段没进 state、题没提交、也没有评分——各字段独立表达
+    // 状态三维拆分：第二片段没进 state、题没提交（按映射检查）、也没有评分——各字段独立表达
     assert.deepEqual(
       s0.snippets.map((snippet) => [
         snippet.snippet,
@@ -760,7 +816,7 @@ describe('createSampleWriter', () => {
       restore();
     }
     assert.equal(captured.length, 1, 'validation failures must not retry');
-    const lastRequest = captured[0];
+    const lastRequest = captured[0]!;
     const row = failed.stats.jev?.per_source[0];
     assert.equal(row?.status, 'failed');
     assert.equal(row?.fail_kind, 'validation');
@@ -778,28 +834,46 @@ describe('createSampleWriter', () => {
       preFilter: response,
       stats: failed.stats,
       jevDispatch: failed.jev_dispatch,
+      jevRequests: failed.jev_requests,
       payload: { output: failed.stats.output },
       statusLine: failed.stats.output.status_line ?? null,
     });
 
     const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
       jev: {
-        sent: Array<{
+        requests: Array<{
+          request_id: string;
           dispatched: boolean;
           answered: boolean;
           state: string | null;
-          snip_questions_sent: boolean;
+          questions: Record<string, unknown> | null;
+          input_tokens: number | null;
+          usage_complete: boolean;
+          fail_kind?: string;
+        }>;
+        sent: Array<{
+          request_id?: string;
+          dispatched: boolean;
+          answered: boolean;
         }>;
       };
     };
-    const s0 = sample.jev.sent[0];
-    assert.ok(s0);
-    // 已派发但失败 ≠ 未发送：dispatched 如实为 true，实发 state 保留作输入证据
+    // 请求级：已派发但失败 ≠ 未发送——dispatched true、实发载荷保留、usage 未知不伪称
+    assert.equal(sample.jev.requests.length, 1);
+    const request = sample.jev.requests[0]!;
+    assert.equal(request.dispatched, true);
+    assert.equal(request.answered, false);
+    assert.equal(request.fail_kind, 'validation');
+    assert.equal(request.input_tokens, null);
+    assert.equal(request.usage_complete, false);
+    assert.ok(request.state, 'a dispatched request must keep its input evidence');
+    assert.deepEqual(JSON.parse(request.state), lastRequest.state);
+    assert.deepEqual(request.questions, lastRequest.questions);
+    // 来源级：引用请求，answered 独立记 false
+    const s0 = sample.jev.sent[0]!;
+    assert.equal(s0.request_id, request.request_id);
     assert.equal(s0.dispatched, true);
     assert.equal(s0.answered, false);
-    assert.equal(s0.snip_questions_sent, true);
-    assert.ok(s0.state, 'a dispatched request must keep its input evidence');
-    assert.deepEqual(JSON.parse(s0.state), lastRequest.state);
   });
 
   it('separates too_large and breaker_open from dispatched failures in the dispatch map (review R1)', async () => {
@@ -853,38 +927,69 @@ describe('createSampleWriter', () => {
       preFilter: response,
       stats: degraded.stats,
       jevDispatch: degraded.jev_dispatch,
+      jevRequests: degraded.jev_requests,
       payload: { output: degraded.stats.output },
       statusLine: degraded.stats.output.status_line ?? null,
     });
 
     const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
       jev: {
+        n_requests: number;
+        n_http_attempts: number;
         per_source: Array<{ src: string; status: string; fail_kind?: string }>;
-        sent: Array<{
-          src: string;
+        requests: Array<{
+          request_id: string;
           dispatched: boolean;
           answered: boolean;
           state: string | null;
+          input_tokens: number | null;
+          usage_complete: boolean;
+          fail_kind?: string;
+          http_attempts?: number;
+        }>;
+        sent: Array<{
+          src: string;
+          request_id?: string;
+          dispatched: boolean;
+          answered: boolean;
           not_dispatched_reason?: string;
         }>;
       };
     };
+    // 请求级账目：4 个逻辑请求（各一来源）；前三个已派发失败（各 3 次 fetch、
+    // 计 n_requests），第四个熔断短路（0 次 fetch、不计 n_requests）——N 来源
+    // 不冒充 N 次正常请求，重试可见
+    assert.equal(sample.jev.requests.length, 4);
+    assert.equal(sample.jev.n_requests, 3);
+    assert.equal(sample.jev.n_http_attempts, 9);
+    const requests = new Map(sample.jev.requests.map((entry) => [entry.request_id, entry]));
     const sent = new Map(sample.jev.sent.map((entry) => [entry.src, entry]));
-    // 已派发但网络失败：dispatched=true、输入证据保留、无有效回答
+    // 已派发但网络失败：dispatched=true、输入证据保留、usage 未知不伪称、attempts=3
     for (const src of ['s0', 's1', 's2']) {
       const entry = sent.get(src);
       assert.ok(entry, src);
       assert.equal(entry.dispatched, true, src);
       assert.equal(entry.answered, false, src);
-      assert.ok(entry.state, `${src} keeps its dispatched input evidence`);
+      const request = requests.get(entry.request_id ?? '');
+      assert.ok(request, `${src} links to its request record`);
+      assert.ok(request.state, `${src} keeps its dispatched input evidence`);
+      assert.equal(request.fail_kind, 'network');
+      assert.equal(request.input_tokens, null);
+      assert.equal(request.usage_complete, false);
+      assert.equal(request.http_attempts, 3);
     }
     // 熔断短路：零 fetch，未派发，原因明确——不与失败混同
     const s3 = sent.get('s3');
     assert.ok(s3);
     assert.equal(sample.jev.per_source[3]?.status, 'breaker_open');
+    const s3Request = requests.get(s3.request_id ?? '');
+    assert.ok(s3Request);
+    assert.equal(s3Request.dispatched, false);
+    assert.equal(s3Request.state, null);
+    assert.equal(s3Request.fail_kind, 'breaker_open');
+    assert.equal(s3Request.http_attempts, 0);
     assert.equal(s3.dispatched, false);
     assert.equal(s3.answered, false);
-    assert.equal(s3.state, null);
     assert.equal(s3.not_dispatched_reason, 'breaker_open');
   });
 
@@ -938,33 +1043,55 @@ describe('createSampleWriter', () => {
       preFilter: response,
       stats: result.stats,
       jevDispatch: result.jev_dispatch,
+      jevRequests: result.jev_requests,
       payload: { output: result.stats.output },
       statusLine: result.stats.output.status_line ?? null,
     });
 
     const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
       jev: {
-        sent: Array<{
-          src: string;
+        n_requests: number;
+        requests: Array<{
           dispatched: boolean;
           state: string | null;
+          questions: Record<string, unknown> | null;
+          fail_kind?: string;
+        }>;
+        sent: Array<{
+          src: string;
+          request_id?: string;
+          dispatched: boolean;
           not_dispatched_reason?: string;
-          snip_questions_sent: boolean;
+          snippets: Array<{ in_state: boolean; score_question_sent: boolean }>;
         }>;
       };
     };
+    // 预检拒绝不计 n_requests；请求记录如实保留（state null、fail_kind too_large）
+    assert.equal(sample.jev.n_requests, 0);
+    assert.equal(sample.jev.requests.length, 1);
+    const request = sample.jev.requests[0]!;
+    assert.equal(request.dispatched, false);
+    assert.equal(request.state, null);
+    assert.equal(request.questions, null);
+    assert.equal(request.fail_kind, 'too_large');
     const sent = new Map(sample.jev.sent.map((entry) => [entry.src, entry]));
     const s0 = sent.get('s0');
     assert.ok(s0, 's0 must appear in the dispatch map');
     assert.equal(s0.dispatched, false);
     assert.equal(s0.not_dispatched_reason, 'too_large');
-    assert.equal(s0.state, null);
-    assert.equal(s0.snip_questions_sent, false);
+    assert.deepEqual(
+      s0.snippets.map((snippet) => snippet.in_state),
+      [false]
+    );
+    assert.deepEqual(
+      s0.snippets.map((snippet) => snippet.score_question_sent),
+      [false]
+    );
     const s1 = sent.get('s1');
     assert.ok(s1, 'skipped sources appear with their own reason');
     assert.equal(s1.dispatched, false);
     assert.equal(s1.not_dispatched_reason, 'skipped');
-    assert.equal(s1.state, null);
+    assert.equal(s1.request_id, undefined, 'skipped sources have no request record');
   });
 
   it('records the no_key jev body verbatim with an empty dispatch map', async () => {
@@ -986,6 +1113,7 @@ describe('createSampleWriter', () => {
       preFilter: richResponse,
       stats,
       jevDispatch: jev_dispatch,
+      jevRequests: [],
       payload: { output: stats.output },
       statusLine: stats.output.status_line ?? null,
     });
@@ -1016,7 +1144,7 @@ describe('createSampleWriter', () => {
     const blockedPath = join(root, 'blocked-file');
     writeFileSync(blockedPath, 'not a directory', 'utf8'); // logDir 指向一个文件
     const config = configOf(blockedPath);
-    const { stats, jev_dispatch } = await runPipeline(config);
+    const { stats, jev_dispatch, jev_requests } = await runPipeline(config);
     const writer = createSampleWriter(config);
     const requestId = '88888888-2222-3333-4444-555555555555';
     const path = writer.allocatePath(requestId);
@@ -1038,6 +1166,7 @@ describe('createSampleWriter', () => {
         preFilter: richResponse,
         stats,
         jevDispatch: jev_dispatch,
+        jevRequests: jev_requests,
         payload: {},
         statusLine: null,
       });
@@ -1077,6 +1206,7 @@ describe('createSampleWriter', () => {
       preFilter: { grounding: { generic: [] }, sources: {} },
       stats: emptyStats('test'),
       jevDispatch: [],
+      jevRequests: [],
       payload: {},
       statusLine: null,
     });
@@ -1086,7 +1216,7 @@ describe('createSampleWriter', () => {
     const samplesDir = join(logDir, 'samples');
     const dateDirs = readdirSync(samplesDir);
     assert.equal(dateDirs.length, 1);
-    assert.match(dateDirs[0], /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(dateDirs[0]!, /^\d{4}-\d{2}-\d{2}$/);
   });
 
   it('leaves only the final file after the temp-file rename, never a leftover .tmp', () => {
@@ -1107,19 +1237,20 @@ describe('createSampleWriter', () => {
       preFilter: { grounding: { generic: [] }, sources: {} },
       stats: emptyStats('test'),
       jevDispatch: [],
+      jevRequests: [],
       payload: {},
       statusLine: null,
     });
     assert.deepEqual(outcome, { status: 'saved' });
     // 原子形状：目标目录里只有最终文件，无 .tmp 残留
-    const dateDir = join(logDir, 'samples', path.relative.split('/')[1]);
+    const dateDir = join(logDir, 'samples', path.relative.split('/')[1]!);
     assert.deepEqual(readdirSync(dateDir), [path.relative.split('/').at(-1)]);
   });
 
   it('leaves no parseable half record when the write fails midway (hooks injection)', async () => {
     const logDir = join(root, 'half-file', 'logs');
     const config = configOf(logDir);
-    const { stats, jev_dispatch } = await runPipeline(config);
+    const { stats, jev_dispatch, jev_requests } = await runPipeline(config);
     const writer = createSampleWriter(config, {
       // 故障注入：临时文件写一半（不可能解析成完整 JSON）再抛——rename 永不发生
       writeFile: (tmpPath, data) => {
@@ -1147,6 +1278,7 @@ describe('createSampleWriter', () => {
         preFilter: richResponse,
         stats,
         jevDispatch: jev_dispatch,
+        jevRequests: jev_requests,
         payload: {},
         statusLine: null,
       });
@@ -1156,7 +1288,7 @@ describe('createSampleWriter', () => {
     assert.deepEqual(outcome, { status: 'failed' });
     // 防护断言：目录里既无最终 .json 也无半截 .tmp（fail 路径尽力清理）——
     // 绝无可误读为完整成功记录的半截 JSON 落盘
-    const dateDir = join(logDir, 'samples', path.relative.split('/')[1]);
+    const dateDir = join(logDir, 'samples', path.relative.split('/')[1]!);
     assert.ok(existsSync(dateDir), 'the date dir is created before the write');
     assert.deepEqual(readdirSync(dateDir), []);
     assert.equal(existsSync(path.absolute), false);
@@ -1173,10 +1305,12 @@ describe('createSampleWriter', () => {
     const config = configOf(logDir);
     const stats = emptyStats('test');
     stats.jev = {
-      n_requests: 2,
-      input_tokens: 10,
+      n_requests: 1,
+      input_tokens: 0,
       latency_ms_total: 20,
       status: 'degraded',
+      n_http_attempts: 2,
+      requests: [],
       per_source: [
         {
           src: 's0',
@@ -1188,7 +1322,8 @@ describe('createSampleWriter', () => {
         { src: 's2', url: 'https://b.example/', status: 'breaker_open', latency_ms: 0 },
       ],
     };
-    // 手工派发记录与 stats 同形：s0 已派发但超时（实发 state 保留）、s2 熔断短路
+    // 手工派发与请求记录同形（生产管道形状）：s0 已派发但超时（实发 state 保留在
+    // 请求级）、s2 熔断短路（未派发）
     const dispatchedState = buildState(
       's0',
       'https://a.example/post',
@@ -1202,10 +1337,9 @@ describe('createSampleWriter', () => {
         src: 's0',
         url: 'https://a.example/post',
         title: 'A Post',
+        request_id: 'j1',
+        array_index: 0,
         dispatched: true,
-        state: dispatchedState,
-        questions: null,
-        snip_questions_sent: true,
         answered: false,
         snippet_score_validity: null,
         snippet_scores_received: null,
@@ -1217,10 +1351,9 @@ describe('createSampleWriter', () => {
         src: 's2',
         url: 'https://b.example/',
         title: 'B Page',
+        request_id: 'j2',
+        array_index: 0,
         dispatched: false,
-        state: null,
-        questions: null,
-        snip_questions_sent: false,
         answered: false,
         snippet_score_validity: null,
         snippet_scores_received: null,
@@ -1228,6 +1361,49 @@ describe('createSampleWriter', () => {
         not_dispatched_reason: 'breaker_open' as const,
         snippet_keys: ['0'],
         snippet_texts: [uniqueBody],
+      },
+    ];
+    const jevRequests: JevRequestRecord[] = [
+      {
+        request_id: 'j1',
+        mode: 'single',
+        requested: 'single',
+        effective: 'single',
+        source_ids: ['s0'],
+        dispatched: true,
+        state: dispatchedState,
+        questions: null,
+        answered: false,
+        input_tokens: null,
+        usage_complete: false,
+        http_attempts: 2,
+        latency_ms: 15,
+        fail_kind: 'timeout',
+        mapping: [
+          {
+            source_id: 's0',
+            array_index: 0,
+            snippet_keys: ['0'],
+            question_keys: {},
+          },
+        ],
+      },
+      {
+        request_id: 'j2',
+        mode: 'single',
+        requested: 'single',
+        effective: 'single',
+        source_ids: ['s2'],
+        dispatched: false,
+        state: null,
+        questions: null,
+        answered: false,
+        input_tokens: null,
+        usage_complete: false,
+        http_attempts: 0,
+        latency_ms: 0,
+        fail_kind: 'breaker_open',
+        mapping: [{ source_id: 's2', array_index: 0, snippet_keys: ['0'], question_keys: {} }],
       },
     ];
 
@@ -1244,6 +1420,7 @@ describe('createSampleWriter', () => {
       preFilter: richResponse,
       stats,
       jevDispatch,
+      jevRequests,
       payload: { output: stats.output },
       statusLine: stats.output.status_line ?? null,
     });
@@ -1252,11 +1429,19 @@ describe('createSampleWriter', () => {
       jev: {
         status: string;
         per_source: Array<{ src: string; status: string; fail_kind?: string }>;
-        sent: Array<{
-          src: string;
+        requests: Array<{
+          request_id: string;
           dispatched: boolean;
           answered: boolean;
           state: string | null;
+          fail_kind?: string;
+          http_attempts?: number;
+        }>;
+        sent: Array<{
+          src: string;
+          request_id?: string;
+          dispatched: boolean;
+          answered: boolean;
           not_dispatched_reason?: string;
         }>;
       };
@@ -1266,19 +1451,31 @@ describe('createSampleWriter', () => {
     const rows = new Map(sample.jev.per_source.map((row) => [row.src, row]));
     assert.equal(rows.get('s0')?.fail_kind, 'timeout');
     assert.equal(rows.get('s2')?.status, 'breaker_open');
-    // 状态区分（04-04 R1）：超时行已派发、实发 state 保留输入证据；熔断行未派发、
-    // 原因 breaker_open——不再是同一种"未发送"
+    // 请求级状态区分：超时请求已派发、实发 state 保留输入证据；熔断请求未派发
+    const requests = new Map(sample.jev.requests.map((entry) => [entry.request_id, entry]));
+    const s0Request = requests.get('j1');
+    assert.ok(s0Request);
+    assert.equal(s0Request.dispatched, true);
+    assert.equal(s0Request.answered, false);
+    assert.ok(s0Request.state);
+    assert.deepEqual(JSON.parse(s0Request.state), dispatchedState);
+    assert.equal(s0Request.http_attempts, 2);
+    const s2Request = requests.get('j2');
+    assert.ok(s2Request);
+    assert.equal(s2Request.dispatched, false);
+    assert.equal(s2Request.state, null);
+    assert.equal(s2Request.fail_kind, 'breaker_open');
+    // 来源级经 request_id 关联；熔断行原因 breaker_open
     const sent = new Map(sample.jev.sent.map((entry) => [entry.src, entry]));
     const s0 = sent.get('s0');
     assert.ok(s0);
+    assert.equal(s0.request_id, 'j1');
     assert.equal(s0.dispatched, true);
     assert.equal(s0.answered, false);
-    assert.ok(s0.state);
-    assert.deepEqual(JSON.parse(s0.state), dispatchedState);
     const s2 = sent.get('s2');
     assert.ok(s2);
+    assert.equal(s2.request_id, 'j2');
     assert.equal(s2.dispatched, false);
-    assert.equal(s2.state, null);
     assert.equal(s2.not_dispatched_reason, 'breaker_open');
   });
 
@@ -1310,6 +1507,7 @@ describe('createSampleWriter', () => {
         preFilter: { grounding: { generic: [] }, sources: {} },
         stats: emptyStats('test'),
         jevDispatch: [],
+        jevRequests: [],
         payload: circular,
         statusLine: null,
       });
@@ -1347,6 +1545,7 @@ describe('createSampleWriter', () => {
         preFilter: { grounding: { generic: [] }, sources: {} },
         stats: emptyStats('test'),
         jevDispatch: [],
+        jevRequests: [],
         payload: {},
         statusLine: null,
       });
@@ -1377,6 +1576,7 @@ describe('createSampleWriter', () => {
       preFilter: { grounding: { generic: [] }, sources: {} },
       stats: emptyStats('test'),
       jevDispatch: [] as JevDispatchRecord[],
+      jevRequests: [] as JevRequestRecord[],
       payload: {},
       statusLine: null,
     };

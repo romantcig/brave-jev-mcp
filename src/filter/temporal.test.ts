@@ -24,6 +24,7 @@ function classifyWith(
   omitDispatchQuestion = false
 ): ClassifyDeps['classify'] {
   return async ({ state, questions }) => {
+    if (!('source' in state)) return { status: 'failed', kind: 'validation' };
     assert.deepEqual(state.source.snippets, [stable, dated]);
     assert.deepEqual(
       Object.keys(questions).filter((key) => key.startsWith('time_')),

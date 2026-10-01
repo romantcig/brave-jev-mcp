@@ -47,11 +47,14 @@ export type FilterConfig = {
   blocklist: ReadonlySet<string>;
   /** 十一项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05） */
   thresholds: JevThresholds;
-  /** Jev 客户端配置：钉版模型、超时纯兜底与进程级并发闸初值（02-05 消费） */
+  /** Jev 客户端配置：钉版模型、超时纯兜底、进程级并发闸初值（02-05 消费）与
+   * 请求组织模式（六题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §3） */
   jev: {
     model: string;
     timeoutMs: number;
     concurrency: number;
+    /** 请求组织：single 逐来源一次请求（默认）；all 全候选共享一次请求 */
+    contextMode: JevRequestMode;
   };
   /** JSONL 日志目录；开头的 `~` 已在解析时展开为本机 home */
   logDir: string;
@@ -77,6 +80,24 @@ export type JevCandidate = {
   snippets: string[];
 };
 
+/**
+ * 片段配对身份（04-02 样本映射用）：`{merged_from}:{index}` 前缀可省（无并入来源），
+ * JSON-LD 多段加 `.{part}`——与统计表 SnippetStats 的 index/part/merged_from 同源。
+ * （原住 pipeline.ts，全量上下文映射也要消费，移入类型家避免循环导入。）
+ */
+export type JevCandidateSnippetIdentity = { key: string; text: string };
+
+/**
+ * 候选集的带身份形状（04-02）：JevCandidate 口径 + 片段配对身份。全量请求规划
+ * （jev/context.ts）用它保留片段身份映射。
+ */
+export type JevCandidateDetailed = {
+  id: string;
+  url: string;
+  title: string;
+  snippets: JevCandidateSnippetIdentity[];
+};
+
 // ---------------------------------------------------------------------------
 // Jev 契约类型（02-02）：全部住类型家，防循环导入——jev/ 与 pipeline 都从这里取。
 // ---------------------------------------------------------------------------
@@ -88,8 +109,10 @@ export type JevQuestion = {
   criteria?: readonly string[];
 };
 
-/** 单来源 state：官方"context rot"规则——只放问题需要的东西，不放元数据与被删片段。 */
-export type JevState = {
+/**
+ * 单来源 state：官方"context rot"规则——只放问题需要的东西，不放元数据与被删片段。
+ */
+export type JevSingleState = {
   query: string;
   intent: string;
   source: {
@@ -99,6 +122,26 @@ export type JevState = {
     snippets: string[];
   };
 };
+
+/**
+ * 全量共享 state（六题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §4.1）：本地步 1–4 完成
+ * 后进入 Jev 的全部候选来源与片段放进同一个 state。`sources` 按候选 Brave 原序排列，
+ * 来源 ID 继续用 `s{braveIndex}` 不重编号——`sources[i]` 的 i 是当前数组位置，**不
+ * 等于来源 ID 的数字**（前面来源被删不重排）。元素形状与 `JevCandidate` 同构
+ * （id / url / title / 幸存片段文本），不放原始响应、被预筛删除的段落或其他字段。
+ */
+export type JevAllState = {
+  query: string;
+  intent: string;
+  sources: JevCandidate[];
+};
+
+/**
+ * 请求 state 的显式联合：单来源（`.source`）与全量（`.sources`）。收窄一律用
+ * `'source' in state` / `'sources' in state`，绝不用 any 绕过形状差异；客户端据此
+ * 路由单来源阶梯与全量防御两条路径。
+ */
+export type JevState = JevSingleState | JevAllState;
 
 /**
  * 答案的库内统一形状：noul 读 0–1 概率，score 读连续分值（夹具实证 1.62/1.77，
@@ -139,7 +182,7 @@ export type JevDispatchPayload = {
  * 但失败的请求（HTTP 4xx/5xx、超时、网络错误都算"已派发"，输入证据必须保留）；
  * 未派发的短路（too_large / breaker_open）不带。术语口径：派发 ≠ 服务端已收到。
  */
-export type ClassifyOutcome =
+export type ClassifyOutcome = (
   | {
       status: 'answered';
       model: string;
@@ -154,6 +197,11 @@ export type ClassifyOutcome =
       sent_snippets?: number;
       /** 实发派发载荷（04-04 R1，见类型注释） */
       dispatch?: JevDispatchPayload;
+      /**
+       * 真实 HTTP 尝试次数（含重试；生产客户端必带）。注入桩可不带——管道按
+       * "未知"处理，绝不伪称为零或一（FULL_CONTEXT_ROLLOUT_PLAN §6.1）。
+       */
+      http_attempts?: number;
     }
   | {
       status: 'failed';
@@ -161,7 +209,17 @@ export type ClassifyOutcome =
       detail?: string;
       /** 实发派发载荷（04-04 R1）：已派发但失败的请求保留输入证据 */
       dispatch?: JevDispatchPayload;
-    };
+      /** 真实 HTTP 尝试次数；未派发的短路（too_large / breaker_open）为 0 */
+      http_attempts?: number;
+      /** 即使判断失败，仍保留各次响应已知用量之和。 */
+      input_tokens?: number;
+    }
+) & {
+  /** 所有 HTTP 尝试均取得用量才为 true；部分已知时 input_tokens 只是已知小计。 */
+  usage_complete?: boolean;
+  /** 最后一个取得正文的 HTTP 响应状态；没有响应时省略。 */
+  http_status?: number;
+};
 
 /** 传输依赖：管道经 `FilterDeps.classify` 注入；实现持有超时/重试/熔断/并发闸（02-05 的 createJevClassifier）。 */
 export type ClassifyDeps = {
@@ -219,16 +277,116 @@ export type JevPerSourceStats = {
   model?: string;
   input_tokens?: number;
   latency_ms?: number;
+  /**
+   * 该来源判断所属逻辑请求的 ID（FULL_CONTEXT_ROLLOUT_PLAN §6.1：投影后的每来源行
+   * 引用请求 ID）。all 模式下 N 行引用同一请求；no_key / 未派发无请求时省略。
+   */
+  request_id?: string;
 };
+
+/** Jev 请求组织模式：single 逐来源一次请求（默认），all 全候选共享一次请求。 */
+export type JevRequestMode = 'single' | 'all';
+
+/** requested ≠ effective 的回退原因（FULL_CONTEXT_ROLLOUT_PLAN §3 表格）。 */
+export type JevFallbackReason = 'single_candidate' | 'over_budget' | 'client_too_large';
+
+/** 请求级记录里的来源与题目映射条目（§4.2 显式映射）。 */
+export type JevRequestMappingEntry = {
+  /** 探测约定 id：`s{braveIndex}` */
+  source_id: string;
+  /**
+   * 该来源在请求 state 里的位置：all 为 `state.sources` 数组下标；single 恒 0
+   * （state 是单来源形状，无数组，位置仅作占位）
+   */
+  array_index: number;
+  /** 候选片段配对身份（与 JevDispatchRecord.snippet_keys 同源同序） */
+  snippet_keys: string[];
+  /** 局部题键（六题、snip{i}、time_snip{i}）→ 请求级全局题键（single 为恒等映射） */
+  question_keys: Record<string, string>;
+};
+
+/**
+ * 一次 Jev 逻辑请求的完整事实（FULL_CONTEXT_ROLLOUT_PLAN §6.1）。带正文
+ * （state / questions / answers / mapping），住 `FilterResult.jev_requests` 供样本
+ * v4 落盘——**绝不进 FilterStats / JSONL**（LOG-03 红线，同 jev_dispatch 先例）。
+ * 状态维度互相独立：`dispatched`（fetch 已调用）、`answered`（收到可解析响应）、
+ * `usage_complete`（input_tokens 真实取得）分别表达；已派发但失败的请求保留实发
+ * state / questions 作输入证据。`input_tokens` 保留各次响应的已知小计，全部未知
+ * 才为 null；usage_complete 表示所有 HTTP 尝试都取得了用量。
+ */
+export type JevRequestRecord = {
+  /** 本次搜索内唯一请求 ID（`j1`、`j2` …按派发顺序分配） */
+  request_id: string;
+  /** 实际请求组织：single 一来源一请求；all 全候选共享一请求 */
+  mode: JevRequestMode;
+  /** 配置要求的组织模式 */
+  requested: JevRequestMode;
+  /** 实际生效的组织模式 */
+  effective: JevRequestMode;
+  /** requested ≠ effective 时的回退原因；一致时省略 */
+  fallback_reason?: JevFallbackReason;
+  /** 覆盖的来源 ID（all 按 state.sources 数组序；single 单元素） */
+  source_ids: string[];
+  /** 是否已派发（fetch 已调用；too_large / breaker_open / 防御短路一律 false） */
+  dispatched: boolean;
+  /** 实发 state（客户端派发处捕获，含已派发但失败的请求）；未派发为 null */
+  state: JevState | null;
+  /** 实发题目集合（与 state 一同构成请求体）；未派发为 null */
+  questions: Record<string, JevQuestion> | null;
+  /** 是否收到可解析响应（HTTP 200 且 answers 形状校验通过） */
+  answered: boolean;
+  /** 服务端回报的模型版本（answered 时） */
+  model?: string;
+  /** 各次响应的已知用量之和；全部未知才为 null。 */
+  input_tokens: number | null;
+  /** 所有 HTTP 尝试的用量是否均已取得。 */
+  usage_complete: boolean;
+  /** 最后一个取得正文的 HTTP 响应状态。 */
+  http_status?: number;
+  /** 真实 HTTP 尝试次数（含重试）；客户端未提供时省略，绝不伪称 */
+  http_attempts?: number;
+  /** 逻辑请求耗时（毫秒，含重试与退避的 classify 全程） */
+  latency_ms: number;
+  /** 失败分类（failed 时） */
+  fail_kind?: ClassifyFailKind;
+  /** 解析后的原始答案，键为请求级全局题键（answered 时） */
+  answers?: Record<string, JevAnswer>;
+  /** 来源与题目映射（构造成功即带，含未派发的规划结果） */
+  mapping: JevRequestMappingEntry[];
+  /** 派发前的双限额规划估算（all 模式；§6.1"规划预算"对账） */
+  planned_estimates?: {
+    state_tokens: number;
+    longest_question_tokens: number;
+    total_questions_tokens: number;
+    single_limit_estimate: number;
+    total_limit_estimate: number;
+  };
+};
+
+/** JevStats.requests 的摘要行：JevRequestRecord 去掉正文（state/questions/answers/
+ * mapping/model）——JSONL 只放身份、模式与计数，不放正文（LOG-03）。 */
+export type JevRequestSummary = Omit<
+  JevRequestRecord,
+  'state' | 'questions' | 'answers' | 'mapping' | 'model'
+>;
 
 /** Jev 阶段的汇总记账（Phase 3 状态行与 JSONL 日志的共同来源）。 */
 export type JevStats = {
-  /** 实际发出的请求数（无候选 / 熔断短路不虚记） */
+  /**
+   * 实际至少派发一次的逻辑分类请求数（FULL_CONTEXT_ROLLOUT_PLAN §6.1）：answered
+   * 或已派发后失败各计一；无候选、预检拒绝（too_large 未派发）、熔断短路不虚记。
+   * N 来源一次全量请求记 1，不冒充 N 次 HTTP。
+   */
   n_requests: number;
   input_tokens: number;
+  /** 逻辑请求耗时之和（每次 classify 全程），不冒充整个过滤阶段的墙钟耗时 */
   latency_ms_total: number;
   status: 'ok' | 'no_key' | 'degraded' | 'breaker_open';
   per_source: JevPerSourceStats[];
+  /** 全部请求的真实 HTTP 尝试总数（含重试；与 n_requests 分开记） */
+  n_http_attempts: number;
+  /** 请求级摘要（无正文，LOG-03 允许的身份与计数面），按派发顺序排列 */
+  requests: JevRequestSummary[];
 };
 
 /**
@@ -460,21 +618,29 @@ export type FilterResult = {
   result: FilteredResponse;
   stats: FilterStats;
   /**
-   * Jev 实发派发记录（04-04 R1）：每 keep 来源一条，捕获于客户端超限阶梯之后、
-   * 请求派发处，按表序（Brave 原序）排列——样本层如实落盘的唯一来源，样本写入时
-   * **绝不**重跑本地规则重建候选。含实发 state 正文，**绝不进 FilterStats /
-   * JSONL 日志**（LOG-03 红线：JSONL 无正文，本字段住在 FilterResult 上就是证明）。
+   * Jev 实发派发来源级记录（04-04 R1）：每 keep 来源一条，按表序（Brave 原序）排列
+   * ——样本层如实落盘的唯一来源级证据，样本写入时**绝不**重跑本地规则重建候选。
    * off / no_key 模式为空表。
    */
   jev_dispatch: JevDispatchRecord[];
+  /**
+   * Jev 请求级记录（六题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §6.1）：每逻辑请求
+   * 一条、按派发顺序，带实发 state / questions / answers / 映射正文（single 模式
+   * N 条、all 模式 1 条）。样本 v4 的载荷只信这里；**绝不进 FilterStats / JSONL**
+   * （LOG-03 红线）。off / no_key 为空表。
+   */
+  jev_requests: JevRequestRecord[];
 };
 
 /**
- * Jev 实发派发记录（04-04 R1）：一次来源级请求的派发事实与输入证据。
- * 状态维度互相独立——`dispatched`（请求已派发）、文本是否进入 state（实发 state
- * 的片段数）、`snip_questions_sent`（是否提交片段评分题）、`answered`（是否收到
- * 可解析响应）分别表达，failed / skipped / too_large / breaker_open 不再混作同一种
- * "未发送"。已派发但失败的请求保留实发 state 作输入证据。
+ * Jev 实发派发的来源级记录（04-04 R1 引入；六题全量上下文接入后瘦身为**纯来源级
+ * 证据**）：一次逻辑请求覆盖哪些来源、每个来源的片段身份与逐题有效性。实发
+ * state / questions / answers 全量载荷在 `FilterResult.jev_requests` 每请求存一份
+ * （§6.1：不在每个来源下重复整份载荷），来源行经 `request_id` 关联；single 模式
+ * 一请求一来源，关系不变。状态维度互相独立——`dispatched`（请求已派发）、
+ * `answered`（收到可解析响应）与逐片段评分有效性分别表达，failed / skipped /
+ * too_large / breaker_open 不再混作同一种"未发送"。已派发但失败的请求保留请求级
+ * 实发载荷作输入证据。
  */
 export type JevDispatchRecord = {
   /** 探测约定 id：`s{braveIndex}`（与 per_source.src 同源） */
@@ -482,16 +648,20 @@ export type JevDispatchRecord = {
   url: string;
   title: string;
   /**
+   * 所属逻辑请求 ID（jev_requests 中的 request_id）；构造出请求即带——含规划后
+   * 未派发的请求（熔断短路等），此时按 not_dispatched_reason 解释
+   */
+  request_id?: string;
+  /**
+   * 该来源在所属请求 state 里的位置：all 为 `state.sources` 数组下标；single 恒 0
+   * （state 为单来源形状）。映射消费方不得把它与 src 的数字混用（§9 审查项）
+   */
+  array_index?: number;
+  /**
    * 请求是否已派发（fetch 已调用；不保证服务端已收到或已处理——重试、断连、
    * 非零退出都可能发生）。too_large / breaker_open / skipped 一律 false。
    */
   dispatched: boolean;
-  /** 实发 state（超限阶梯处理后的真实发送内容）；未派发为 null */
-  state: JevState | null;
-  /** 实发题目集合；未派发为 null */
-  questions: Record<string, JevQuestion> | null;
-  /** 是否提交了片段评分题（实发 questions 含 score 题即 snip{i}） */
-  snip_questions_sent: boolean;
   /**
    * 是否收到可解析响应（HTTP 200 且 answers 形状校验通过）——不含"来源裁决有效"
    * 之义，后者见 source_verdict_valid（二次复审 R1 余项拆分）

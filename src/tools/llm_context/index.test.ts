@@ -573,6 +573,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           dispatched: boolean;
           answered: boolean;
           state: string | null;
+          request_id?: string;
           snippets: Array<{
             snippet: string;
             in_state: boolean;
@@ -583,8 +584,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       };
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
-    // 04-04 R1 返修：format_version 3（实发派发捕获口径 + 状态四维拆分）
-    assert.equal(sample.format_version, 3);
+    // v4（六题全量上下文）：请求级载荷 + 来源级映射引用（FULL_CONTEXT_ROLLOUT_PLAN §6.2）
+    assert.equal(sample.format_version, 4);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -617,8 +618,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
         ['s1', false, false],
       ]
     );
-    // s1 的 skipped 记录不带 state（无内容可派发，不伪造输入证据）
-    assert.equal(sample.jev.sent[1]?.state, null);
+    // s1 的 skipped 记录无请求可引用（无内容可派发，不伪造输入证据）
+    assert.equal(sample.jev.sent[1]?.request_id, undefined);
     assert.deepEqual(
       sample.jev.sent[0]?.snippets.map((snippet) => [
         snippet.snippet,
@@ -840,8 +841,9 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
         src: string;
         dispatched: boolean;
         not_dispatched_reason?: string;
-        state: string | null;
+        request_id?: string;
       }>;
+      requests: unknown[];
     };
     assert.equal(jev.status, 'ok');
     assert.ok(jev.per_source.every((row) => row.status === 'skipped'));
@@ -850,13 +852,15 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
         entry.src,
         entry.dispatched,
         entry.not_dispatched_reason,
-        entry.state,
+        entry.request_id,
       ]),
       [
-        ['s0', false, 'skipped', null],
-        ['s1', false, 'skipped', null],
+        ['s0', false, 'skipped', undefined],
+        ['s1', false, 'skipped', undefined],
       ]
     );
+    // 零候选：零请求、不伪造请求记录（计划 §3 表格）
+    assert.deepEqual(jev.requests, []);
   });
 
   it('coverage: concurrent requests land distinct sample files that never cross-write', async () => {

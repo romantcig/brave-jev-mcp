@@ -91,6 +91,8 @@ describe('createLogWriter', () => {
       input_tokens: 0,
       latency_ms_total: 0,
       status: 'ok',
+      n_http_attempts: 0,
+      requests: [],
       per_source: [
         { src: 's0', url: 'https://a.example/', status: 'answered', model: 'jev-1.13.0' },
       ],
@@ -123,6 +125,8 @@ describe('createLogWriter', () => {
       input_tokens: 0,
       latency_ms_total: 0,
       status: 'degraded',
+      n_http_attempts: 0,
+      requests: [],
       per_source: [
         { src: 's0', url: 'https://a.example/', status: 'answered', model: 'jev-1.13.0' },
         { src: 's1', url: 'https://b.example/', status: 'answered', model: 'jev-1.13.0' },

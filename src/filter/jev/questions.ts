@@ -17,7 +17,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { JevQuestion, JevState, JevThresholds } from '../types.js';
+import type { JevQuestion, JevSingleState, JevThresholds } from '../types.js';
 
 /**
  * 总指令：防农场页自我标榜抬高论证题。每题 instructions 以它加空格为前缀
@@ -131,7 +131,7 @@ export function buildState(
   snippets: string[],
   query: string,
   intent: string
-): JevState {
+): JevSingleState {
   return { query, intent, source: { id, url, title, snippets } };
 }
 

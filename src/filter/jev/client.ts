@@ -19,6 +19,7 @@
  */
 
 import { estimateTokens } from '../tokens.js';
+import { checkAllBudget } from './context.js';
 import type {
   ClassifyDeps,
   ClassifyFailKind,
@@ -27,6 +28,7 @@ import type {
   JevDispatchPayload,
   JevLadderLevel,
   JevQuestion,
+  JevSingleState,
   JevState,
 } from '../types.js';
 import type { FilterConfig } from '../types.js';
@@ -70,15 +72,20 @@ export function buildRequest(
  * - bodyText 非 JSON、顶层缺 model / answers、usage 缺有限数值 input_tokens
  *   → `{ ok: false, kind: 'shape' }`（JEV-02：input_tokens 是必须带回的契约字段）。
  * - 答案逐键收窄：`type: 'noul'` 缺数值 `noul`、`type: 'score'` 缺数值 `score`
- *   → 整体 'shape'；其余键（未知 type、非对象值）白名单外，忽略不进结果。
+ *   → single 整体 'shape'；全量按题忽略坏值，由来源级校验防御。其余键（未知 type、非对象值）白名单外，忽略不进结果。
  *
  * @param status HTTP 状态码
  * @param bodyText 响应原文
+ * @param isolateInvalidAnswers 全量请求启用逐题隔离，single 默认保持既有语义
  * @example parseJevResponse(200, '{"model":"jev-1.13.0",...}') → { ok: true, model, answers, input_tokens }
  * @example parseJevResponse(422, '...') → { ok: false, kind: 'http', status: 422 }
  * @example parseJevResponse(200, 'not json') → { ok: false, kind: 'shape' }
  */
-export function parseJevResponse(status: number, bodyText: string): ParsedJevResponse {
+export function parseJevResponse(
+  status: number,
+  bodyText: string,
+  isolateInvalidAnswers = false
+): ParsedJevResponse {
   if (status !== 200) return { ok: false, kind: 'http', status };
 
   let body: unknown;
@@ -99,10 +106,16 @@ export function parseJevResponse(status: number, bodyText: string): ParsedJevRes
   for (const [key, value] of Object.entries(body.answers)) {
     if (!isRecord(value)) continue; // 白名单外：忽略该键
     if (value.type === 'noul') {
-      if (typeof value.noul !== 'number') return { ok: false, kind: 'shape' };
+      if (typeof value.noul !== 'number') {
+        if (isolateInvalidAnswers) continue;
+        return { ok: false, kind: 'shape' };
+      }
       answers[key] = { kind: 'noul', probability: value.noul };
     } else if (value.type === 'score') {
-      if (typeof value.score !== 'number') return { ok: false, kind: 'shape' };
+      if (typeof value.score !== 'number') {
+        if (isolateInvalidAnswers) continue;
+        return { ok: false, kind: 'shape' };
+      }
       answers[key] = { kind: 'score', score: value.score };
     }
     // 其余 type 不在协议白名单内：忽略该键，不抛、不收进结果
@@ -110,6 +123,18 @@ export function parseJevResponse(status: number, bodyText: string): ParsedJevRes
 
   return { ok: true, model: body.model, answers, input_tokens: body.usage.input_tokens };
 }
+
+/** 用量是独立的响应事实：即使 HTTP 或答案校验失败，也保留可取得的非负有限值。 */
+const responseInputTokens = (bodyText: string): number | undefined => {
+  try {
+    const body: unknown = JSON.parse(bodyText);
+    if (!isRecord(body) || !isRecord(body.usage)) return undefined;
+    const value = body.usage.input_tokens;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // 传输兜底（02-05）：仅 TypeSafe 直连单后端（JEV-01）。
@@ -271,12 +296,20 @@ const httpFailure = (
  * 估算只复用 `../tokens.js` 的 `estimateTokens`（01-04 明文，不复制实现）。
  * 写时复制：绝不改入参 state / questions（砍尾 slice 拷贝、删题浅拷贝）。
  * 阶梯只影响该来源的请求内容。
+ *
+ * 入参只接受**单来源** state（FULL_CONTEXT_ROLLOUT_PLAN §5.1 红线：全量共享 state
+ * 禁止进入单来源砍尾代码——不能硬塞 `.source`、复制正文、删来源或删全量片段题来
+ * 避免超限；全量的发送前校验是 `checkAllBudget` 双限额防御，见 classify 内路由）。
  */
 const applyOversizeLadder = (
-  state: JevState,
+  state: JevSingleState,
   questions: Record<string, JevQuestion>,
   ladder: { value?: JevLadderLevel }
-): { state: JevState; questions: Record<string, JevQuestion>; sentSnippets: number } | null => {
+): {
+  state: JevSingleState;
+  questions: Record<string, JevQuestion>;
+  sentSnippets: number;
+} | null => {
   let workState = state;
   let workQuestions = questions;
 
@@ -317,8 +350,8 @@ const applyOversizeLadder = (
     ladder.value = 'source_only_questions';
   }
 
-  // ④ 仅来源级题仍超 32k（state 本身不可再砍）→ 该来源不问 Jev
-  if (over32k(workState, workQuestions)) return null;
+  // ④ 最终同时复查 32k 与 64k，不允许来源题降级后仍超限的请求派发
+  if (!checkAllBudget(workState, workQuestions).ok) return null;
 
   const sentSnippets = Object.keys(workQuestions).filter((name) =>
     SNIP_KEY_PATTERN.test(name)
@@ -366,9 +399,14 @@ export type JevClassifierHooks = {
  *   代替本次退避；> 5s 则不再重试、立即按该状态的 kind 失败（计入熔断）。
  * - 计入熔断的 kind 只有瞬态类（timeout / rate_limited / network）。
  *
- * 超限阶梯（JEV-05）：发送前按 `applyOversizeLadder` 降级；不可再砍 → 不发请求
- * 直接 failed 'too_large'。answered outcome 带实际生效的 ladder 级别名与真正发送
- * 的片段数 `sent_snippets`（未降级可省略——管道据此把 snip 分数按位置对齐）。
+ * 超限阶梯（JEV-05）：单来源 state 发送前按 `applyOversizeLadder` 降级；不可再砍
+ * → 不发请求直接 failed 'too_large'。answered outcome 带实际生效的 ladder 级别名与
+ * 真正发送的片段数 `sent_snippets`（未降级可省略——管道据此把 snip 分数按位置对齐）。
+ * 全量共享 state（'source' 不在）绝不进阶梯（FULL_CONTEXT_ROLLOUT_PLAN §5.1）：
+ * 发送前仅做 `checkAllBudget` 双限额最终防御校验，超限零 HTTP 返回 too_large。
+ *
+ * http_attempts（计划 §6.1）：所有返回点带真实 HTTP 尝试次数——重试循环内是当前
+ * attempt，熔断短路 / 预检拒绝为 0；注入桩可不带，管道按未知处理。
  *
  * 实发派发捕获（04-04 R1）：请求体定形后（阶梯处理完、fetch 调用前）捕获实发
  * state 与题目集合，随所有从重试循环返回的 outcome（answered 或已派发后失败）
@@ -431,7 +469,8 @@ export function createJevClassifier(
     }
   };
 
-  /** 熔断窗口检查：open 期返回短路结果；到期则闭合、计数清零并返回 undefined。 */
+  /** 熔断窗口检查：open 期返回短路结果；到期则闭合、计数清零并返回 undefined。
+   * 短路零 fetch——http_attempts 恒 0（FULL_CONTEXT_ROLLOUT_PLAN §6.1）。 */
   const breakerShortCircuit = (): ClassifyOutcome | undefined => {
     if (openUntil === 0) return undefined;
     if (now() < openUntil) {
@@ -439,6 +478,7 @@ export function createJevClassifier(
         status: 'failed',
         kind: 'breaker_open',
         detail: 'circuit open after consecutive transient failures',
+        http_attempts: 0,
       };
     }
     openUntil = 0;
@@ -471,30 +511,61 @@ export function createJevClassifier(
       const afterQueue = breakerShortCircuit();
       if (afterQueue !== undefined) return afterQueue;
 
-      // 超限阶梯（JEV-05）：发送前降级；null = 不可再砍，不发请求
-      const ladder: { value?: JevLadderLevel } = {};
-      const prepared = applyOversizeLadder(state, questions, ladder);
-      if (prepared === null) {
-        return {
-          status: 'failed',
-          kind: 'too_large',
-          detail:
-            'estimated state + longest question exceeds the 32k limit even with all snippets cut',
-        };
+      // 请求组织路由（FULL_CONTEXT_ROLLOUT_PLAN §5.1）：单来源 state 走既有超限
+      // 阶梯；全量共享 state（'source' 不在）绝不进阶梯——发送前只做双限额最终
+      // 防御校验（规划层已预检，正常不触达；超限零 HTTP 返回 too_large）
+      let sendState: JevState;
+      let sendQuestions: Record<string, JevQuestion>;
+      let ladderLifted = false;
+      let ladderValue: JevLadderLevel | undefined;
+      let sentSnippets = 0;
+      if ('source' in state) {
+        const ladder: { value?: JevLadderLevel } = {};
+        const prepared = applyOversizeLadder(state, questions, ladder);
+        if (prepared === null) {
+          return {
+            status: 'failed',
+            kind: 'too_large',
+            detail:
+              'estimated request still exceeds a 32k or 64k limit after the single-source ladder',
+            http_attempts: 0,
+          };
+        }
+        sendState = prepared.state;
+        sendQuestions = prepared.questions;
+        ladderLifted = ladder.value !== undefined;
+        ladderValue = ladder.value;
+        sentSnippets = prepared.sentSnippets;
+      } else {
+        const check = checkAllBudget(state, questions);
+        if (!check.ok) {
+          return {
+            status: 'failed',
+            kind: 'too_large',
+            detail: `all-context request exceeds the ${check.violation === 'single' ? '32k (state + longest question)' : '64k (state + all questions)'} limit; no HTTP sent`,
+            http_attempts: 0,
+          };
+        }
+        sendState = state;
+        sendQuestions = questions;
       }
-      const sendState = prepared.state;
-      const sendQuestions = prepared.questions;
       const body = JSON.stringify(buildRequest(sendState, sendQuestions, model));
-      const ladderLifted = ladder.value !== undefined;
 
       // 实发派发捕获（04-04 R1）：请求体已定形、即将派发——从这里到本闭包的所有
       // 返回点都属"请求已派发"（fetch 已调用；每次重试复用同一 body，实发内容
       // 不变）。样本层据此如实记录，绝不重跑本地规则重建。
       const dispatch: JevDispatchPayload = { state: sendState, questions: sendQuestions };
-      /** 统一给返回结果附上实发载荷；不修改入参（写时复制约定）。 */
-      const withDispatch = (outcome: ClassifyOutcome): ClassifyOutcome => ({
+      let knownInputTokens = 0;
+      let attemptsWithUsage = 0;
+      let responseStatus: number | undefined;
+      /** 统一给返回结果附上实发载荷与真实 HTTP 尝试数；不修改入参（写时复制约定）。 */
+      const withDispatch = (outcome: ClassifyOutcome, attempts: number): ClassifyOutcome => ({
         ...outcome,
         dispatch,
+        http_attempts: attempts,
+        ...(attemptsWithUsage > 0 ? { input_tokens: knownInputTokens } : {}),
+        usage_complete: attemptsWithUsage === attempts,
+        ...(responseStatus !== undefined ? { http_status: responseStatus } : {}),
       });
 
       /** 非 200 状态的 kind 映射；`retryable` 决定是否进入退避重试。 */
@@ -525,7 +596,7 @@ export function createJevClassifier(
           const kind = kindOfThrow(error);
           if (kind === 'timeout' || attempt >= RETRY_ATTEMPTS) {
             recordFailure(kind);
-            return withDispatch(throwFailure(kind, error));
+            return withDispatch(throwFailure(kind, error), attempt);
           }
           await sleep(backoffDelayMs(attempt, random));
           continue;
@@ -539,48 +610,58 @@ export function createJevClassifier(
           const kind = kindOfThrow(error);
           if (kind === 'timeout' || attempt >= RETRY_ATTEMPTS) {
             recordFailure(kind);
-            return withDispatch(throwFailure(kind, error));
+            return withDispatch(throwFailure(kind, error), attempt);
           }
           await sleep(backoffDelayMs(attempt, random));
           continue;
         }
 
         const status = response.status;
-        const parsed = parseJevResponse(status, bodyText);
+        responseStatus = status;
+        const inputTokens = responseInputTokens(bodyText);
+        if (inputTokens !== undefined) {
+          knownInputTokens += inputTokens;
+          attemptsWithUsage += 1;
+        }
+        // 全量响应按题隔离坏值；single 保持既有解析语义。
+        const parsed = parseJevResponse(status, bodyText, 'sources' in sendState);
         if (parsed.ok) {
           // 任一成功清零连续失败计数（SAFE-02）
           consecutiveFailures = 0;
-          return withDispatch({
-            status: 'answered',
-            model: parsed.model,
-            answers: parsed.answers,
-            input_tokens: parsed.input_tokens,
-            ...(ladderLifted ? { ladder: ladder.value } : {}),
-            // 降级后实际带 score 题发出的片段数（不含 snip 题即 0）；未降级可省略，
-            // 管道按"全部发送"理解（见 ClassifyOutcome.sent_snippets 注释）
-            ...(ladderLifted ? { sent_snippets: prepared.sentSnippets } : {}),
-          });
+          return withDispatch(
+            {
+              status: 'answered',
+              model: parsed.model,
+              answers: parsed.answers,
+              input_tokens: parsed.input_tokens,
+              ...(ladderLifted ? { ladder: ladderValue } : {}),
+              // 降级后实际带 score 题发出的片段数（不含 snip 题即 0）；未降级可省略，
+              // 管道按"全部发送"理解（见 ClassifyOutcome.sent_snippets 注释）
+              ...(ladderLifted ? { sent_snippets: sentSnippets } : {}),
+            },
+            attempt
+          );
         }
 
         // 200 但形状坏：确定性，不重试（重试必然再坏）
         if (parsed.kind === 'shape')
-          return withDispatch(httpFailure('validation', status, bodyText));
+          return withDispatch(httpFailure('validation', status, bodyText), attempt);
 
         const mapped = statusOutcome(status);
         if (mapped === undefined || !mapped.retryable) {
           // auth / validation 不计熔断（确定性请求问题）
-          return withDispatch(httpFailure(mapped?.kind ?? 'validation', status, bodyText));
+          return withDispatch(httpFailure(mapped?.kind ?? 'validation', status, bodyText), attempt);
         }
 
         // Retry-After 优先于普通退避；要求等超上限就干脆不再重试
         const retryAfterMs = parseRetryAfterMs(response, now);
         if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) {
           recordFailure(mapped.kind);
-          return withDispatch(httpFailure(mapped.kind, status, bodyText));
+          return withDispatch(httpFailure(mapped.kind, status, bodyText), attempt);
         }
         if (attempt >= RETRY_ATTEMPTS) {
           recordFailure(mapped.kind);
-          return withDispatch(httpFailure(mapped.kind, status, bodyText));
+          return withDispatch(httpFailure(mapped.kind, status, bodyText), attempt);
         }
         await sleep(retryAfterMs !== undefined ? retryAfterMs : backoffDelayMs(attempt, random));
       }

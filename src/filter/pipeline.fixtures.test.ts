@@ -451,7 +451,7 @@ describe('budget trimming on a real fixture', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12 },
+        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
         logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
@@ -534,6 +534,7 @@ const loadRecording = (rel: string): Record<string, { http: number; response: un
 const replayClassifier =
   (results: Record<string, { http: number; response: unknown }>): ClassifyDeps['classify'] =>
   async ({ state }) => {
+    if (!('source' in state)) return { status: 'failed', kind: 'validation' };
     const entry = results[state.source.id];
     if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
     const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));

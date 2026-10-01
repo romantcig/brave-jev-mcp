@@ -68,6 +68,8 @@ const withJev = (
     input_tokens: 0,
     latency_ms_total: 0,
     status: 'ok',
+    n_http_attempts: 0,
+    requests: [],
     per_source: rows.map((row) => ({
       src: row.src,
       url: `https://${row.src}.example/`,

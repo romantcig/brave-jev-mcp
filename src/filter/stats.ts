@@ -60,6 +60,8 @@ export function createNoKeyJevStats(): JevStats {
     latency_ms_total: 0,
     status: 'no_key',
     per_source: [],
+    n_http_attempts: 0,
+    requests: [],
   };
 }
 

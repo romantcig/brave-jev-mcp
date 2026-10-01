@@ -461,8 +461,17 @@ type SmokeSample = {
   jev?: {
     status?: string;
     per_source?: unknown[];
+    requests?: Array<{
+      request_id: string;
+      dispatched: boolean;
+      state: string | null;
+      questions: Record<string, unknown> | null;
+      mapping: Array<{ source_id: string; array_index: number }>;
+    }>;
     sent?: Array<{
       src?: string;
+      request_id?: string;
+      array_index?: number;
       snippets?: Array<{
         snippet?: string;
         in_state?: boolean;
@@ -814,7 +823,9 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `log: per_source ${id} must carry the ten source-level answers`
         );
         assert.deepEqual(
-          Object.keys(answers).filter(key => !/^time_snip\d+$/.test(key)).sort(),
+          Object.keys(answers)
+            .filter((key) => !/^time_snip\d+$/.test(key))
+            .sort(),
           SOURCE_QUESTION_KEYS,
           `log: per_source ${id} answers must cover exactly the recorded source-level questions`
         );
@@ -865,12 +876,26 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `sample for filter debugging - original results, filtered results, Jev decisions: the status-line path must exist at return time — ${sampleAbsPath}`
         );
         const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
-        // 04-04 R1 返修：format_version 3（实发派发捕获口径）；v1 是阶梯前重建口径
+        // 全量接入：v4 按请求保存实发载荷；历史 v1–v3 必须按旧格式读取
         assert.equal(
           sample.format_version,
-          3,
-          'sample for filter debugging - original results, filtered results, Jev decisions: format_version must be 3'
+          4,
+          'sample for filter debugging - original results, filtered results, Jev decisions: format_version must be 4'
         );
+        // v4 来源必须关联到真实请求；不能只改版本号而漏掉新的证据链。
+        assert.equal(sample.jev?.requests?.length, nRecordedSources);
+        for (const source of sample.jev?.sent ?? []) {
+          const request = sample.jev?.requests?.find(
+            (item) => item.request_id === source.request_id
+          );
+          assert.ok(request?.dispatched);
+          assert.ok(request.state !== null && request.questions !== null);
+          assert.ok(
+            request.mapping.some(
+              (item) => item.source_id === source.src && item.array_index === source.array_index
+            )
+          );
+        }
         assert.equal(
           sample.request_id,
           record.request_id,

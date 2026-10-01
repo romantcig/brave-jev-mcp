@@ -78,6 +78,8 @@ const buildStats = (rows: JevPerSourceStats[]): FilterStats => {
     latency_ms_total: 0,
     status: 'ok',
     per_source: rows,
+    n_http_attempts: 0,
+    requests: [],
   };
   return stats;
 };
