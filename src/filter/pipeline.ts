@@ -34,13 +34,7 @@ import {
   isOneLiner,
   truncateAtPaywall,
 } from './nonArticle.js';
-import {
-  isNearDuplicate,
-  isShortWithoutTerms,
-  SHINGLE_N,
-  SHORT_SNIPPET_MAX,
-  stripBoilerplateLines,
-} from './prefilter.js';
+import { isNearDuplicate, SHINGLE_N, stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { buildQuestions, buildState } from './jev/questions.js';
 import { planAllRequest, projectSourceAnswers } from './jev/context.js';
@@ -188,18 +182,14 @@ const PAYWALL_MARKERS: readonly string[] = [...PAYWALL_MARKERS_EN, ...PAYWALL_MA
  * 步 3 片段预筛（含付费墙截断）：顺序固定为付费墙截断 → 样板行剥离（GitHub 界面
  * 清洗 → 前缀行 → 标题重复行 → 引用块，GitHub 子步仅 test/on 生效、off 不应用——
  * 清洗属 Jev 过滤链的文本准备，见 stripBoilerplateLines 与 githubCleanup.ts）→
- * 短且无实词 → 页内逐字重复（RULES-03/ordering）。被删片段留在原位只翻 `kept`；
+ * 页内逐字重复（RULES-03/ordering）。被删片段留在原位只翻 `kept`；
  * 重复判定按原序只与同来源内**已幸存**片段比，保留先出现者。`snippets_prefiltered`
- * 记 nav 与 boilerplate 两类之和，`dup_removed` 单独记，`paywall_truncated` 只记
- * 截断后保留的，`github_cleanup_actions` 记 GitHub 清洗动作数（清洗后为空的片段
- * 整片删走 boilerplate 语义）。
+ * 记空片段（nav）与 boilerplate 两类之和，`dup_removed` 单独记，`paywall_truncated`
+ * 只记截断后保留的，`github_cleanup_actions` 记 GitHub 清洗动作数（清洗后为空的片段
+ * 整片删走 boilerplate 语义）。「短且无实词」预筛已随 filter-rules-13 退役——第二十
+ * 四轮消融实证该条件误伤真实内容，片段级质量判断交 Jev 评分。
  */
-const prefilterSnippets = (
-  table: WorkSource[],
-  stats: FilterStats,
-  terms: ReadonlySet<string>,
-  cleanGitHub: boolean
-): void => {
+const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub: boolean): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
 
@@ -207,7 +197,7 @@ const prefilterSnippets = (
     for (const snippet of source.snippets) {
       if (!snippet.kept) continue;
 
-      // 空串或纯空白：不进样板剥离以外的任何判定，按"短且无实词"处理
+      // 空串或纯空白：直接删（nav），不进样板剥离以外的任何判定
       if (snippet.text.trim() === '') {
         snippet.kept = false;
         snippet.reason = 'nav';
@@ -253,13 +243,6 @@ const prefilterSnippets = (
         continue;
       }
       snippet.text = stripped.text;
-
-      if (isShortWithoutTerms(snippet.text, terms, SHORT_SNIPPET_MAX)) {
-        snippet.kept = false;
-        snippet.reason = 'nav';
-        stats.local.snippets_prefiltered += 1;
-        continue;
-      }
 
       const shingleSet = shingles(tokenize(snippet.text), SHINGLE_N);
       if (survivorShingles.some((survivor) => isNearDuplicate(shingleSet, survivor))) {
@@ -313,7 +296,8 @@ const dropNonArticles = (table: WorkSource[], config: FilterConfig, stats: Filte
 /**
  * 步 8：空来源与一句话来源，接在片段级之后。片段删光（或本就没有片段、
  * `sources` 元数据缺条目）的来源整体丢弃；只剩一条短片段的来源按**只看 query
- * 实词**（不含 intent——步 3 已用并集过滤过）判定，不含则丢、含则留。
+ * 实词**判定，不含则丢、含则留（intent 不参与本步——步 3 的实词预筛已随
+ * filter-rules-13 退役，片段级意图匹配由 Jev 评分承担）。
  * 被丢来源只翻 `verdict`，不从工作表数组里移除（RULES-05/ordering）。
  *
  * 归因（A2 口径，notes/dedup-and-rewrite-policy.md）：来源被删光且 `jevSideDeletions`
@@ -346,21 +330,16 @@ const dropEmptySources = (
 
 /**
  * 本地规则层（步 1–4）的固定顺序编排：JSON-LD 分流 → URL 规范化归并 → 片段预筛
- * （付费墙截断 → 样板剥离 → 短无实词 → 页内逐字重复）→ feed URL 与结构性黑名单。
+ * （付费墙截断 → 样板剥离 → 页内逐字重复）→ feed URL 与结构性黑名单。
  * 从 `filterLlmContext` 抽出，供重录 dump 的 `collectJevCandidates` 复用同一候选口径
- * （02-01）；`terms` 由调用方传 `contentTerms(query, intent)`。
+ * （02-01）。
  */
-const runLocalRules = (
-  table: WorkSource[],
-  stats: FilterStats,
-  terms: ReadonlySet<string>,
-  config: FilterConfig
-): void => {
+const runLocalRules = (table: WorkSource[], stats: FilterStats, config: FilterConfig): void => {
   splitJsonLd(table, stats); // 步 1：JSON-LD 分流
   stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
-  // 步 3 片段预筛：付费墙截断 → 样板剥离（GitHub 清洗仅 test/on）→ 短无实词 →
-  // 页内逐字重复（顺序固定）
-  prefilterSnippets(table, stats, terms, config.mode !== 'off');
+  // 步 3 片段预筛：付费墙截断 → 样板剥离（GitHub 清洗仅 test/on）→ 页内逐字重复
+  // （顺序固定）
+  prefilterSnippets(table, stats, config.mode !== 'off');
   dropNonArticles(table, config, stats); // 步 4：feed URL 与结构性黑名单
 };
 
@@ -512,14 +491,14 @@ export async function filterLlmContext(
 ): Promise<FilterResult> {
   const table = buildWorkTable(data);
   const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
-  // 步 8 只看 query 实词（步 3 已用 query ∪ intent 过滤过）
+  // 步 8 只看 query 实词（intent 不参与本步判定）
   const queryTerms = contentTerms(request.params.query);
   // 实发派发记录（04-04 R1）：Jev 分支由步 5 填充，off / no_key 保持空表
   let dispatches: JevDispatchRecord[] = [];
   // 请求级记录（四题全量上下文，计划 §6.1）：每逻辑请求一条，off / no_key 空表
   let requests: JevRequestRecord[] = [];
 
-  runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
+  runLocalRules(table, stats, config);
   if (config.mode === 'off') {
     // off：整段跳过 Jev（stats.jev 保持 null），只跑本地链
     runOffChain(table, undefined, config.thresholds, stats, queryTerms);
@@ -1104,7 +1083,7 @@ export function collectJevCandidatesDetailed(
 ): JevCandidateDetailed[] {
   const table = buildWorkTable(data);
   const stats = createFilterStats('off', toStatsRequest(request, config), data);
-  runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
+  runLocalRules(table, stats, config);
 
   return jevCandidatesFromTable(table);
 }

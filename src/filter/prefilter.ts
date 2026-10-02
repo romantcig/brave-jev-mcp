@@ -1,23 +1,20 @@
 /**
- * 管道步 3：片段预筛谓词（样板行剥离、标题重复行、引用块、短且无实词、页内逐字
- * 重复）。
+ * 管道步 3：片段预筛谓词（样板行剥离、标题重复行、引用块、页内逐字重复）。
  *
  * 全部是无副作用纯函数：不读 `process.env`、不写文件、不改入参，同一输入重复
- * 调用返回深相等结果，可安全并发。实词集与前缀表由调用方（pipeline.ts）预算
+ * 调用返回深相等结果，可安全并发。前缀表由调用方（pipeline.ts）预算
  * 一次传入，谓词自身无状态——形态照 src/protocols/rebinding.ts 的 is* 谓词。
  *
  * 依据：notes/local-rules-design.md §3、01-RESEARCH.md「规则 3（步 3）」、
- * Assumptions A9（行级剥离）、A10（200 字符阈值）、A11（包含度）；
+ * Assumptions A9（行级剥离）、A11（包含度）；
  * 标题重复行 / 引用块来自 2026-10-01 真实样本的四类漏网（第二十轮，
  * notes/filter-experiments/round-20-local-leak-rules.md）；乱码碎词原型经
  * GPT-6 审核证实误删真实代码与品牌名短句（F1），整条撤下未接入。
+ * 「短且无实词」nav 预筛已随 filter-rules-13 退役（第二十四轮消融实证误伤）。
  */
 
 import { CJK_SEGMENT, jaccard, tokenize } from './tokenize.js';
 import { normalizeTitleForCompare } from './jsonld.js';
-
-/** "短"阈值：长度判定统一用 String.length（UTF-16 码元）。 */
-export const SHORT_SNIPPET_MAX = 200;
 
 /** 样板短行阈值（英文条目）：行归一化后不超过该长度才允许前缀命中——Share/分享/广告
  * 这类词常出现在正文句首，长行必须放过。 */
@@ -391,29 +388,6 @@ export function stripBoilerplateLines(
     .trim();
 
   return { text: stripped, emptied: stripped === '' || isTitleOnly(stripped, sourceTitle) };
-}
-
-/**
- * 短且无实词：长度 < maxLength 且实词集里没有任何词出现在片段 token 中，两条
- * **同时满足**才删。实词集为空时恒为假（保守留）；空串按长度 0 处理（真）。
- * @returns 判定为"短且无实词"时为真
- * @example isShortWithoutTerms('On this page', terms) === true（12 字符、无实词）
- * @example isShortWithoutTerms('x'.repeat(200), terms) === false（达到阈值不删）
- * @example isShortWithoutTerms('short', new Set()) === false
- */
-export function isShortWithoutTerms(
-  text: string,
-  terms: ReadonlySet<string>,
-  maxLength: number = SHORT_SNIPPET_MAX
-): boolean {
-  if (terms.size === 0) return false;
-  if (text.length >= maxLength) return false;
-
-  const tokens = new Set(tokenize(text));
-  for (const term of terms) {
-    if (tokens.has(term)) return false;
-  }
-  return true;
 }
 
 /**

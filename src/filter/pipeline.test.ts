@@ -180,22 +180,27 @@ describe('filterLlmContext', () => {
     assert.deepEqual(stats.sources, []);
   });
 
-  it('prefilters a short nav-only snippet in place during step 3', async () => {
+  it('keeps a short nav-only snippet after the short-no-terms retirement (filter-rules-13)', async () => {
     const data = payload();
     data.grounding.generic[1].snippets.push('On this page\nInstallation and upgrading');
 
     const { result, stats } = await filterLlmContext(data, request, offConfig);
 
-    // 被删片段留在原位只翻 kept，幸存片段保持 Brave 原序
+    // 短且无实词预筛已退役（第二十四轮消融实证误伤真实内容）：首行样板剥离后
+    // 余行保留在原位，质量判断交 Jev 评分（off 模式下随输出返回）；幸存片段保持
+    // Brave 原序
     assert.deepEqual(
       stats.sources[1].snippets.map((snippet) => [snippet.index, snippet.kept, snippet.reason]),
       [
         [0, true, undefined],
-        [1, false, 'nav'],
+        [1, true, undefined],
       ]
     );
-    assert.deepEqual(result.grounding.generic[1].snippets, ['Example snippet about Brave.']);
-    assert.equal(stats.local.snippets_prefiltered, 1);
+    assert.deepEqual(result.grounding.generic[1].snippets, [
+      'Example snippet about Brave.',
+      'Installation and upgrading',
+    ]);
+    assert.equal(stats.local.snippets_prefiltered, 0);
   });
 
   for (const mode of ['off', 'test', 'on'] as const) {
@@ -1192,7 +1197,7 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
 
 // ---------------------------------------------------------------------------
 // 步 7 后半新颖度与跨源 dup（02-04）：off 删重 + rewrite 归因、三模式播种序、
-// 跨源逐字 dup 独立计数。语料以 'Brave' 开头保证过步 3 的短无实词判定。
+// 跨源逐字 dup 独立计数。
 // ---------------------------------------------------------------------------
 
 describe('novelty and cross-source dup (02-04)', () => {
@@ -1774,15 +1779,15 @@ describe('four-question all-context request organization (FULL_CONTEXT_ROLLOUT_P
 
   it('keeps gapped IDs and Brave order when an earlier source is locally dropped (T03)', async () => {
     const seen: AllSeen[] = [];
-    // s0 的片段不含 query 实词且短于 200 码元 → 步 3 预筛删光、来源清空出局，
-    // 候选从 s1 开始——数组位置 0 ≠ ID 数字 1
+    // s0 的片段是纯空白 → 步 3 空片段删除清空来源、来源出局（短无实词预筛已随
+    // filter-rules-13 退役，空片段删除保留），候选从 s1 开始——数组位置 0 ≠ ID 数字 1
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
           {
             url: 'https://noise.example/',
             title: 'Noise',
-            snippets: ['Totally unrelated filler text.'],
+            snippets: ['   '],
           },
           {
             url: 'https://alpha.example/',

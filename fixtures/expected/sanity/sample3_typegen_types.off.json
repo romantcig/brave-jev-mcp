@@ -4,7 +4,7 @@
   "intent": "How to generate TypeScript types with Sanity TypeGen in the current Sanity Studio (v6, sanity.config.ts based)",
   "request": {},
   "mode": "off",
-  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。QAPage 的 suggestedAnswer 转出的 6 段中，2 段因短且不含 query∪intent 实词在步 3 被删。 02-04 重标注：步 7 新颖度与跨源 dup 零命中（新增两节为空数组，note 留痕备查）。",
+  "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。原标注 2 段（4.3/4.4）因短且不含 query∪intent 实词在步 3 被删，该条件已随 filter-rules-13 退役——6 段现全部保留。 02-04 重标注：步 7 新颖度与跨源 dup 零命中（新增两节为空数组，note 留痕备查）。",
   "rules": {
     "jsonld": [
       {
@@ -30,16 +30,6 @@
         "action": "boilerplate_stripped",
         "stripped_prefix": "Skip to content",
         "stripped_length": 125
-      },
-      {
-        "url": "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder",
-        "snippet": "4.3",
-        "action": "nav"
-      },
-      {
-        "url": "https://www.sanity.io/answers/getting-typescript-definitions-from-definetype-function-in-sanity-schema-builder",
-        "snippet": "4.4",
-        "action": "nav"
       }
     ],
     "dedup": [],
@@ -82,6 +72,8 @@
         "4.0",
         "4.1",
         "4.2",
+        "4.3",
+        "4.4",
         "4.5"
       ],
       "https://www.xjavascript.com/blog/sanity-typescript/": [
@@ -142,10 +134,10 @@
         "2025-11-29"
       ]
     },
-    "n_snippets": 41,
+    "n_snippets": 43,
     "local": {
       "jsonld_converted": 1,
-      "snippets_prefiltered": 2
+      "snippets_prefiltered": 0
     }
   }
 }

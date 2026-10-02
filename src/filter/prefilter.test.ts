@@ -4,7 +4,6 @@ import { normalizeTitleForCompare } from './jsonld.js';
 import { BOILERPLATE_PREFIXES } from './markers.js';
 import {
   isNearDuplicate,
-  isShortWithoutTerms,
   isTitleOnly,
   isTitleRepeatLine,
   matchesPrefix,
@@ -13,12 +12,11 @@ import {
   NEAR_DUP_JACCARD,
   normalizeLine,
   SHINGLE_N,
-  SHORT_SNIPPET_MAX,
   stripBoilerplateLines,
   TITLE_LINE_MIN,
   TITLE_RESIDUAL_MAX,
 } from './prefilter.js';
-import { contentTerms, shingles, tokenize } from './tokenize.js';
+import { shingles, tokenize } from './tokenize.js';
 
 /**
  * 以下真实片段从入库夹具逐字抄录（01-04 的夹具加载器是 pipeline.fixtures.test.ts
@@ -40,13 +38,10 @@ const KUCOIN_SNIPPET_0 =
   '# TypeSafe AI Launches Jev, a Non-Chat AI Model 193x Faster Than Claude\nRelease Time: 2026/09/16 05:34:40\nShare';
 const KUCOIN_TITLE = 'TypeSafe AI Launches Jev, a Non-Chat AI Model 193x Faster Than Claude';
 
-/** Captured from fixtures/jev_release_default.json 来源 10（mezha）片段 0：8 行站内导航块，长度 ≥ 200 且含实词，三条预筛规则都不删。 */
+/** Captured from fixtures/jev_release_default.json 来源 10（mezha）片段 0：8 行站内导航块，长度 ≥ 200，预筛规则都不删。 */
 const MEZHA_SNIPPET_0 =
   '### Russian Drones Injure Two Men and Ignite Warehouses in Kyiv Region\n\n18 sep 2026, 23:45\n\n### Trump Announces White House Ban on CNN, MS NOW and Politico\n\n18 sep 2026, 23:30\n\n### Budanov Says Ukraine Can Resist Russia’s Information Warfare\n\n18 sep 2026, 23:01\n\n### TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation\n\n18 sep 2026, 23:00';
 const MEZHA_TITLE = 'TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation';
-
-/** Captured from fixtures/sanity/sample4_upgrade_guide.json 来源 2（sanity.io changelog）片段 1：39 字符导航片段，短且无实词。 */
-const SAMPLE4_NAV_SNIPPET = 'On this page\nInstallation and upgrading';
 
 /** Captured from fixtures/sanity/sample4_upgrade_guide.json 来源 3（agent-skills.md）片段 0 与片段 2：片段 2 几乎整段包含于片段 0（RESEARCH 实测包含度 0.875）。 */
 const SAMPLE4_SKILL_0 =
@@ -54,12 +49,6 @@ const SAMPLE4_SKILL_0 =
 const SAMPLE4_SKILL_2 =
   "**Name**: sanity-studio-upgrade\n**Description**: Produces a tailored Sanity Studio upgrade plan by inspecting the repository's installed versions, config, and source, then reporting only the breaking changes that actually apply. Covers Studio v3 and later; v2 projects are identified and redirected, not planned";
 const SAMPLE4_SKILL_TITLE = 'Sanity Studio upgrade planner Skill';
-
-/** query ∪ intent 实词集（步 3 的判定输入，取 default 夹具同形构造）。 */
-const TERMS = contentTerms(
-  'sanity studio upgrade guide',
-  'current Sanity Studio (v6, sanity.config.ts based)'
-);
 
 describe('normalizeLine', () => {
   it('strips leading markdown markers and whitespace', () => {
@@ -212,45 +201,6 @@ describe('stripBoilerplateLines', () => {
 
     assert.equal(result.emptied, true);
     assert.equal(normalizeTitleForCompare(result.text), normalizeTitleForCompare(KUCOIN_TITLE));
-  });
-});
-
-describe('isShortWithoutTerms', () => {
-  it('drops the sample4 navigation snippet (39 chars, no content term)', () => {
-    assert.equal(isShortWithoutTerms(SAMPLE4_NAV_SNIPPET, TERMS, SHORT_SNIPPET_MAX), true);
-  });
-
-  it('respects the 199/200/201 boundary with String.length', () => {
-    const terms = new Set(['word']);
-
-    assert.equal(isShortWithoutTerms('x'.repeat(SHORT_SNIPPET_MAX - 1), terms), true);
-    assert.equal(isShortWithoutTerms('x'.repeat(SHORT_SNIPPET_MAX), terms), false);
-    assert.equal(isShortWithoutTerms('x'.repeat(SHORT_SNIPPET_MAX + 1), terms), false);
-  });
-
-  it('never deletes when the term set is empty (conservative)', () => {
-    assert.equal(isShortWithoutTerms('any short snippet', new Set(), SHORT_SNIPPET_MAX), false);
-  });
-
-  it('treats empty text as short without terms', () => {
-    assert.equal(isShortWithoutTerms('', TERMS, SHORT_SNIPPET_MAX), true);
-  });
-
-  it('keeps a short snippet that contains a content term', () => {
-    assert.equal(
-      isShortWithoutTerms('This mentions jev briefly', contentTerms('Jev'), SHORT_SNIPPET_MAX),
-      false
-    );
-  });
-
-  it('keeps a Chinese snippet whose terms are glued to Latin words', () => {
-    // 分词曾把 "Sanity发布了v6版本" 整段粘成一个 token，query 实词 sanity/版本/发布
-    // 全部匹配不上，这条含实词的中文短片段曾被判"短且无实词"删掉
-    const terms = contentTerms('Sanity 版本 发布', 'What changed in the Sanity v6 release');
-    assert.equal(
-      isShortWithoutTerms('Sanity发布了v6版本，主要变化是配置文件迁移到新的格式。', terms),
-      false
-    );
   });
 });
 
@@ -542,7 +492,8 @@ describe('stripBoilerplateLines — title-repeat lines (第二十轮)', () => {
 describe('stripBoilerplateLines — reference blocks (第二十轮)', () => {
   it('strips a heading plus its signature items and lets the orphan heading die downstream', () => {
     // my-ssl 形态：列表符 + 间隔号 + Accessed 月 年 的纯书目条目整块剥掉，
-    // 剩下的孤立小节标题由短无实词兜底
+    // 剩下的孤立小节标题本地不再兜底（短无实词规则已随 filter-rules-13 退役），
+    // 交由 Jev 评分判定
     const snippet = [
       '## Next steps',
       '### Sources & References',
