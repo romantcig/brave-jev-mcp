@@ -311,7 +311,6 @@ const applyOversizeLadder = (
     const snippets = workState.source.snippets.slice(0, -1);
     workQuestions = { ...workQuestions };
     delete workQuestions[`snip${snippets.length}`];
-    delete workQuestions[`time_snip${snippets.length}`];
     workState = { ...workState, source: { ...workState.source, snippets } };
     ladder.value = 'cut_tail';
   }
@@ -319,9 +318,7 @@ const applyOversizeLadder = (
   // ③ 64k：去掉全部 snip 题（来源级题保留；state 片段保留）
   if (allBudgetEstimatesOf(workState, workQuestions).total_limit_estimate > ALL_LIMIT_64K) {
     workQuestions = Object.fromEntries(
-      Object.entries(workQuestions).filter(
-        ([name]) => !SNIP_KEY_PATTERN.test(name) && !/^time_snip\d+$/.test(name)
-      )
+      Object.entries(workQuestions).filter(([name]) => !SNIP_KEY_PATTERN.test(name))
     );
     ladder.value = 'source_only_questions';
   }

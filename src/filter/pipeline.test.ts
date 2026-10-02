@@ -756,7 +756,7 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
       { classify: replay }
     );
 
-    // 真实录好的答案全部低于五道门槛：12 源来源级 keep
+    // 真实录好的答案全部低于三道门槛：12 源来源级 keep
     const perSource = stats.jev?.per_source ?? [];
     assert.equal(perSource.length, 12);
     for (const row of perSource) {
@@ -1085,7 +1085,7 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
     detail: 'circuit open after consecutive transient failures',
   };
 
-  // 低概率来源级答案：裁决链五道门槛全不命中，来源保留（answers 部分缺失走
+  // 低概率来源级答案：裁决链三道门槛全不命中，来源保留（answers 部分缺失走
   // T-02-03-1 防御式跳过，方向同为保守不丢——断言只关心 status 聚合）
   const answeredLow: ClassifyOutcome = {
     status: 'answered',
@@ -1559,20 +1559,20 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
 });
 
 // ---------------------------------------------------------------------------
-// 六题全量上下文请求组织（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T02–T09/T11）：注入式
+// 四题全量上下文请求组织（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T02–T09/T11）：注入式
 // classify 驱动 all 分支的编排、映射、回退与记账。桩是辨识事实驱动——按收到的
 // state.sources 数组位置从脚本取答案、按 `${id}__${local}` 命名空间写回，映射
 // 任何一处错位（数组下标 / 来源 ID / 片段身份）都会让断言红。
 // ---------------------------------------------------------------------------
 
-describe('six-question all-context request organization (FULL_CONTEXT_ROLLOUT_PLAN T02-T09/T11)', () => {
+describe('four-question all-context request organization (FULL_CONTEXT_ROLLOUT_PLAN T02-T09/T11)', () => {
   const allConfig: FilterConfig = {
     ...offConfig,
     mode: 'on',
     jev: { ...offConfig.jev, contextMode: 'all' },
   };
 
-  /** 六道来源题的保守 keep 答案（全部离删除阈值很远）。 */
+  /** 保守 keep 答案（四题 + 退役两题旧键，全部离删除阈值很远）。 */
   const SIX_KEEP: Record<string, JevAnswer> = {
     has_original_reasoning: { kind: 'noul', probability: 0.9 },
     is_template_filler: { kind: 'noul', probability: 0.1 },
@@ -1719,9 +1719,9 @@ describe('six-question all-context request organization (FULL_CONTEXT_ROLLOUT_PL
       'Brave is a privacy-focused browser and search engine.',
       'Second snippet about Brave.',
     ]);
-    // 题键命名空间：`${id}__${local}`，s0 八道、s1 七道（六题 + 各自片段的 score 题）
+    // 题键命名空间：`${id}__${local}`，s0 六道、s1 五道（四题 + 各自片段的 score 题）
     const questions = seen[0]?.questions ?? {};
-    assert.equal(Object.keys(questions).length, 15);
+    assert.equal(Object.keys(questions).length, 11);
     assert.ok(questions['s0__snip0'] !== undefined && questions['s0__snip1'] !== undefined);
     assert.ok(questions['s1__snip0'] !== undefined);
     // 题干数组下标按数组位置命名空间化（s1 引用 sources[1]，不是 sources[0]）
@@ -1749,12 +1749,12 @@ describe('six-question all-context request organization (FULL_CONTEXT_ROLLOUT_PL
     assert.equal(mapping[0]?.array_index, 0);
     assert.deepEqual(mapping[0]?.snippet_keys, ['0', '1']);
     assert.equal(mapping[0]?.question_keys['snip1'], 's0__snip1');
-    assert.equal(Object.keys(mapping[0]?.question_keys ?? {}).length, 8);
+    assert.equal(Object.keys(mapping[0]?.question_keys ?? {}).length, 6);
     assert.equal(mapping[1]?.source_id, 's1');
     assert.equal(mapping[1]?.array_index, 1);
     assert.deepEqual(mapping[1]?.snippet_keys, ['0']);
     assert.equal(mapping[1]?.question_keys['snip0'], 's1__snip0');
-    assert.equal(Object.keys(mapping[1]?.question_keys ?? {}).length, 7);
+    assert.equal(Object.keys(mapping[1]?.question_keys ?? {}).length, 5);
     // 两来源行都 answered、指向同一请求；投影答案按映射回流
     assert.deepEqual(
       (jev?.per_source ?? []).map((row) => [row.src, row.status, row.request_id]),
@@ -1834,66 +1834,11 @@ describe('six-question all-context request organization (FULL_CONTEXT_ROLLOUT_PL
     );
   });
 
-  it('routes temporal answers per source without cross-source mixing (T04)', async () => {
-    const seen: AllSeen[] = [];
-    const data: BraveLlmContextResponse = {
-      grounding: {
-        generic: [
-          {
-            url: 'https://old.example/',
-            title: 'Old',
-            snippets: ['Brave 2020 launch coverage with quotes.'],
-          },
-          {
-            url: 'https://fresh.example/',
-            title: 'Fresh',
-            snippets: ['Brave 2026 launch coverage with quotes.'],
-          },
-        ],
-        map: [],
-      },
-      sources: {},
-    };
-
-    const { result, stats } = await filterLlmContext(data, request, allConfig, {
-      classify: allClassify(
-        {
-          s0: {
-            ...SIX_KEEP,
-            snip0: { kind: 'score', score: 2 },
-            time_snip0: { kind: 'noul', probability: 0.9 },
-          },
-          s1: {
-            ...SIX_KEEP,
-            snip0: { kind: 'score', score: 2 },
-            time_snip0: { kind: 'noul', probability: 0.1 },
-          },
-        },
-        { seen }
-      ),
-    });
-
-    // 两来源片段各带年份 → 各一道时间题，全局键互不冲突
-    const questions = seen[0]?.questions ?? {};
-    assert.ok(questions['s0__time_snip0'] !== undefined);
-    assert.ok(questions['s1__time_snip0'] !== undefined);
-    const rows = stats.jev?.per_source ?? [];
-    assert.equal(rows.find((row) => row.src === 's0')?.answers?.['time_snip0'], 0.9);
-    assert.equal(rows.find((row) => row.src === 's1')?.answers?.['time_snip0'], 0.1);
-    // s0 的 0.9 ≥ 时间错位阈值且片段带年份 → 片段被删、来源清空；s1 幸存
-    assert.deepEqual(
-      result.grounding.generic.map((item) => item.url),
-      ['https://fresh.example/']
-    );
-    assert.equal(
-      stats.sources.find((entry) => entry.url === 'https://old.example/')?.snippets[0]?.reason,
-      'time_mismatch'
-    );
-  });
-
   it('ignores extra answers for questions that were never asked (T04)', async () => {
-    // payload() 的片段都不带年份 → 不生成时间题；桩仍塞回 time_snip0=0.9
-    // ——映射里没有这道题，投影必须不消费（不制造时间删除）
+    // 桩塞回未提问的答案：退役来源题旧键（stale / self_deprecated，filter-rules-11
+    // 退役）与退役片段时间题键（time_snip，filter-rules-12 退役），全部给高概率——
+    // 若被消费，来源级会触发删除、时间键会进 answers。映射里没有这些题，投影必须
+    // 一概不消费：一条用例守住两轮退役机制的负空间。
     const { result, stats } = await filterLlmContext(payload(), request, allConfig, {
       classify: allClassify(
         {
@@ -1906,6 +1851,9 @@ describe('six-question all-context request organization (FULL_CONTEXT_ROLLOUT_PL
         },
         {
           extra: {
+            s0__stale: { kind: 'noul', probability: 0.99 },
+            s0__self_deprecated: { kind: 'noul', probability: 0.99 },
+            s1__stale: { kind: 'noul', probability: 0.99 },
             s0__time_snip0: { kind: 'noul', probability: 0.9 },
             s1__time_snip0: { kind: 'noul', probability: 0.9 },
           },
@@ -1918,6 +1866,8 @@ describe('six-question all-context request organization (FULL_CONTEXT_ROLLOUT_PL
       ['https://search.brave.com/', 'https://example.com/post']
     );
     for (const row of stats.jev?.per_source ?? []) {
+      assert.equal(row.answers?.['stale'], undefined);
+      assert.equal(row.answers?.['self_deprecated'], undefined);
       assert.equal(row.answers?.['time_snip0'], undefined);
     }
   });
@@ -2217,7 +2167,7 @@ describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
     sources: {},
   });
 
-  /** 捕获实收 state 的全保留 classify（六题全 0、片段分满分——只裁 keep）。 */
+  /** 捕获实收 state 的全保留 classify（来源级全 0、片段分满分——只裁 keep）。 */
   const capturingClassify =
     (captured: JevState[]): ClassifyDeps['classify'] =>
     async ({ state }) => {

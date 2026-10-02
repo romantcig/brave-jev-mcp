@@ -1,8 +1,8 @@
 /**
- * 六题全量上下文请求组织纯逻辑单测（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T03/T04/T05/T06）：
+ * 四题全量上下文请求组织纯逻辑单测（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T03/T04/T05/T06）：
  * 全量 state 与命名空间题目构造（数组位置与来源 ID 解耦、引用转换与第十六轮口径
  * 逐字一致）、双限额预算（32k/64k 分别校验、边界含等号）、显式映射与逐来源答案
- * 投影（缺答不左移、坏值不当 0、时间题只消费实际提交的题）。
+ * 投影（缺答不左移、坏值不当 0）。
  */
 
 import assert from 'node:assert/strict';
@@ -85,12 +85,10 @@ describe('planAllRequest: state / questions / mapping', () => {
       assert.ok(key.startsWith('s0__') || key.startsWith('s7__'), key);
     }
     assert.ok(keys.includes('s7__snip0'));
-    assert.ok(keys.includes('s7__time_snip0'), '带年份片段另有时间题');
-    assert.ok(!keys.includes('s7__time_snip1'), '无年份片段不提问');
 
     // 题干引用转换：`\bsource\b` → `sources[i]`（i 为数组位置），与
     // dev/filter-round16-quality.ts 的 instructions.replace 同一正则同一结果——
-    // 总指令、来源题、score 题、时间题四处引用全部命中
+    // 总指令、来源题、score 题三处引用全部命中
     assert.equal(
       plan.questions['s7__is_off_topic']?.instructions,
       GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[1]') +
@@ -101,15 +99,6 @@ describe('planAllRequest: state / questions / mapping', () => {
       `${GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[1]')} How useful is \`sources[1].snippets[1]\` for \`intent\`?`
     );
     assert.equal(plan.questions['s7__snip1']?.criteria, SNIPPET_LEVELS, 'criteria 原样保留');
-    // 时间题干（无反引号的 source.snippets[i]）同样转换
-    assert.match(
-      plan.questions['s7__time_snip0']?.instructions ?? /$/,
-      /^Judge only the observable text of `sources\[1\]`\./
-    );
-    assert.match(
-      plan.questions['s7__time_snip0']?.instructions ?? /$/,
-      /sources\[1\]\.snippets\[0\] describes an event/
-    );
     // s0（数组位置 0）引用 sources[0]，不串到 s7 的位置
     assert.match(
       plan.questions['s0__is_off_topic']?.instructions ?? /$/,
@@ -202,7 +191,13 @@ describe('planAllRequest: dual budget limits (T06)', () => {
     const okCheck = totalAt(low - 1);
     assert.ok(okCheck.ok);
     assert.ok(okCheck.estimates.total_limit_estimate <= 64000);
-    assert.ok(okCheck.estimates.total_limit_estimate > 63900, '贴近边界');
+    // 贴近边界：距上限不足一步（一步 = 一个片段 + 一道 score 题）。窗口按单步
+    // 增量推导而非固定常数——题库规模变化会平移落点，固定窗口会随动失准
+    const prev = totalAt(low - 2);
+    assert.ok(prev.ok);
+    const step = okCheck.estimates.total_limit_estimate - prev.estimates.total_limit_estimate;
+    assert.ok(step > 0);
+    assert.ok(okCheck.estimates.total_limit_estimate > 64000 - step, '贴近边界');
     const overCheck = totalAt(low);
     assert.deepEqual(
       { ok: overCheck.ok, violation: overCheck.ok ? null : overCheck.violation },
@@ -278,18 +273,15 @@ describe('projectSourceAnswers', () => {
   const QUESTION_KEYS = [
     'is_off_topic',
     'is_listing',
-    'self_deprecated',
-    'stale',
     'is_template_filler',
     'has_original_reasoning',
   ];
   /** 局部题集（与 buildQuestions 同形的最小投影；instructions 不参与投影逻辑）。 */
-  const localQuestions = (nSnippets: number, withTime = false): Record<string, JevQuestion> => {
+  const localQuestions = (nSnippets: number): Record<string, JevQuestion> => {
     const questions: Record<string, JevQuestion> = {};
     for (const key of QUESTION_KEYS) questions[key] = { type: 'noul', instructions: 'x' };
     for (let i = 0; i < nSnippets; i += 1)
       questions[`snip${i}`] = { type: 'score', instructions: 'x' };
-    if (withTime) questions['time_snip1'] = { type: 'noul', instructions: 'x' };
     return questions;
   };
   const answer = (kind: 'noul' | 'score', value: number) =>
@@ -298,28 +290,14 @@ describe('projectSourceAnswers', () => {
       : { kind: 'score' as const, score: value };
 
   it('projects via the mapping for all mode: answers land on the right source, no cross-source bleed (T04)', () => {
-    // s7 在数组位置 1；时间题只对片段 1 提问；映射把局部键换到 s7__ 前缀
-    const questions = localQuestions(2, true);
+    // s7 在数组位置 1；映射把局部键换到 s7__ 前缀
+    const questions = localQuestions(2);
     const questionKeys: Record<string, string> = {};
     for (const [key, value] of Object.entries(questions)) {
       questionKeys[key] = allQuestionKey('s7', key);
     }
     const projected = projectSourceAnswers({
-      sentStateSnippetCount: 2,
       sentSnippets: 2,
-      localQuestionAt: (key) => questions[key],
-      sentQuestionAt: (key) => {
-        const global = questionKeys[key];
-        // 实发题集：s7 的全部题 + 干扰键（其他来源的题不参与）
-        const sent: Record<string, JevQuestion> = {
-          [allQuestionKey('s7', 'is_off_topic')]: { type: 'noul', instructions: 'x' },
-          [allQuestionKey('s7', 'snip0')]: { type: 'score', instructions: 'x' },
-          [allQuestionKey('s7', 'snip1')]: { type: 'score', instructions: 'x' },
-          [allQuestionKey('s7', 'time_snip1')]: { type: 'noul', instructions: 'x' },
-          [allQuestionKey('s0', 'is_off_topic')]: { type: 'noul', instructions: 'x' },
-        };
-        return global !== undefined && Object.hasOwn(sent, global) ? sent[global] : undefined;
-      },
       answerAt: (key) => {
         const global = questionKeys[key];
         const answers: Record<
@@ -328,13 +306,8 @@ describe('projectSourceAnswers', () => {
         > = {
           [allQuestionKey('s7', 'is_off_topic')]: answer('noul', 0.2),
           [allQuestionKey('s7', 'is_listing')]: answer('noul', 0.1),
-          [allQuestionKey('s7', 'self_deprecated')]: answer('noul', 0.1),
-          [allQuestionKey('s7', 'stale')]: answer('noul', 0.1),
           [allQuestionKey('s7', 'is_template_filler')]: answer('noul', 0.1),
           [allQuestionKey('s7', 'has_original_reasoning')]: answer('noul', 0.1),
-          // 片段 0 时间题答案不存在于映射题集（未提问）——即使服务端多答也不消费
-          [allQuestionKey('s7', 'time_snip0')]: answer('noul', 0.99),
-          [allQuestionKey('s7', 'time_snip1')]: answer('noul', 0.9),
           [allQuestionKey('s7', 'snip0')]: answer('score', 1.5),
           [allQuestionKey('s7', 'snip1')]: answer('score', 0.3),
           // 其他来源答案不串位
@@ -348,12 +321,8 @@ describe('projectSourceAnswers', () => {
     assert.deepEqual(projected.answers, {
       is_off_topic: 0.2,
       is_listing: 0.1,
-      self_deprecated: 0.1,
-      stale: 0.1,
       is_template_filler: 0.1,
       has_original_reasoning: 0.1,
-      // 只有实际提问的 time_snip1 进表；未提问的 time_snip0 不消费
-      time_snip1: 0.9,
     });
     assert.deepEqual(projected.scoreValidity, [true, true]);
     assert.deepEqual(projected.scoresReceived, [1.5, 0.3]);
@@ -361,12 +330,8 @@ describe('projectSourceAnswers', () => {
   });
 
   it('single mode identity lookup behaves like the previous inline collection (T12 basis)', () => {
-    const questions = localQuestions(2, true);
     const projected = projectSourceAnswers({
-      sentStateSnippetCount: 2,
       sentSnippets: 2,
-      localQuestionAt: (key) => questions[key],
-      sentQuestionAt: (key) => questions[key],
       answerAt: (key) =>
         key === 'is_off_topic'
           ? answer('noul', 0.9)
@@ -377,18 +342,13 @@ describe('projectSourceAnswers', () => {
               : answer('noul', 0),
     });
     assert.equal(projected.answers['is_off_topic'], 0.9);
-    assert.equal(projected.answers['time_snip1'], 0);
     assert.deepEqual(projected.snippetScores, [2, 1]);
   });
 
   it('keeps holes at their positions: missing middle score does not shift later answers (T05)', () => {
-    const questions = localQuestions(3);
     const scores = [answer('score', 2), undefined, answer('score', 0.3)];
     const projected = projectSourceAnswers({
-      sentStateSnippetCount: 3,
       sentSnippets: 3,
-      localQuestionAt: (key) => questions[key],
-      sentQuestionAt: (key) => questions[key],
       answerAt: (key) => {
         const match = /^snip(\d+)$/.exec(key);
         if (match !== null) return scores[Number(match[1])];
@@ -403,7 +363,6 @@ describe('projectSourceAnswers', () => {
   });
 
   it('treats bad types, non-finite, negative and out-of-range scores as unusable but keeps the received value (T05)', () => {
-    const questions = localQuestions(4);
     const answerFor = (key: string) => {
       if (key === 'snip0') return { kind: 'noul' as const, probability: 0.5 }; // 错误类型
       if (key === 'snip1') return { kind: 'score' as const, score: Number.NaN }; // 非有限
@@ -412,10 +371,7 @@ describe('projectSourceAnswers', () => {
       return answer('noul', 0);
     };
     const projected = projectSourceAnswers({
-      sentStateSnippetCount: 4,
       sentSnippets: 4,
-      localQuestionAt: (key) => questions[key],
-      sentQuestionAt: (key) => questions[key],
       answerAt: answerFor,
     });
     assert.deepEqual(projected.scoreValidity, [false, false, false, false]);
@@ -423,18 +379,5 @@ describe('projectSourceAnswers', () => {
     assert.deepEqual(projected.scoresReceived, [null, null, -0.5, 3]);
     // snip0 错型（noul）缺位：4 个题位只收 3 个 score → 整组不完整
     assert.equal(projected.snippetScores, undefined);
-  });
-
-  it('does not consume temporal answers whose question was built but never sent (ladder cut-tail semantics)', () => {
-    const questions = localQuestions(2, true);
-    const projected = projectSourceAnswers({
-      sentStateSnippetCount: 1, // cut_tail 后实发 state 只剩片段 0
-      sentSnippets: 1,
-      localQuestionAt: (key) => questions[key],
-      // 实发题集不含 time_snip1（题被阶梯删掉）
-      sentQuestionAt: (key) => (key === 'time_snip1' ? undefined : questions[key]),
-      answerAt: (key) => (key === 'time_snip1' ? answer('noul', 0.99) : answer('noul', 0.1)),
-    });
-    assert.equal(projected.answers['time_snip1'], undefined, '未发送的时间题答案不消费');
   });
 });

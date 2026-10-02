@@ -15,7 +15,7 @@
  */
 
 import { CJK_SEGMENT, SCRIPT_PATTERN } from '../tokenize.js';
-import { hasExplicitYear, SNIPPET_LEVELS, TEMPORAL_SNIPPET_DROP } from './questions.js';
+import { SNIPPET_LEVELS } from './questions.js';
 import type {
   FilterStats,
   JevThresholds,
@@ -83,16 +83,17 @@ export const isUsableSnippetScore = (value: unknown): value is number =>
   value <= SNIPPET_LEVELS.length - 1;
 
 /**
- * 步 6：来源级裁决链，固定顺序 off_topic → listing → self_deprecated → stale →
+ * 步 6：来源级裁决链，固定顺序 off_topic → listing →
  * filler（且 p_reasoning < reasoningProtect 严格小于才丢——>= 即保护），p >=
  * 门槛 + CJK 加成即丢、命中即停，首个命中的判定是 reason；全不命中 keep。
  *
  * 只处理 verdict 为 keep 且 judged 为 answered 的来源（失败/跳过/熔断按"留"，
- * SAFE-01）。裁决必需答案即当前六题：五道丢弃题 + 论证题（历史记录含 v3 观察题
- * 旧键时按额外字段忽略）。CJK 占比 > cjkShare（严格大于）时五道丢弃门槛各加
- * cjkBonus（VERDICT-04，方向保守：中文来源更难被丢；加成不抬片段 score 门槛）。
+ * SAFE-01）。裁决必需答案即当前四题：三道丢弃题 + 论证题（历史记录含 v3 观察题
+ * 与 2026-10-03 退役的 self_deprecated / stale 旧键时按额外字段忽略）。CJK 占比
+ * > cjkShare（严格大于）时三道丢弃门槛各加 cjkBonus（VERDICT-04，方向保守：
+ * 中文来源更难被丢；加成不抬片段 score 门槛）。
  *
- * 裁决回写 `stats.jev.per_source` 对应行的 verdict/reason；判定相关六道概率
+ * 裁决回写 `stats.jev.per_source` 对应行的 verdict/reason；判定相关四道概率
  * 任一缺失或超出 [0,1] 时整来源防御式跳过（保守不丢）并在该行记 fail_kind
  * `'validation'` 备查（T-02-03-1——02-02 解析层是第一道闸，本层防御式兜底）。
  */
@@ -114,16 +115,12 @@ export function applySourceVerdicts(
     const answers = row.answers ?? {};
     const pOffTopic = usableProbability(answers.is_off_topic);
     const pListing = usableProbability(answers.is_listing);
-    const pSelfDeprecated = usableProbability(answers.self_deprecated);
-    const pStale = usableProbability(answers.stale);
     const pFiller = usableProbability(answers.is_template_filler);
     const pReasoning = usableProbability(answers.has_original_reasoning);
 
     if (
       pOffTopic === undefined ||
       pListing === undefined ||
-      pSelfDeprecated === undefined ||
-      pStale === undefined ||
       pFiller === undefined ||
       pReasoning === undefined
     ) {
@@ -139,12 +136,11 @@ export function applySourceVerdicts(
     );
     const bonus = cjkShare > thresholds.cjkShare ? thresholds.cjkBonus : 0;
 
-    // 固定顺序（PLAN §3.3）：先判先停；filler 保护挡下时该判定不成立（continue）
+    // 固定顺序（PLAN §3.3）：先判先停；filler 保护挡下时该判定不成立（continue）。
+    // self_deprecated / stale 门槛已退役（2026-10-03 题库精简），答案若仍在按额外字段忽略
     const gates: ReadonlyArray<readonly [number, number, SourceDropReason]> = [
       [pOffTopic, thresholds.offTopicDrop + bonus, 'off_topic'],
       [pListing, thresholds.listingDrop + bonus, 'listing'],
-      [pSelfDeprecated, thresholds.selfDeprecated + bonus, 'self_deprecated'],
-      [pStale, thresholds.staleDrop + bonus, 'stale'],
       [pFiller, thresholds.fillerDrop + bonus, 'filler'],
     ];
     for (const [p, dropAt, reason] of gates) {
@@ -163,7 +159,7 @@ export function applySourceVerdicts(
 }
 
 /**
- * 步 7 前半：带年份片段的时间判断与常规 score 删除。state 构建时的幸存片段序（runJevStage 按 kept
+ * 步 7 前半：片段 score 删除。state 构建时的幸存片段序（runJevStage 按 kept
  * 过滤后的顺序）与 per_source.snippet_scores 按位置对齐，score < snippetMin
  * （严格小于，连续值比较——夹具实证 1.62/1.77，不是整数档位，Pitfall 3）的
  * 片段置 kept = false、reason = 'score'；等于保留。
@@ -174,7 +170,7 @@ export function applySourceVerdicts(
  * 幸存片段少，被砍掉的片段本来也不该有分数，没砍的片段分数照常生效）。
  * 等长时行为与逐条对齐完全一致。异常 score（[0,2] 三档范围外——负值/非有限/越界，
  * 与记录层共用 isUsableSnippetScore 校验，同 T-02-03-1 防御）保守保留该片段。
- * CJK 加成只抬来源级五道门槛，不抬本门槛（A4 落定：
+ * CJK 加成只抬来源级三道门槛，不抬本门槛（A4 落定：
  * 抬 SNIPPET_MIN 是更激进的方向，与保守原则相反）。
  */
 export function applySnippetScores(
@@ -203,15 +199,6 @@ export function applySnippetScores(
         survivors[i].kept = false;
         survivors[i].reason = 'score';
         continue;
-      }
-      const timeMismatch = usableProbability(row.answers?.[`time_snip${i}`]);
-      if (
-        timeMismatch !== undefined &&
-        timeMismatch >= TEMPORAL_SNIPPET_DROP &&
-        hasExplicitYear(survivors[i].text)
-      ) {
-        survivors[i].kept = false;
-        survivors[i].reason = 'time_mismatch';
       }
     }
   }

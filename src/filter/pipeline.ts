@@ -43,7 +43,7 @@ import {
 } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { buildQuestions, buildState } from './jev/questions.js';
-import { planAllRequest, projectSourceAnswers, snippetCountOfState } from './jev/context.js';
+import { planAllRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
@@ -516,7 +516,7 @@ export async function filterLlmContext(
   const queryTerms = contentTerms(request.params.query);
   // 实发派发记录（04-04 R1）：Jev 分支由步 5 填充，off / no_key 保持空表
   let dispatches: JevDispatchRecord[] = [];
-  // 请求级记录（六题全量上下文，计划 §6.1）：每逻辑请求一条，off / no_key 空表
+  // 请求级记录（四题全量上下文，计划 §6.1）：每逻辑请求一条，off / no_key 空表
   let requests: JevRequestRecord[] = [];
 
   runLocalRules(table, stats, contentTerms(request.params.query, request.intent), config);
@@ -627,7 +627,7 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => 
  * - `n_http_attempts` = 全部请求的真实 fetch 次数（含重试），与 n_requests 分开记；
  * - `latency_ms_total` = 逻辑请求耗时之和（每次 classify 全程），不冒充过滤阶段
  *   墙钟耗时；
- * - answered → per_source 记六题概率与 snippet_scores、model、input_tokens、
+ * - answered → per_source 记四题概率与 snippet_scores、model、input_tokens、
  *   request_id；failed 且非熔断短路 → 记 fail_kind；失败来源什么都不动（按"留"，
  *   SAFE-01）；keep 但幸存片段为 0 的来源 → per_source 记 'skipped' 且无请求。
  * - 请求级完整事实（实发载荷、映射、答案、预算）在 `requests`，经
@@ -792,22 +792,13 @@ const runJevStage = async (
 
       if (outcome.status === 'answered') {
         // 投影（计划 §4.2）：按显式映射把全量答案分回各来源行，不按键序、URL 或
-        // 压缩位置猜；全量无阶梯，实发片段范围即候选全长（仍从实发 state 防御读取）
-        const sentQuestions = outcome.dispatch?.questions ?? plan.questions;
-        const sentState = outcome.dispatch?.state;
+        // 压缩位置猜；全量无阶梯，实发片段范围即候选全长
         for (const entry of plan.entries) {
           const candidate = candidates.find((item) => item.id === entry.source_id);
           if (candidate === undefined) continue; // 映射与候选同源，防御分支
           const nSnippets = entry.snippet_keys.length;
-          const sentStateSnippetCount =
-            sentState !== undefined
-              ? (snippetCountOfState(sentState, entry.array_index) ?? nSnippets)
-              : nSnippets;
           const projected = projectSourceAnswers({
-            sentStateSnippetCount,
             sentSnippets: nSnippets,
-            localQuestionAt: (key) => plan.localQuestions[entry.source_id]?.[key],
-            sentQuestionAt: (key) => sentQuestions[entry.question_keys[key]],
             answerAt: (key) => outcome.answers[entry.question_keys[key]],
           });
           rows.set(entry.source_id, {
@@ -945,18 +936,8 @@ const runJevStage = async (
         dispatchRecord.dispatched = outcome.dispatch !== undefined;
         dispatchRecord.answered = answered;
         if (outcome.status === 'answered') {
-          const sentQuestions = outcome.dispatch?.questions ?? questions;
-          // single 请求的实发 state 一定是单来源形状（联合收窄；客户端只可能
-          // 原样返回该来源 state——阶梯砍尾只动 snippets 数组）
-          const sentStateSnippetCount =
-            outcome.dispatch !== undefined && 'source' in outcome.dispatch.state
-              ? outcome.dispatch.state.source.snippets.length
-              : candidate.snippets.length;
           const projected = projectSourceAnswers({
-            sentStateSnippetCount,
             sentSnippets: outcome.sent_snippets ?? candidate.snippets.length,
-            localQuestionAt: (key) => questions[key],
-            sentQuestionAt: (key) => sentQuestions[key],
             answerAt: (key) => outcome.answers[key],
           });
           dispatchRecord.snippet_score_validity = projected.scoreValidity;

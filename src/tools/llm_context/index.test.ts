@@ -408,7 +408,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
 
   const flushWrites = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-  /** Jev 回放桩：六道来源级题全 0（保留）、片段分全 2（保留）——对 ≤3 片段的夹具通吃。 */
+  /** Jev 回放桩：来源级题全 0（保留；含退役两题旧键，按额外字段忽略）、片段分全 2（保留）——对 ≤3 片段的夹具通吃。 */
   const jevReplay = {
     model: 'jev-1.13.0',
     answers: {

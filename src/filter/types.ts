@@ -45,10 +45,10 @@ export type FilterConfig = {
   overfetchFactor: number;
   /** 步 4 的结构性农场黑名单；条目命中自身与全部子域（内置表与配置文件的并集） */
   blocklist: ReadonlySet<string>;
-  /** 十一项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05） */
+  /** 九项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05） */
   thresholds: JevThresholds;
   /** Jev 客户端配置：钉版模型、超时纯兜底、进程级并发闸初值（02-05 消费）与
-   * 请求组织模式（六题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §3） */
+   * 请求组织模式（四题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §3） */
   jev: {
     model: string;
     timeoutMs: number;
@@ -124,7 +124,7 @@ export type JevSingleState = {
 };
 
 /**
- * 全量共享 state（六题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §4.1）：本地步 1–4 完成
+ * 全量共享 state（四题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §4.1）：本地步 1–4 完成
  * 后进入 Jev 的全部候选来源与片段放进同一个 state。`sources` 按候选 Brave 原序排列，
  * 来源 ID 继续用 `s{braveIndex}` 不重编号——`sources[i]` 的 i 是当前数组位置，**不
  * 等于来源 ID 的数字**（前面来源被删不重排）。元素形状与 `JevCandidate` 同构
@@ -229,12 +229,10 @@ export type ClassifyDeps = {
   }): Promise<ClassifyOutcome>;
 };
 
-/** 十一项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
+/** 九项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
 export type JevThresholds = {
   offTopicDrop: number;
   listingDrop: number;
-  selfDeprecated: number;
-  staleDrop: number;
   fillerDrop: number;
   reasoningProtect: number;
   snippetMin: number;
@@ -261,7 +259,8 @@ export type JevPerSourceStats = {
   fail_kind?: JevFailKind;
   /** 生效的超限降级级别（02-05 记账） */
   ladder?: JevLadderLevel;
-  /** 来源级答案的 noul 概率，键随当次题库（当前六题；历史记录含 v3 十题旧键） */
+  /** 来源级答案的 noul 概率，键随当次题库（当前四题；历史记录含 v3 十题与
+   *  2026-10-03 退役的 self_deprecated / stale 旧键，按额外字段读取） */
   answers?: Record<string, number>;
   /** 片段 score，snip0..snipN 顺序，与 state 片段序对齐 */
   snippet_scores?: number[];
@@ -315,7 +314,7 @@ export type JevRequestMappingEntry = {
   array_index: number;
   /** 候选片段配对身份（与 JevDispatchRecord.snippet_keys 同源同序） */
   snippet_keys: string[];
-  /** 局部题键（六题、snip{i}、time_snip{i}）→ 请求级全局题键（single 为恒等映射） */
+  /** 局部题键（四题、snip{i}）→ 请求级全局题键（single 为恒等映射） */
   question_keys: Record<string, string>;
 };
 
@@ -440,7 +439,12 @@ export type WouldActionEvidence = {
   novel_count?: number;
 };
 
-/** 来源被整体丢弃的原因。前五个 Phase 1 可产生，其余 Phase 2。 */
+/**
+ * 来源被整体丢弃的原因。前五个 Phase 1 可产生，其余 Phase 2。
+ * `self_deprecated` / `stale` 已退役（2026-10-03 题库精简删除其门槛题，filter-rules-11），
+ * 新运行不再产生；历史样本 / JSONL 中有真实 drop 记录，类型与回显仍需消费旧记录形状
+ * （`ShadowDiff` / `WouldActionEvidence` 同先例），成员仅为读历史记录保留。
+ */
 export type SourceDropReason =
   | 'feed'
   | 'blocklist'
@@ -454,7 +458,13 @@ export type SourceDropReason =
   | 'filler'
   | 'rewrite';
 
-/** 单个片段被移除的原因。前六个 Phase 1 可产生，其余 Phase 2。 */
+/**
+ * 单个片段被移除的原因。前六个 Phase 1 可产生，其余 Phase 2。
+ * `time_mismatch` 已退役（2026-10-03 片段级时间题机制整体移除，filter-rules-12），
+ * 新运行不再产生；历史样本 / JSONL 中有真实移除记录，类型与回显仍需消费旧记录
+ * 形状（`SourceDropReason` 的 self_deprecated / stale 同先例），成员仅为读历史
+ * 记录保留。
+ */
 export type SnippetRemovalReason =
   | 'jsonld_meta'
   | 'nav'
@@ -673,7 +683,7 @@ export type FilterResult = {
    */
   jev_dispatch: JevDispatchRecord[];
   /**
-   * Jev 请求级记录（六题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §6.1）：每逻辑请求
+   * Jev 请求级记录（四题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §6.1）：每逻辑请求
    * 一条、按派发顺序，带实发 state / questions / answers / 映射正文（single 模式
    * N 条、all 模式 1 条）。样本 v4 的载荷只信这里；**绝不进 FilterStats / JSONL**
    * （LOG-03 红线）。off / no_key 为空表。
@@ -682,7 +692,7 @@ export type FilterResult = {
 };
 
 /**
- * Jev 实发派发的来源级记录（04-04 R1 引入；六题全量上下文接入后瘦身为**纯来源级
+ * Jev 实发派发的来源级记录（04-04 R1 引入；全量上下文接入后瘦身为**纯来源级
  * 证据**）：一次逻辑请求覆盖哪些来源、每个来源的片段身份与逐题有效性。实发
  * state / questions / answers 全量载荷在 `FilterResult.jev_requests` 每请求存一份
  * （§6.1：不在每个来源下重复整份载荷），来源行经 `request_id` 关联；single 模式
@@ -727,7 +737,7 @@ export type JevDispatchRecord = {
    * 整体 null 表示没有可解析响应；部分缺答不压缩数组、不丢弃其他题的值。 */
   snippet_scores_received: Array<number | null> | null;
   /**
-   * 来源级裁决有效：从 applySourceVerdicts 完成后的真实裁决读取；六道关键题通过
+   * 来源级裁决有效：从 applySourceVerdicts 完成后的真实裁决读取；四道关键题通过
    * 校验且已产生裁决，不是 validation 兜底。仅作观察的题缺失不令此值变为 false。
    */
   source_verdict_valid: boolean;

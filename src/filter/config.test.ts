@@ -100,12 +100,10 @@ describe('parseFilterConfigObject: shape and defaults', () => {
     assert.equal(DEFAULT_BLOCKLIST.size, 0);
   });
 
-  it('carries the eleven DEFAULT_THRESHOLDS values verbatim', () => {
+  it('carries the nine DEFAULT_THRESHOLDS values verbatim', () => {
     assert.deepEqual(parseFilterConfigObject({}).thresholds, {
       offTopicDrop: 0.85,
       listingDrop: 0.8,
-      selfDeprecated: 0.7,
-      staleDrop: 0.85,
       fillerDrop: 0.8,
       reasoningProtect: 0.7,
       snippetMin: 1.0,
@@ -310,8 +308,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
         thresholds: {
           off_topic_drop: 0,
           listing_drop: 1,
-          self_deprecated: 0,
-          stale_drop: 1,
           filler_drop: 0,
           reasoning_protect: 1,
           snippet_min: 2,
@@ -327,8 +323,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
     assert.deepEqual(config.thresholds, {
       offTopicDrop: 0,
       listingDrop: 1,
-      selfDeprecated: 0,
-      staleDrop: 1,
       fillerDrop: 0,
       reasoningProtect: 1,
       snippetMin: 2,
@@ -345,7 +339,7 @@ describe('parseFilterConfigObject: thresholds group', () => {
       {
         thresholds: {
           off_topic_drop: 1.5,
-          stale_drop: -0.1,
+          filler_drop: -0.1,
           snippet_min: 1.2,
           min_facts: 6,
         },
@@ -354,11 +348,11 @@ describe('parseFilterConfigObject: thresholds group', () => {
     );
     assert.equal(lines.length, 2, lines.join('\n'));
     assert.equal(config.thresholds.offTopicDrop, DEFAULT_THRESHOLDS.offTopicDrop);
-    assert.equal(config.thresholds.staleDrop, DEFAULT_THRESHOLDS.staleDrop);
+    assert.equal(config.thresholds.fillerDrop, DEFAULT_THRESHOLDS.fillerDrop);
     assert.equal(config.thresholds.snippetMin, 1.2);
     assert.equal(config.thresholds.minFacts, 6);
     assert.ok(lines.some((line) => line.includes('thresholds.off_topic_drop=1.5')));
-    assert.ok(lines.some((line) => line.includes('thresholds.stale_drop=-0.1')));
+    assert.ok(lines.some((line) => line.includes('thresholds.filler_drop=-0.1')));
   });
 
   it('caps snippet_min at 2 (score tops out at 2.0), falling back above it', () => {

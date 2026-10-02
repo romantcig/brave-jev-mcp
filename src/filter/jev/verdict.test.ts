@@ -22,14 +22,12 @@ import type { VerdictSourceRow } from './verdict.js';
 // 构造辅助：最小行类型工作表 + 合成 judged 答案 + 带 per_source 行的 stats
 // ---------------------------------------------------------------------------
 
-/** 六道来源级 noul 概率的合成基底：全 0（全部远离丢弃门槛）。 */
+/** 四道来源级 noul 概率的合成基底：全 0（全部远离丢弃门槛）。 */
 const ZERO_ANSWERS: Readonly<Record<string, number>> = Object.freeze({
   has_original_reasoning: 0,
   is_template_filler: 0,
   is_off_topic: 0,
   is_listing: 0,
-  self_deprecated: 0,
-  stale: 0,
 });
 
 /** 在全 0 基底上覆写指定题的概率。 */
@@ -121,8 +119,8 @@ describe('cjkShareOf', () => {
 });
 
 // ---------------------------------------------------------------------------
-// applySourceVerdicts：固定顺序五道丢弃门槛（含等号）、命中即停、
-// 三题只记不丢、CJK 加成、异常概率防御
+// applySourceVerdicts：固定顺序三道丢弃门槛（含等号）、命中即停、
+// 退役题与历史旧键只记不丢、CJK 加成、异常概率防御
 // ---------------------------------------------------------------------------
 
 describe('applySourceVerdicts', () => {
@@ -163,20 +161,6 @@ describe('applySourceVerdicts', () => {
     assert.equal(both.table[0].reason, 'off_topic');
   });
 
-  it('drops a self-deprecated source at exactly 0.70', () => {
-    const { table, row, stats } = singleSource({ self_deprecated: 0.7 });
-    applySourceVerdicts(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
-    assert.equal(table[0].verdict, 'drop');
-    assert.equal(table[0].reason, 'self_deprecated');
-  });
-
-  it('drops a stale source at exactly 0.85 without branching on intent', () => {
-    const { table, row, stats } = singleSource({ stale: 0.85 });
-    applySourceVerdicts(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
-    assert.equal(table[0].verdict, 'drop');
-    assert.equal(table[0].reason, 'stale');
-  });
-
   it('drops a filler when reasoning is strictly below the protect line', () => {
     const { table, row, stats } = singleSource({
       is_template_filler: 0.8,
@@ -197,14 +181,17 @@ describe('applySourceVerdicts', () => {
     assert.equal(row.verdict, 'keep');
   });
 
-  it('ignores legacy v3 answers no matter how high they answer (historical replay defense)', () => {
+  it('ignores legacy and retired answers no matter how high they answer (historical replay defense)', () => {
     // 2026-10-01 六题精简后 worth_keeping / is_attributed_rewrite / paywalled 不再
-    // 提问；旧十题录制回放时 judged.answers 可能仍带旧键高概率——裁决链只读六键，
-    // 绝不因额外旧键丢弃来源（旧键原样保留在传入的 answers 对象里）
+    // 提问，2026-10-03 再精简后 self_deprecated / stale 亦退役——旧十题录制回放时
+    // judged.answers 可能仍带旧键高概率，裁决链只读四键，绝不因额外旧键丢弃来源
+    // （旧键原样保留在传入的 answers 对象里）
     const { table, row, stats } = singleSource({
       is_attributed_rewrite: 0.99,
       paywalled: 0.99,
       worth_keeping: 0.99,
+      self_deprecated: 0.99,
+      stale: 0.99,
     });
     applySourceVerdicts(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
     assert.equal(table[0].verdict, 'keep');
@@ -212,6 +199,8 @@ describe('applySourceVerdicts', () => {
     assert.equal(row.answers?.is_attributed_rewrite, 0.99);
     assert.equal(row.answers?.paywalled, 0.99);
     assert.equal(row.answers?.worth_keeping, 0.99);
+    assert.equal(row.answers?.self_deprecated, 0.99);
+    assert.equal(row.answers?.stale, 0.99);
   });
 
   it('rescues a 0.90 off_topic with the CJK bonus when the share is above the threshold', () => {
@@ -240,12 +229,10 @@ describe('applySourceVerdicts', () => {
     assert.equal(table[0].reason, 'off_topic');
   });
 
-  it('keeps a source whose five gate probabilities are all below the thresholds', () => {
+  it('keeps a source whose three gate probabilities are all below the thresholds', () => {
     const { table, row, stats } = singleSource({
       is_off_topic: 0.84,
       is_listing: 0.79,
-      self_deprecated: 0.69,
-      stale: 0.84,
       is_template_filler: 0.79,
       has_original_reasoning: 0.1,
     });

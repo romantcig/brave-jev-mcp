@@ -1,5 +1,5 @@
 /**
- * 题库常量单测：六键齐全（2026-10-01 精简后）、总指令前缀、计数公式、state 形状，
+ * 题库常量单测：四键齐全（2026-10-03 精简后）、总指令前缀、计数公式、state 形状，
  * 以及历史录制兼容——两份重录 `.jev.json` 夹具是 v3 十题题库的历史证据（不得改写
  * 冒充新题库），这里只验证其结构完整可读；当前题库契约由 SOURCE_QUESTIONS /
  * buildQuestions 断言锁定，不再要求旧录制等于当前生成器。
@@ -25,14 +25,12 @@ import {
 const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
 
 describe('SOURCE_QUESTIONS', () => {
-  it('has exactly the six source-level keys after the 2026-10-01 slimming', () => {
+  it('has exactly the four source-level keys after the 2026-10-03 slimming', () => {
     assert.deepEqual(Object.keys(SOURCE_QUESTIONS), [
       'has_original_reasoning',
       'is_template_filler',
       'is_off_topic',
       'is_listing',
-      'self_deprecated',
-      'stale',
     ]);
   });
 
@@ -55,14 +53,12 @@ describe('SNIPPET_LEVELS', () => {
 });
 
 describe('DEFAULT_THRESHOLDS', () => {
-  it('carries the eleven authoritative initial values', () => {
+  it('carries the nine authoritative initial values', () => {
     assert.deepEqual(
       { ...DEFAULT_THRESHOLDS },
       {
         offTopicDrop: 0.85,
         listingDrop: 0.8,
-        selfDeprecated: 0.7,
-        staleDrop: 0.85,
         fillerDrop: 0.8,
         reasoningProtect: 0.7,
         snippetMin: 1.0,
@@ -88,24 +84,9 @@ describe('pinned model and fallback constants', () => {
 });
 
 describe('buildQuestions', () => {
-  it('only asks temporal questions for snippets containing a standalone year', () => {
-    const questions = buildQuestions([
-      'Measured in January 2024: the response took 80ms.',
-      'The instance list is available as JSON.',
-      'Identifier 1202400 is not a year.',
-      'Measurements from 2026 remain below the limit.',
-    ]);
-    assert.deepEqual(
-      Object.keys(questions).filter((key) => key.startsWith('time_')),
-      ['time_snip0', 'time_snip3']
-    );
-    assert.equal(questions.time_snip0.type, 'noul');
-    assert.equal(Object.hasOwn(questions, 'time_source'), false);
-  });
-
-  it('returns six source-level questions plus one score question per snippet', () => {
+  it('returns four source-level questions plus one score question per snippet', () => {
     const questions = buildQuestions(3);
-    assert.equal(Object.keys(questions).length, 9);
+    assert.equal(Object.keys(questions).length, 7);
     assert.deepEqual(
       Object.keys(questions).filter((key) => key.startsWith('snip')),
       ['snip0', 'snip1', 'snip2']
@@ -113,17 +94,20 @@ describe('buildQuestions', () => {
   });
 
   it('returns zero snippet questions for a source without snippets', () => {
-    assert.equal(Object.keys(buildQuestions(0)).length, 6);
+    assert.equal(Object.keys(buildQuestions(0)).length, 4);
   });
 
-  it('asks six plus snippets plus year snippets for full snippet input', () => {
-    // 题数公式（方案 2.1）：6 + 幸存片段数 + 带年份片段数
-    const questions = buildQuestions([
+  it('produces equal tables for text and count forms now that temporal questions are retired', () => {
+    // 片段级时间题退役（2026-10-03，filter-rules-12）后，正文形式与数量形式的
+    // 产出完全一致（4 来源题 + N 道 snip 题）；此守卫锁住该性质——含带年份片段
+    // 也不再追加题目。签名合并属单独的兼容性清理（MAINTENANCE_SIMPLIFICATION_PLAN §2），
+    // 届时以本守卫为锚。
+    const snippets = [
       'Measured in January 2024: the response took 80ms.',
       'The instance list is available as JSON.',
       'Measurements from 2026 remain below the limit.',
-    ]);
-    assert.equal(Object.keys(questions).length, 6 + 3 + 2);
+    ];
+    assert.deepEqual(buildQuestions(snippets), buildQuestions(snippets.length));
   });
 
   it('prefixes the global instruction followed by a space into every question', () => {

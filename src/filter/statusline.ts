@@ -11,7 +11,8 @@
  *   `afterOf` 同式）；
  * - D-03：stale 丢弃不聚合，每个 stale 来源独立成项并回显 intent 原句
  *   `1 stale (vs intent: "…")`；超 100 字符截断加省略号。绝不用代码从 intent
- *   抽版本号（与"版本号正则不做"同精神，零误判）；
+ *   抽版本号（与"版本号正则不做"同精神，零误判）。（2026-10-03 注：stale 门槛题
+ *   已退役，新运行不再产生该原因——本分支与 D-03 口径仅为历史样本记录保留）；
  * - D-05：付费墙截断 > 0 时单列一项（它是片段级动作不是来源级原因）；
  * - D-06：test 与 on 同口径统计"Jev 未判定"来源（mode !== 'off'，04-CONTEXT：test
  *   状态行不假装完成 Jev 检查）——最终 keep 且 per_source 缺行、该行
@@ -49,6 +50,8 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
 
   // 计数列表（D-02/D-03）：非 stale 原因按首次出现顺序聚合计数（Map 插入序）；
   // stale 逐源独立成项并回显 intent。渲染按列表序，聚合计数遍历后回填。
+  // （stale 门槛题已退役（2026-10-03），新运行不再产生该原因——本分支仅为历史
+  // 样本记录保留，行为零改动。）
   const intentEcho = `"${truncateIntent(stats.request.intent)}"`;
   const reasonCounts = new Map<SourceDropReason, number>();
   type ListItem = { kind: 'count'; reason: SourceDropReason } | { kind: 'stale' };
@@ -56,6 +59,7 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
   for (const source of dropped) {
     const reason: SourceDropReason = source.reason ?? 'empty';
     if (reason === 'stale') {
+      // 已退役原因：仅为消费历史样本记录保留（SourceDropReason 注释同源）
       list.push({ kind: 'stale' });
       continue;
     }

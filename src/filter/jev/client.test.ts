@@ -140,14 +140,14 @@ describe('buildRequest', () => {
     assert.equal(request.questions, questions);
   });
 
-  it('carries six source-level questions plus one per snippet, each prefixed with the global instruction', () => {
+  it('carries four source-level questions plus one per snippet, each prefixed with the global instruction', () => {
     const request = buildRequest(
       buildState('s1', 'https://b.example/', 'T', ['a', 'b', 'c'], 'q', 'i'),
       buildQuestions(3),
       DEFAULT_JEV_MODEL
     );
 
-    assert.equal(Object.keys(request.questions).length, 9);
+    assert.equal(Object.keys(request.questions).length, 7);
     for (const question of Object.values(request.questions)) {
       assert.match(
         question.instructions,
@@ -473,7 +473,7 @@ describe('createJevClassifier', () => {
       };
       assert.equal(body.model, DEFAULT_JEV_MODEL);
       assert.deepEqual(body.state, state);
-      assert.equal(Object.keys(body.questions).length, 8);
+      assert.equal(Object.keys(body.questions).length, 6);
     } finally {
       globalThis.fetch = saved;
     }
@@ -1139,7 +1139,6 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
         'the oversized tail snippet must be cut'
       );
       assert.equal(Object.hasOwn(capturedBody.questions, 'snip4'), false);
-      assert.equal(Object.hasOwn(capturedBody.questions, 'time_snip4'), false);
       assert.ok(Object.hasOwn(capturedBody.questions, 'snip3'));
       assert.ok(Object.hasOwn(capturedBody.questions, 'is_off_topic'));
       assert.deepEqual(bigState.source.snippets.length, 5, 'input state must not be mutated');
@@ -1152,7 +1151,7 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
 
   it('drops all snippet questions when the 64k limit is exceeded (source_only_questions)', async () => {
     // 500 个小片段：单题很小（32k 不超），片段题总和 × 1.15 超 64000 → 去掉全部
-    // snip 题（来源级六题保留、state 片段保留）
+    // snip 题（来源级四题保留、state 片段保留）
     const snippets = Array.from({ length: 500 }, (_, i) => `small snippet ${i}, measured in 2024.`);
     const wideState = buildState('s0', 'https://a.example/', 'Title', snippets, 'q', 'i');
     let capturedBody:
@@ -1176,8 +1175,8 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
       assert.ok(capturedBody, 'fetch must have been called');
       assert.equal(
         Object.keys(capturedBody.questions).length,
-        6,
-        'only the six source-level questions remain'
+        4,
+        'only the four source-level questions remain'
       );
       assert.equal(
         Object.hasOwn(capturedBody.questions, 'snip0'),
@@ -1926,12 +1925,13 @@ describe('全量接入审查：真实解析与请求账目', () => {
     };
     try {
       const state = buildState('s0', 'https://alpha.example/', 'Brave', ['Brave fact'], 'q', 'i');
+      // 每题 2 万词 ≈ 2 万 token：四题总数 × 1.15 远超 64k，而单题（最长题）仍低于 32k
       const questions = Object.fromEntries(
         Object.keys(SOURCE_QUESTIONS).map((key) => [
           key,
           {
             type: 'noul' as const,
-            instructions: 'word '.repeat(13000),
+            instructions: 'word '.repeat(20000),
           },
         ])
       );

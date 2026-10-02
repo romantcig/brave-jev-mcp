@@ -214,12 +214,10 @@ export type SampleJevSentSource = {
    */
   answered: boolean;
   /**
-   * 是否取得有效来源裁决（实际裁决所需的六道题通过校验并完成裁决）；answered=true
+   * 是否取得有效来源裁决（实际裁决所需的四道题通过校验并完成裁决）；answered=true
    * 而本值 false = 收到可解析响应但 validation 兜底（状态行提示未完成 Jev 检查）
    */
   source_verdict_valid: boolean;
-  /** 实际发出的时间题局部键；按题目映射检查实发 questions 取得，无该类题省略 */
-  temporal_questions_sent?: string[];
   snippets: SampleJevSentSnippet[];
 };
 
@@ -249,7 +247,7 @@ export type SampleJev = {
 
 /** 生效配置快照（只收过滤行为面配置，绝无认证材料与环境变量——T-04-02-4）。 */
 export type SampleConfigSnapshot = {
-  /** 十一项生效阈值（THRESHOLD_SPECS 投影 snake_case） */
+  /** 九项生效阈值（THRESHOLD_SPECS 投影 snake_case） */
   thresholds: Record<string, number>;
   /** Jev 客户端配置（v4 加 context_mode——请求组织，FULL_CONTEXT_ROLLOUT_PLAN §3） */
   jev: { model: string; timeout_ms: number; concurrency: number; context_mode: JevRequestMode };
@@ -492,16 +490,6 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
       const globalKey = mappingEntry.question_keys[`snip${position}`];
       return globalKey !== undefined && Object.hasOwn(sentQuestions, globalKey);
     };
-    // 时间题局部键：映射中匹配 time_snip{i} 且全局键在实发 questions 里
-    const temporalKeys =
-      mappingEntry !== undefined && sentQuestions !== null
-        ? Object.entries(mappingEntry.question_keys)
-            .filter(
-              ([localKey, globalKey]) =>
-                /^time_snip\d+$/.test(localKey) && Object.hasOwn(sentQuestions, globalKey)
-            )
-            .map(([localKey]) => localKey)
-        : [];
     const row = rows.get(record.src);
     return {
       src: record.src,
@@ -515,7 +503,6 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
         : {}),
       answered: record.answered,
       source_verdict_valid: record.source_verdict_valid,
-      ...(temporalKeys.length > 0 ? { temporal_questions_sent: temporalKeys } : {}),
       snippets: record.snippet_keys.map((key, position) => ({
         snippet: key,
         position,

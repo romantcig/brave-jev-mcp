@@ -33,8 +33,6 @@ import {
   DEFAULT_JEV_MODEL,
   DEFAULT_THRESHOLDS,
   GLOBAL_INSTRUCTION,
-  EXPLICIT_YEAR_PATTERN,
-  temporalQuestionText,
   QUESTION_SET_ID,
   SNIPPET_LEVELS,
   SOURCE_QUESTIONS,
@@ -69,7 +67,7 @@ const configOf = (logDir: string, concurrency = 12): FilterConfig => ({
   logDir,
 });
 
-/** 全保留合成 classify：六道来源级题全 0.0（低于一切丢弃门槛），片段分全 2.0。 */
+/** 全保留合成 classify：来源级题全 0.0（低于一切丢弃门槛；含退役两题旧键，按额外字段忽略），片段分全 2.0。 */
 const keepAllClassify: ClassifyDeps['classify'] = async () => ({
   status: 'answered',
   model: DEFAULT_JEV_MODEL,
@@ -225,18 +223,10 @@ const answeredText = (body: CapturedRequest): string => {
 describe('QUESTION_SET_ID', () => {
   it('is 12 lowercase hex chars derived from the normalized question bank (recipe pinned)', () => {
     assert.match(QUESTION_SET_ID, /^[0-9a-f]{12}$/);
-    // 食谱镜像：常规题库、年份选择条件与时间题模板的规范化 JSON SHA-256 前 12 位——
+    // 食谱镜像：总指令、来源题与片段评分 legend 的规范化 JSON SHA-256 前 12 位——
     // 意外改配方（键序、包裹方式）会在这里红
     const expected = createHash('sha256')
-      .update(
-        JSON.stringify([
-          GLOBAL_INSTRUCTION,
-          SOURCE_QUESTIONS,
-          SNIPPET_LEVELS,
-          EXPLICIT_YEAR_PATTERN.source,
-          temporalQuestionText(0),
-        ])
-      )
+      .update(JSON.stringify([GLOBAL_INSTRUCTION, SOURCE_QUESTIONS, SNIPPET_LEVELS]))
       .digest('hex')
       .slice(0, 12);
     assert.equal(QUESTION_SET_ID, expected);
@@ -252,7 +242,7 @@ describe('createSampleWriter', () => {
 
   // 生产客户端接收异常但可解析的响应，核对实发、逐题有效性与实际裁决三种事实。
   // legacy-extra-answer：旧 v3 十题录制回放时响应多出当前题库外的旧键——验证解析
-  // 层收下额外键、管道按当前六题收集（旧键不进 per_source.answers）、裁决不受影响。
+  // 层收下额外键、管道按当前四题收集（旧键不进 per_source.answers）、裁决不受影响。
   for (const scenario of [
     'complete',
     'missing-score',
@@ -293,7 +283,7 @@ describe('createSampleWriter', () => {
         if (scenario === 'negative-score') answers.snip0.score = -1;
         if (scenario === 'above-range') answers.snip0.score = 3;
         if (scenario === 'nonfinite-score') answers.snip0.score = 'overflow';
-        if (scenario === 'missing-source-answer') delete answers.stale;
+        if (scenario === 'missing-source-answer') delete answers.is_listing;
         if (scenario === 'legacy-extra-answer')
           answers.worth_keeping = { type: 'noul', noul: 0.42 };
         if (scenario === 'source-drop') answers.is_off_topic.noul = 1;
@@ -409,7 +399,7 @@ describe('createSampleWriter', () => {
         assert.equal(sample.jev!.per_source[0].fail_kind, 'validation');
       }
       if (scenario === 'legacy-extra-answer') {
-        // 旧键回答被解析层收下、被当前题库的收集层忽略；六键齐全即有效裁决，
+        // 旧键回答被解析层收下、被当前题库的收集层忽略；四键齐全即有效裁决，
         // 不因响应里多了历史字段而误判 validation 或改变裁决
         assert.equal(sent.source_verdict_valid, true);
         const collected = sample.jev!.per_source[0].answers ?? {};
@@ -418,8 +408,6 @@ describe('createSampleWriter', () => {
           'is_listing',
           'is_off_topic',
           'is_template_filler',
-          'self_deprecated',
-          'stale',
         ]);
         // 旧键在请求级原始答案里如实保留（全局键），不进投影
         assert.equal(Object.hasOwn(request.answers ?? {}, 'worth_keeping'), true);
@@ -500,7 +488,7 @@ describe('createSampleWriter', () => {
     // final_return 原样回放
     assert.deepEqual(sample.final_return, { payload, status_line: statusLine });
 
-    // config_snapshot：十一项阈值 snake_case 投影 + jev 组（v4 加 context_mode）+ 黑名单 + mode
+    // config_snapshot：九项阈值 snake_case 投影 + jev 组（v4 加 context_mode）+ 黑名单 + mode
     const snapshot = sample.config_snapshot as Record<string, unknown>;
     assert.deepEqual(Object.keys(snapshot), [
       'thresholds',
@@ -512,8 +500,6 @@ describe('createSampleWriter', () => {
     assert.deepEqual(snapshot.thresholds, {
       off_topic_drop: DEFAULT_THRESHOLDS.offTopicDrop,
       listing_drop: DEFAULT_THRESHOLDS.listingDrop,
-      self_deprecated: DEFAULT_THRESHOLDS.selfDeprecated,
-      stale_drop: DEFAULT_THRESHOLDS.staleDrop,
       filler_drop: DEFAULT_THRESHOLDS.fillerDrop,
       reasoning_protect: DEFAULT_THRESHOLDS.reasoningProtect,
       snippet_min: DEFAULT_THRESHOLDS.snippetMin,

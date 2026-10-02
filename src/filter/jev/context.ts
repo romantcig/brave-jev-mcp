@@ -1,5 +1,5 @@
 /**
- * 六题全量上下文的请求组织纯逻辑（FULL_CONTEXT_ROLLOUT_PLAN §4/§5）：全量 state
+ * 四题全量上下文的请求组织纯逻辑（FULL_CONTEXT_ROLLOUT_PLAN §4/§5）：全量 state
  * 与命名空间题目的构造、双限额预算规划、显式身份映射与逐来源答案投影。
  *
  * 职责边界（计划 §2.1）：本模块只做请求构造与证据映射——不改阈值、不新增过滤
@@ -204,7 +204,7 @@ export function planAllRequest(
 
 /** 逐来源答案投影的输出（与 runJevStage 单来源内联收集同形状，裁决层直接消费）。 */
 export type ProjectedSourceAnswers = {
-  /** 来源级答案：六题与时间题的 noul 概率（缺答 / 错型不进表，按现有保守防御） */
+  /** 来源级答案：四题的 noul 概率（缺答 / 错型不进表，按现有保守防御） */
   answers: Record<string, number>;
   /** 逐题评分有效性（按实发片段范围对齐；与 JevDispatchRecord.snippet_score_validity 同义） */
   scoreValidity: boolean[];
@@ -215,40 +215,23 @@ export type ProjectedSourceAnswers = {
 };
 
 /**
- * 逐来源答案投影（计划 §4.2）：从一次逻辑请求的答案按显式映射取出该来源的六题、
- * 时间题与片段分数。单来源与全量共用同一份实现——single 的查询函数按局部键恒等
+ * 逐来源答案投影（计划 §4.2）：从一次逻辑请求的答案按显式映射取出该来源的四题
+ * 与片段分数。单来源与全量共用同一份实现——single 的查询函数按局部键恒等
  * 查找，all 按映射换算全局键；缺答、错型、越界一律走现有保守语义，绝不把坏答案
  * 当 0 或删除信号，也不把缺答位之后的答案左移（scoreValidity / scoresReceived 按
  * 题位保留，snippetScores 只在整组齐全时产出）。
  *
- * @param params.sentStateSnippetCount 实发 state 中该来源的片段数（single 阶梯
- *   cut_tail 后变小；全量无阶梯等于候选全长）
  * @param params.sentSnippets 实际带 score 题发送的片段数（single `sent_snippets`；
  *   全量等于候选全长）
- * @param params.localQuestionAt 本地构造题集查询（时间题"是否提问"依据之一）
- * @param params.sentQuestionAt 实发题集查询（时间题只消费实际提交的题）
  * @param params.answerAt 答案查询（按局部键）
  */
 export function projectSourceAnswers(params: {
-  sentStateSnippetCount: number;
   sentSnippets: number;
-  localQuestionAt: (localKey: string) => JevQuestion | undefined;
-  sentQuestionAt: (localKey: string) => JevQuestion | undefined;
   answerAt: (localKey: string) => JevAnswer | undefined;
 }): ProjectedSourceAnswers {
   const answers: Record<string, number> = {};
-  // 来源级六题：与既有单来源收集一致——答案存在且为 noul 才收，缺答 / 错型不进表
+  // 来源级四题：与既有单来源收集一致——答案存在且为 noul 才收，缺答 / 错型不进表
   for (const key of Object.keys(SOURCE_QUESTIONS)) {
-    const answer = params.answerAt(key);
-    if (answer?.kind === 'noul') answers[key] = answer.probability;
-  }
-  // 时间题：本地构造了、且实发题集里也有，才消费 noul 答案——未提问、缺答或坏值
-  // 不制造时间删除（计划 §4.2）；上界是实发 state 的片段数（降级砍尾不串位）
-  for (let i = 0; i < params.sentStateSnippetCount; i += 1) {
-    const key = `time_snip${i}`;
-    if (params.localQuestionAt(key) === undefined || params.sentQuestionAt(key) === undefined) {
-      continue;
-    }
     const answer = params.answerAt(key);
     if (answer?.kind === 'noul') answers[key] = answer.probability;
   }
@@ -279,7 +262,7 @@ export function projectSourceAnswers(params: {
 /**
  * 从实发联合 state 取指定来源的片段数（样本 v4 与投影共用）：single 按 `.source`，
  * all 按 `sources[arrayIndex]`。来源不存在 / 形状异常返回 undefined——调用方按
- * "未知"处理，绝不猜。
+ * "未知"处理，绝不猜。src 侧主要消费方是 sample.ts（buildJevSection 算 in_state）。
  */
 export const snippetCountOfState = (state: JevState, arrayIndex: number): number | undefined => {
   if ('source' in state) {

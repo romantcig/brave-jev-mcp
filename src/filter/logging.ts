@@ -14,7 +14,7 @@
  * 信封字段（D-11）：`ts` 带时区偏移的本地 ISO（`toISOString()` 是 UTC 不满足）；
  * `backend` 常量 `'typesafe'`；`model_config` 是配置钉的模型 ID；`model_reported`
  * 是 Jev 实际回报的模型 ID（per_source answered 行去重，常态单元素）；`thresholds`
- * 是 THRESHOLD_SPECS 投影的十一项 snake_case 快照（绝不手写键名——测试模式改阈值后
+ * 是 THRESHOLD_SPECS 投影的九项 snake_case 快照（绝不手写键名——测试模式改阈值后
  * 旧记录仍可复现裁决）。`mode` 已在 stats 里，成功记录的信封不重复。
  *
  * 红线（LOG-03/D-12）：JSONL 日志绝不写片段正文——只存 URL、标题、指纹、概率、
@@ -120,7 +120,7 @@ export const localIsoWithOffset = (now: Date): string => {
 export const oneLineStderr = (text: string): string =>
   text.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ');
 
-/** 十一项阈值快照：THRESHOLD_SPECS 投影（snake_case 键），绝不手写键名（D-11）。
+/** 九项阈值快照：THRESHOLD_SPECS 投影（snake_case 键），绝不手写键名（D-11）。
  * 04-02 起样本记录的 config_snapshot.thresholds 复用本构造（不复制粘贴）。 */
 export const thresholdSnapshot = (config: FilterConfig): Record<string, number> =>
   Object.fromEntries(THRESHOLD_SPECS.map((spec) => [spec.key, config.thresholds[spec.configKey]]));

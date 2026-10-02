@@ -128,14 +128,14 @@ const expandHome = (path: string): string => {
 const configFileRecord = (raw: unknown): Record<string, unknown> => (isRecord(raw) ? raw : {});
 
 /**
- * 十一项阈值在配置文件里的键 → JevThresholds 键与合法范围（键名用 snake_case，
+ * 九项阈值在配置文件里的键 → JevThresholds 键与合法范围（键名用 snake_case，
  * 与 probe 的 THRESHOLDS 键名一致；未知键忽略为 fail-open 方向）。
- * 范围语义：六个概率门槛（五道丢弃 + reasoning 保护）与 cjk_bonus、cjk_share 取
+ * 范围语义：四个概率门槛（三道丢弃 + reasoning 保护）与 cjk_bonus、cjk_share 取
  * [0,1] 的有限数；snippet_min 取 [0,2]（score 上限 2.0）；min_facts 与 novelty_min
  * 取 >= 1 的**整数**。max 为 Infinity 表示只有下限。
  *
  * logging.ts 的日志信封复用本表投影阈值快照（`key` 即日志键名）——绝不手写
- * 11 个键名，测试模式改阈值后旧记录仍可复现裁决（D-11）。
+ * 9 个键名，测试模式改阈值后旧记录仍可复现裁决（D-11）。
  */
 export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly key: string;
@@ -146,8 +146,6 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
 }> = Object.freeze([
   { key: 'off_topic_drop', configKey: 'offTopicDrop', min: 0, max: 1 },
   { key: 'listing_drop', configKey: 'listingDrop', min: 0, max: 1 },
-  { key: 'self_deprecated', configKey: 'selfDeprecated', min: 0, max: 1 },
-  { key: 'stale_drop', configKey: 'staleDrop', min: 0, max: 1 },
   { key: 'filler_drop', configKey: 'fillerDrop', min: 0, max: 1 },
   { key: 'reasoning_protect', configKey: 'reasoningProtect', min: 0, max: 1 },
   { key: 'snippet_min', configKey: 'snippetMin', min: 0, max: SNIPPET_MIN_MAX },
