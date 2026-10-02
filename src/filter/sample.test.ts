@@ -1194,8 +1194,8 @@ describe('createSampleWriter', () => {
     const writer = createSampleWriter(config);
     const requestId = '99999999-2222-3333-4444-555555555555';
     const path = writer.allocatePath(requestId);
-    // 相对路径口径：samples/<本地日期>/<request_id>.json
-    assert.match(path.relative, /^samples\/\d{4}-\d{2}-\d{2}\/[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
+    // 相对路径口径：samples/<本地日期>/<8位十六进制摘要>.json
+    assert.match(path.relative, /^samples\/\d{4}-\d{2}-\d{2}\/[0-9a-f]{8}\.json$/);
 
     const outcome = writer.save({
       requestId,
@@ -1534,7 +1534,7 @@ describe('createSampleWriter', () => {
       assert.equal(isAbsolute(path.absolute), true);
       assert.equal(path.absolute, resolve(process.cwd(), relativeDir, path.relative));
       // JSONL 信封的相对指针不受影响：仍相对日志目录（正斜杠口径）
-      assert.match(path.relative, /^samples\/\d{4}-\d{2}-\d{2}\/[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
+      assert.match(path.relative, /^samples\/\d{4}-\d{2}-\d{2}\/[0-9a-f]{8}\.json$/);
 
       const outcome = writer.save({
         requestId,

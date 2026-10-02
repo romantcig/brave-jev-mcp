@@ -24,6 +24,7 @@ import { estimateTokens } from '../tokens.js';
 import { isUsableSnippetScore } from './verdict.js';
 import { buildQuestions, SOURCE_QUESTIONS } from './questions.js';
 import type {
+  AllBudgetEstimates,
   JevAllState,
   JevAnswer,
   JevCandidate,
@@ -34,28 +35,16 @@ import type {
   JevState,
 } from '../types.js';
 
+export type { AllBudgetEstimates } from '../types.js';
+
 /** 32k 限额：state + 最长单题（token；官方模型页 jev-1.13.0）。 */
 export const ALL_LIMIT_32K = 32000;
 
 /** 64k 限额：state + 全部题目（token；官方模型页 jev-1.13.0）。 */
 export const ALL_LIMIT_64K = 64000;
 
-/** 预算估算余量：与单来源阶梯同一保守系数（client.ts 的 LADDER_TOKEN_MARGIN 口径）。 */
+/** 预算估算余量：与单来源阶梯同一保守系数。 */
 export const ALL_TOKEN_MARGIN = 1.15;
-
-/** 双限额的估算值（进请求级记录 planned_estimates，供样本对账）。 */
-export type AllBudgetEstimates = {
-  /** 全量 state 的 token 估算（未取整浮点，与单来源阶梯同口径） */
-  state_tokens: number;
-  /** 最长单题的 token 估算 */
-  longest_question_tokens: number;
-  /** 全部题目估算之和 */
-  total_questions_tokens: number;
-  /** (state + 最长单题) × 1.15 的估算值（≤ 32k 可发，等号可发） */
-  single_limit_estimate: number;
-  /** (state + 全部题目) × 1.15 的估算值（≤ 64k 可发，等号可发） */
-  total_limit_estimate: number;
-};
 
 /** 超限的限额；两个都超时报 single（先查 32k）。 */
 export type AllBudgetViolation = 'single' | 'total';
@@ -221,9 +210,7 @@ export type ProjectedSourceAnswers = {
   scoreValidity: boolean[];
   /** 按题位保留的实际有限评分（含越界值；缺答 / 错型 / 非有限为 null） */
   scoresReceived: Array<number | null>;
-  /** snip0..snip{n-1} 是否全部为 score 答案（整组防御语义，缺一位就 false） */
-  scoresComplete: boolean;
-  /** 整组分数（仅 scoresComplete 为 true 时有值；顺序即实发片段位置） */
+  /** 整组分数（实发片段均有 score 答案时产出；顺序即实发片段位置） */
   snippetScores?: number[];
 };
 
@@ -234,7 +221,6 @@ export type ProjectedSourceAnswers = {
  * 当 0 或删除信号，也不把缺答位之后的答案左移（scoreValidity / scoresReceived 按
  * 题位保留，snippetScores 只在整组齐全时产出）。
  *
- * @param params.nSnippets 候选片段数（题位上界之一）
  * @param params.sentStateSnippetCount 实发 state 中该来源的片段数（single 阶梯
  *   cut_tail 后变小；全量无阶梯等于候选全长）
  * @param params.sentSnippets 实际带 score 题发送的片段数（single `sent_snippets`；
@@ -244,7 +230,6 @@ export type ProjectedSourceAnswers = {
  * @param params.answerAt 答案查询（按局部键）
  */
 export function projectSourceAnswers(params: {
-  nSnippets: number;
   sentStateSnippetCount: number;
   sentSnippets: number;
   localQuestionAt: (localKey: string) => JevQuestion | undefined;
@@ -286,7 +271,6 @@ export function projectSourceAnswers(params: {
     answers,
     scoreValidity,
     scoresReceived,
-    scoresComplete,
   };
   if (scoresComplete) result.snippetScores = snippetScores;
   return result;

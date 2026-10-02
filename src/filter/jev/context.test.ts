@@ -305,7 +305,6 @@ describe('projectSourceAnswers', () => {
       questionKeys[key] = allQuestionKey('s7', key);
     }
     const projected = projectSourceAnswers({
-      nSnippets: 2,
       sentStateSnippetCount: 2,
       sentSnippets: 2,
       localQuestionAt: (key) => questions[key],
@@ -358,14 +357,12 @@ describe('projectSourceAnswers', () => {
     });
     assert.deepEqual(projected.scoreValidity, [true, true]);
     assert.deepEqual(projected.scoresReceived, [1.5, 0.3]);
-    assert.equal(projected.scoresComplete, true);
     assert.deepEqual(projected.snippetScores, [1.5, 0.3]);
   });
 
   it('single mode identity lookup behaves like the previous inline collection (T12 basis)', () => {
     const questions = localQuestions(2, true);
     const projected = projectSourceAnswers({
-      nSnippets: 2,
       sentStateSnippetCount: 2,
       sentSnippets: 2,
       localQuestionAt: (key) => questions[key],
@@ -388,7 +385,6 @@ describe('projectSourceAnswers', () => {
     const questions = localQuestions(3);
     const scores = [answer('score', 2), undefined, answer('score', 0.3)];
     const projected = projectSourceAnswers({
-      nSnippets: 3,
       sentStateSnippetCount: 3,
       sentSnippets: 3,
       localQuestionAt: (key) => questions[key],
@@ -403,7 +399,6 @@ describe('projectSourceAnswers', () => {
     assert.deepEqual(projected.scoreValidity, [true, false, true]);
     assert.deepEqual(projected.scoresReceived, [2, null, 0.3]);
     // 整组防御：缺一位就不产出 snippet_scores
-    assert.equal(projected.scoresComplete, false);
     assert.equal(projected.snippetScores, undefined);
   });
 
@@ -417,7 +412,6 @@ describe('projectSourceAnswers', () => {
       return answer('noul', 0);
     };
     const projected = projectSourceAnswers({
-      nSnippets: 4,
       sentStateSnippetCount: 4,
       sentSnippets: 4,
       localQuestionAt: (key) => questions[key],
@@ -428,14 +422,12 @@ describe('projectSourceAnswers', () => {
     // 实收值保留（含越界）供复查；非有限为 null
     assert.deepEqual(projected.scoresReceived, [null, null, -0.5, 3]);
     // snip0 错型（noul）缺位：4 个题位只收 3 个 score → 整组不完整
-    assert.equal(projected.scoresComplete, false);
     assert.equal(projected.snippetScores, undefined);
   });
 
   it('does not consume temporal answers whose question was built but never sent (ladder cut-tail semantics)', () => {
     const questions = localQuestions(2, true);
     const projected = projectSourceAnswers({
-      nSnippets: 2,
       sentStateSnippetCount: 1, // cut_tail 后实发 state 只剩片段 0
       sentSnippets: 1,
       localQuestionAt: (key) => questions[key],

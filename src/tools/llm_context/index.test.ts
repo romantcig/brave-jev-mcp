@@ -619,8 +619,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     await flushWrites();
     const record = firstRecord(logDir);
     assert.equal(record.request_id, sample.request_id);
-    assert.match(basename(sampleAbsPath), /^[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
-    // 信封记相对 log_dir 路径：samples/<日期>/<request_id>.json（正斜杠口径）
+    assert.match(basename(sampleAbsPath), /^[0-9a-f]{8}\.json$/);
+    // 信封记相对 log_dir 路径：samples/<日期>/<8位十六进制摘要>.json（正斜杠口径）
     const relativePath = `samples/${basename(dirname(sampleAbsPath))}/${basename(sampleAbsPath)}`;
     assert.deepEqual(record.sample, { path: relativePath, status: 'saved' });
   });
@@ -893,7 +893,7 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
 
   const INTENT = 'What Brave Search is';
 
-  /** 从 logDir 读唯一错误样本（samples/<日期>/<request_id>.json），带回文件名对账。 */
+  /** 从 logDir 读唯一错误样本（samples/<日期>/<8位十六进制摘要>.json），带回文件名对账。 */
   const readOnlySample = (
     logDir: string
   ): { sample: Record<string, unknown>; fileName: string } => {
@@ -938,7 +938,7 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
           'brave browser'
         );
 
-        // JSONL 错误记录带同一 request_id（三处同值：文件名 / 信封 / 记录）
+        // JSONL 错误记录带同一 request_id（样本记录 / 信封 / 记录）
         await new Promise((resolve) => setImmediate(resolve));
         const jsonlFiles = readdirSync(logDir).filter((file) => file.endsWith('.jsonl'));
         assert.equal(jsonlFiles.length, 1);
@@ -947,8 +947,8 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
         const record = JSON.parse(lines[0]) as Record<string, unknown>;
         assert.equal(record.request_id, sample.request_id);
         assert.equal((record.error as { stage: string }).stage, 'brave');
-        // 文件名缩短；完整 request_id 仍在样本与日志中关联
-        assert.match(fileName, /^[0-9]{6}-[A-Za-z0-9_-]{10}\.json$/);
+        // 文件名采用 8 位小写十六进制摘要；完整 request_id 仍在样本与日志中关联
+        assert.match(fileName, /^[0-9a-f]{8}\.json$/);
       } finally {
         await client.close();
       }
@@ -1058,7 +1058,7 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
       >;
       const sample = record.sample as { path: string; status: string };
       assert.equal(sample.status, 'saved');
-      // 指针对得上真实文件：samples/<日期>/<request_id>.json 且 request_id 同值
+      // 指针对得上真实文件：samples/<日期>/<8位十六进制摘要>.json 且 request_id 同值
       assert.ok(existsSync(join(logDir, sample.path)));
       const saved = JSON.parse(readFileSync(join(logDir, sample.path), 'utf8'));
       assert.equal(saved.request_id, record.request_id);

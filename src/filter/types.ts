@@ -290,6 +290,20 @@ export type JevRequestMode = 'single' | 'all';
 /** requested ≠ effective 的回退原因（FULL_CONTEXT_ROLLOUT_PLAN §3 表格）。 */
 export type JevFallbackReason = 'single_candidate' | 'over_budget' | 'client_too_large';
 
+/** 双限额的估算值（进请求级记录 planned_estimates，供样本对账）。 */
+export type AllBudgetEstimates = {
+  /** 全量 state 的 token 估算（未取整浮点，与单来源阶梯同口径） */
+  state_tokens: number;
+  /** 最长单题的 token 估算 */
+  longest_question_tokens: number;
+  /** 全部题目估算之和 */
+  total_questions_tokens: number;
+  /** (state + 最长单题) × 1.15 的估算值（≤ 32k 可发，等号可发） */
+  single_limit_estimate: number;
+  /** (state + 全部题目) × 1.15 的估算值（≤ 64k 可发，等号可发） */
+  total_limit_estimate: number;
+};
+
 /** 请求级记录里的来源与题目映射条目（§4.2 显式映射）。 */
 export type JevRequestMappingEntry = {
   /** 探测约定 id：`s{braveIndex}` */
@@ -354,13 +368,7 @@ export type JevRequestRecord = {
   /** 来源与题目映射（构造成功即带，含未派发的规划结果） */
   mapping: JevRequestMappingEntry[];
   /** 派发前的双限额规划估算（all 模式；§6.1"规划预算"对账） */
-  planned_estimates?: {
-    state_tokens: number;
-    longest_question_tokens: number;
-    total_questions_tokens: number;
-    single_limit_estimate: number;
-    total_limit_estimate: number;
-  };
+  planned_estimates?: AllBudgetEstimates;
 };
 
 /** JevStats.requests 的摘要行：JevRequestRecord 去掉正文（state/questions/answers/

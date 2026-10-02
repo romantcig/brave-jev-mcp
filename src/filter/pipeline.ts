@@ -804,7 +804,6 @@ const runJevStage = async (
               ? (snippetCountOfState(sentState, entry.array_index) ?? nSnippets)
               : nSnippets;
           const projected = projectSourceAnswers({
-            nSnippets,
             sentStateSnippetCount,
             sentSnippets: nSnippets,
             localQuestionAt: (key) => plan.localQuestions[entry.source_id]?.[key],
@@ -954,7 +953,6 @@ const runJevStage = async (
               ? outcome.dispatch.state.source.snippets.length
               : candidate.snippets.length;
           const projected = projectSourceAnswers({
-            nSnippets: candidate.snippets.length,
             sentStateSnippetCount,
             sentSnippets: outcome.sent_snippets ?? candidate.snippets.length,
             localQuestionAt: (key) => questions[key],
@@ -1115,7 +1113,8 @@ export function collectJevCandidates(
  * 链、同一输入），只是片段带 `key` 配对身份（`{merged_from}:{index}` 前缀可省、
  * JSON-LD 多段加 `.{part}`）。04-02 v1 曾供样本层重建实发 state 映射；04-04 R1 起
  * 样本层只信管道交来的 JevDispatchRecord（重建会得到阶梯前 state，与实发不符），
- * 本函数现无样本层消费方，仅作内部 plain 版包装与候选口径核对备用。
+ * 本函数无样本层消费方，除作内部 plain 版包装与候选口径核对备用外，开发冒烟脚本
+ * （dev/full-context-smoke.mjs）也使用它构造带身份的候选并进行请求规划。
  */
 export function collectJevCandidatesDetailed(
   data: BraveLlmContextResponse,

@@ -151,8 +151,8 @@ export const execute = async (params: QueryParams) => {
 
   // 样本写入器（04-02，test 模式独有）：off / on 不创建单例、不分配路径、不捕获。
   const samples = sampleWriterFor(config);
-  // 每请求唯一 request_id：样本文件名、JSONL 信封、（test 模式的）状态行路径
-  // 三处同值——样本与常规 JSONL 日志以同一 request_id 关联（SC3）。
+  // 每请求唯一 request_id：样本记录、JSONL 信封、（test 模式的）状态行路径
+  // 与样本文件名基于同一 request_id 关联（SC3）。
   const requestId = randomUUID();
   // 先分配路径（PRD 写入顺序第一步）；allocatePath 捕获的锚点 Date 同时锚定样本
   // ts 与目录日期（B-01）。
@@ -238,8 +238,7 @@ export const execute = async (params: QueryParams) => {
     }
     // 展示层合并重复元数据，规模统计只进日志；状态行单独返回一次。
     // 样本仍保存实际发出的精简载荷，过滤输入与 stats 均不改动。
-    const buildPayload = (): unknown => compactResponse(withAdjustments(filtered!.result, raised));
-    payload = buildPayload();
+    payload = compactResponse(withAdjustments(filtered.result, raised));
     // 先写后返（SC3）：样本写成功才带着样本路径返回；写失败剥回原状照常返回
     // 搜索内容、stderr 一行、JSONL 记 failed——绝不返回仿佛文件已存在的路径。
     if (samples !== undefined && samplePath !== undefined) {
@@ -267,7 +266,6 @@ export const execute = async (params: QueryParams) => {
         } else {
           delete filtered.stats.output.status_line;
         }
-        payload = buildPayload();
       }
       // JSONL 信封：request_id + 样本指针（saved / failed 都如实记）
       const meta: LogWriteMeta = {

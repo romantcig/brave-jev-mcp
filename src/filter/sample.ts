@@ -34,12 +34,13 @@
  *
  * 所有权（B-03 同款约定）：save 构建记录时对 pre_filter / payload / jev /
  * outcome 的引用片段做 structuredClone 深拷贝后**同步**序列化（无异步链）；
- * 调用方在 save 返回后不得再改写传入对象（当前适配行此后只做状态行后缀剥离并
- * 重建 payload，不触碰已序列化引用）。
+ * 调用方在 save 返回后不得再改写传入对象（当前适配行此后只做状态行剥回，
+ * 不触碰已序列化引用）。
  *
  * 写入（实施计划第三节"文件组织与读取"）：UTF-8、两空格缩进、文件末尾换行、
- * 字段顺序稳定、正文原样；目标 `log_dir/samples/YYYY-MM-DD/<HHmmss>-<请求摘要>.json`
- * （request_id 为 UUID，多进程唯一）；**临时文件 + 同目录 rename** 的单次原子
+ * 字段顺序稳定、正文原样；目标 `log_dir/samples/YYYY-MM-DD/<8位小写十六进制摘要>.json`
+ * （摘要取自完整 request_id，同目录内靠概率区分，不作唯一性或防覆盖保证）；
+ * **临时文件 + 同目录 rename** 的单次原子
  * 语义——绝不留下可误读为完整成功记录的半截 JSON。写入失败（目录建不出、写
  * 中途失败、rename 失败）返回 status 'failed'，stderr 恰一行可定位告警（含目标
  * 路径），绝不抛错、绝不假装成功；不设自动清理（与 JSONL 日志同策略）。
@@ -62,6 +63,7 @@ import {
   truncateMessage,
 } from './logging.js';
 import type {
+  AllBudgetEstimates,
   FilterConfig,
   FilterMode,
   FilterRequest,
@@ -70,6 +72,7 @@ import type {
   JevDispatchRecord,
   JevPerSourceStats,
   JevQuestion,
+  JevRequestMappingEntry,
   JevRequestMode,
   JevRequestRecord,
   JevFallbackReason,
@@ -181,24 +184,11 @@ export type SampleJevRequest = {
   /** 来源与题目映射（构造成功即带） */
   mapping: SampleJevRequestMappingEntry[];
   /** 派发前的双限额规划估算（all 模式） */
-  planned_estimates?: {
-    state_tokens: number;
-    longest_question_tokens: number;
-    total_questions_tokens: number;
-    single_limit_estimate: number;
-    total_limit_estimate: number;
-  };
+  planned_estimates?: AllBudgetEstimates;
 };
 
-/** 请求级映射条目（与 JevRequestMappingEntry 同形；样本内保持自描述）。 */
-export type SampleJevRequestMappingEntry = {
-  source_id: string;
-  /** all 为 state.sources 数组下标；single 恒 0 */
-  array_index: number;
-  snippet_keys: string[];
-  /** 局部题键 → 请求级全局题键（single 恒等） */
-  question_keys: Record<string, string>;
-};
+/** 请求级映射条目：与 JevRequestMappingEntry 同一来源，天然同形。 */
+export type SampleJevRequestMappingEntry = JevRequestMappingEntry;
 
 /**
  * Jev 实发映射里的一条来源（v4）：来源身份 + 所属请求（request_id / array_index）
@@ -337,7 +327,7 @@ export type SampleRecord = {
 export type AllocatedSamplePath = {
   /** 状态行 ` sample: ` 后缀用的绝对路径（可直接访问） */
   absolute: string;
-  /** JSONL 信封 sample.path 用的相对 log_dir 路径：`samples/<日期>/<HHmmss>-<请求摘要>.json` */
+  /** JSONL 信封 sample.path 用的相对 log_dir 路径：`samples/<日期>/<8位十六进制摘要>.json` */
   relative: string;
   /** 分配时刻的 Date（writer 内部锚点，调用方原样传回 save 即可） */
   capturedAt: Date;
@@ -703,13 +693,10 @@ export function createSampleWriter(config: FilterConfig, hooks?: SampleWriterHoo
   return {
     allocatePath(requestId: string): AllocatedSamplePath {
       const capturedAt = new Date();
-      // 文件名保留本地时分秒与请求摘要；完整 request_id 仍在样本和日志中关联。
-      // 摘要取 60 位，不直接截 UUID 前缀；同秒并发请求也有独立后缀。
-      const time = [capturedAt.getHours(), capturedAt.getMinutes(), capturedAt.getSeconds()]
-        .map((part) => String(part).padStart(2, '0'))
-        .join('');
-      const suffix = createHash('sha256').update(requestId).digest('base64url').slice(0, 10);
-      const relative = `samples/${localDateStamp(capturedAt)}/${time}-${suffix}.json`;
+      // 文件名采用 8 位小写十六进制摘要；完整 request_id 仍在样本和日志中关联。
+      // 复用 SHA-256 摘要，不直接截 UUID 前缀。
+      const hash = createHash('sha256').update(requestId).digest('hex').slice(0, 8);
+      const relative = `samples/${localDateStamp(capturedAt)}/${hash}.json`;
       return { absolute: resolve(config.logDir, relative), relative, capturedAt };
     },
     save(input: SampleInput): SampleWriteStatus {

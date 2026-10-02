@@ -18,8 +18,7 @@
  * src/utils.ts 判别联合先例、src/protocols/rebinding.ts 工厂闭包先例。
  */
 
-import { estimateTokens } from '../tokens.js';
-import { checkAllBudget } from './context.js';
+import { allBudgetEstimatesOf, ALL_LIMIT_32K, ALL_LIMIT_64K, checkAllBudget } from './context.js';
 import type {
   ClassifyDeps,
   ClassifyFailKind,
@@ -168,15 +167,6 @@ export const RETRY_AFTER_MAX_MS = 5000;
 /** 退避的随机抖动上限比例：`(1 - 0.25 × random)`（PLAN 第 5 节"兜底"行）。 */
 export const RETRY_JITTER_RATIO = 0.25;
 
-/** 32k 限额：state + 最长单题（token，notes/jev-api.md；JEV-05）。 */
-const LADDER_LIMIT_32K = 32000;
-
-/** 64k 限额：state + 全部问题（token，notes/jev-api.md；JEV-05）。 */
-const LADDER_LIMIT_64K = 64000;
-
-/** 估算余量：估算公式不保证偏高，按 15% 放大保守侧（notes/jev-api.md）。 */
-const LADDER_TOKEN_MARGIN = 1.15;
-
 /** 片段级 score 题的键形态（`snip{i}`）。 */
 const SNIP_KEY_PATTERN = /^snip\d+$/;
 
@@ -277,7 +267,7 @@ const httpFailure = (
 });
 
 /**
- * 超限阶梯（JEV-05，A12 判据映射）：发送前用 `estimateTokens` 加 15% 余量对两条
+ * 超限阶梯（JEV-05，A12 判据映射）：发送前复用 `allBudgetEstimatesOf` 对两条
  * 限额做保护（超限后果官方未写明——社区报告为直接拒绝，故发送前自行降级）。
  *
  * - ② 32k（state + 最长单题）超 → 从尾片段开始逐个砍（Brave 序），每砍一片段
@@ -293,7 +283,7 @@ const httpFailure = (
  * 后比入参少、`source_only_questions` 为 0——该级不发任何 snip 题），供管道把片段
  * 分数按位置对齐到真实发送范围。
  *
- * 估算只复用 `../tokens.js` 的 `estimateTokens`（01-04 明文，不复制实现）。
+ * 估算复用 context.ts 的 `allBudgetEstimatesOf`。
  * 写时复制：绝不改入参 state / questions（砍尾 slice 拷贝、删题浅拷贝）。
  * 阶梯只影响该来源的请求内容。
  *
@@ -313,17 +303,11 @@ const applyOversizeLadder = (
   let workState = state;
   let workQuestions = questions;
 
-  const over32k = (current: JevState, currentQuestions: Record<string, JevQuestion>): boolean => {
-    const estState = estimateTokens(JSON.stringify(current));
-    let longestQuestion = 0;
-    for (const question of Object.values(currentQuestions)) {
-      longestQuestion = Math.max(longestQuestion, estimateTokens(JSON.stringify(question)));
-    }
-    return (estState + longestQuestion) * LADDER_TOKEN_MARGIN > LADDER_LIMIT_32K;
-  };
-
   // ② 32k：砍尾片段 + 对应 snip 题，重算直到满足或砍光
-  while (over32k(workState, workQuestions) && workState.source.snippets.length > 0) {
+  while (
+    allBudgetEstimatesOf(workState, workQuestions).single_limit_estimate > ALL_LIMIT_32K &&
+    workState.source.snippets.length > 0
+  ) {
     const snippets = workState.source.snippets.slice(0, -1);
     workQuestions = { ...workQuestions };
     delete workQuestions[`snip${snippets.length}`];
@@ -333,15 +317,7 @@ const applyOversizeLadder = (
   }
 
   // ③ 64k：去掉全部 snip 题（来源级题保留；state 片段保留）
-  if (
-    (estimateTokens(JSON.stringify(workState)) +
-      Object.values(workQuestions).reduce(
-        (sum, question) => sum + estimateTokens(JSON.stringify(question)),
-        0
-      )) *
-      LADDER_TOKEN_MARGIN >
-    LADDER_LIMIT_64K
-  ) {
+  if (allBudgetEstimatesOf(workState, workQuestions).total_limit_estimate > ALL_LIMIT_64K) {
     workQuestions = Object.fromEntries(
       Object.entries(workQuestions).filter(
         ([name]) => !SNIP_KEY_PATTERN.test(name) && !/^time_snip\d+$/.test(name)
