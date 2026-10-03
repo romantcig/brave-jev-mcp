@@ -36,8 +36,7 @@ import {
 } from './nonArticle.js';
 import { isNearDuplicate, SHINGLE_N, stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
-import { buildQuestions, buildState } from './jev/questions.js';
-import { planAllRequest, projectSourceAnswers } from './jev/context.js';
+import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
 import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
@@ -61,10 +60,8 @@ import type {
   JevCandidate,
   JevCandidateDetailed,
   JevDispatchRecord,
-  JevFallbackReason,
   JevPerSourceStats,
   JevQuestion,
-  JevRequestMode,
   JevRequestRecord,
   JevStats,
   JevState,
@@ -477,16 +474,16 @@ const toStatsRequest = (
  * 网络只发生在注入的 classify 实现里。`config` 省略时取全默认（不读文件、不看
  * 环境——配置载体是单一 JSON 文件，读一次的责任在适配行）。
  * 模式分叉（04-01 单链语义）：off 整段跳过 Jev（`stats.jev` 保持 null）；test 与
- * on 注入 classify 后**共用同一条过滤链**——runJevStage 并发派发（步 5）接
+ * on 注入 classify 后**共用同一条过滤链**——runJevStage 共享请求派发（步 5）接
  * runOnChain（步 6 → 步 7 → 步 8），裁决真实生效，不维护两套实现；未注入 classify
  * 时记 no_key 零值对象且零请求（SAFE-01 语义前置）。调用方不 `await` 会在 tsc 处
  * 报类型错——tsx 不查类型，`npm run build` 是唯一漏改闸（Pitfall 1）。
  *
  * @param data Brave LLM Context 响应（已过上游 zod 校验）
  * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带；
- *   `retrievalTime`（可选）是宿主发起 Brave 请求前捕获的检索时间——时间上下文开关
- *   开启时进入 Jev state（`retrieval_time`），同一搜索的 all、single 回退与重试
- *   共用该值；未提供或非法时省略字段，绝不读取系统时间冒充
+ *   `retrievalTime`（可选）是宿主发起 Brave 请求前捕获的检索时间——归一后进入
+ *   Jev state（`retrieval_time`），同一搜索的请求与重试共用该值；未提供或非法时
+ *   省略字段，绝不读取系统时间冒充
  * @param config 过滤配置；省略时为全默认配置（mode off）
  * @param deps Phase 2 注入点：`classify` 缺省时 on/test 记 no_key
  * @returns `{ result, stats }` 的 Promise；`result` 与输入同形，`stats` 是本次调用新建的对象
@@ -517,8 +514,8 @@ export async function filterLlmContext(
     stats.jev = createNoKeyJevStats();
     runOffChain(table, undefined, config.thresholds, stats, queryTerms);
   } else {
-    // 步 5 Jev 请求派发：按 config.jev.contextMode 选择 single / all 组织（计划 §3）
-    // ——test 与 on 共用此分支；裁决消费与记账形状完全一致
+    // 步 5 Jev 请求派发：非空候选组织一次全量共享请求（§3.1）——test 与 on 共用
+    // 此分支；裁决消费与记账形状完全一致
     const judged = await runJevStage(table, request, deps.classify, stats, config);
     dispatches = judged.dispatches;
     requests = judged.requests;
@@ -572,7 +569,7 @@ const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
     url,
     title,
     snippets: snippets.map((snippet) => snippet.text),
-    ...(bravePageDate !== undefined ? { brave_page_date: bravePageDate } : {}),
+    brave_page_date: bravePageDate,
   }));
 
 /**
@@ -581,19 +578,15 @@ const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
  * 原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段）
  * 及其配对身份，顺序即表序（Brave 原序）。只读表，不翻标记、不重排（RULES-08）。
  *
- * 页面日期（时间上下文，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：按
- * `s{braveIndex}` 与原 URL 的映射从各来源**原 Brave 元数据** `age` 选出（selectPageDate），
- * 绑定来源身份——绝不在候选数组压缩后按下标读原始元数据。步 2 归并的候选统计
- * 全部贡献原来源（宿主索引 ∪ 幸存片段的 mergedFrom），日期不同或部分未知统一
- * null（mergePageDates），不把 A 的日期贴到 B 的事实上。开关关闭时也保留原候选
- * 结构，不添加日期字段。
+ * 页面日期（时间上下文）：按 `s{braveIndex}` 与原 URL 的映射从各来源**原 Brave 元数据**
+ * `age` 选出（selectPageDate），绑定来源身份——绝不在候选数组压缩后按下标读原始元数据。
+ * 步 2 归并的候选统计全部贡献原来源（宿主索引 ∪ 幸存片段的 mergedFrom），日期不同或
+ * 部分未知统一 null（mergePageDates），不把 A 的日期贴到 B 的事实上。日期字段恒在
+ * （无日期为 null），进入全量请求构造的唯一候选口径。
  */
-const jevCandidatesFromTable = (
-  table: WorkSource[],
-  temporalContext: boolean
-): JevCandidateDetailed[] => {
+const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => {
   const pageDateByIndex = new Map<number, string | null>(
-    temporalContext ? table.map((source) => [source.index, selectPageDate(source.meta)]) : []
+    table.map((source) => [source.index, selectPageDate(source.meta)])
   );
   const candidates: JevCandidateDetailed[] = [];
   for (const source of table) {
@@ -617,42 +610,39 @@ const jevCandidatesFromTable = (
       url: source.url,
       title: source.title,
       snippets,
-      ...(temporalContext ? { bravePageDate } : {}),
+      bravePageDate,
     });
   }
   return candidates;
 };
 
 /**
- * 步 5：Jev 请求派发，按配置 `config.jev.contextMode` 选择请求组织
- * （FULL_CONTEXT_ROLLOUT_PLAN §3）：single 逐来源一次请求、全候选一波并发
- * （Promise.allSettled——管道编排层不持进程级状态与限流；进程级并发闸按
- * Responsibility Map 由 02-05 的 `createJevClassifier` 闭包持有并消费
- * `config.jev.concurrency`，本处不建双闸）；all 全候选共享一次逻辑请求。两者只在
- * 请求组织与证据映射处分支，步 6–10 的裁决链不复制（runOnChain 消费同一 rows 形状）。
+ * 步 5：Jev 请求派发（all-only 唯一组织，ALL_ONLY_FILTER_CLEANUP_PLAN §3.1）：
+ * 非空候选组织**一次**全量共享逻辑请求——一个或多个候选都进 `state.sources[]`，
+ * 单候选同样用 `sources[0]` 与新题，不走特殊模板；零候选零次 Jev 逻辑调用与 HTTP，
+ * 不构造空问题请求。进程级并发闸按 Responsibility Map 由 02-05 的
+ * `createJevClassifier` 闭包持有并消费 `config.jev.concurrency`，本处不建双闸；
+ * 32K／64K 预检、估算与 single 阶梯、三条回退（单候选／预算／客户端拒绝）已整体
+ * 退役——同一搜索的重试由客户端复用完全相同的 body，属于同一逻辑请求。
  *
- * 回退规则（计划 §3 表格）：all 且零候选 → 零请求；单候选 → 走 single
- * （single_candidate）；规划双限额超限 → 整批回退 single（同一批冻结候选，不重新
- * 预筛，over_budget）；客户端防御在派发前拒绝（too_large 未派发）→ 单次回退 single
- * （client_too_large），不递归；熔断短路 → 零 HTTP，全部来源行记 breaker_open，
- * 不回退。已派发后的网络失败**不**自动放大成一批 single 请求（§5.2）。
- *
- * 记账口径（SAFE-01/JEV-04/计划 §6.1）：
- * - `n_requests` = 实际至少派发一次的逻辑分类请求数（answered 或已派发后失败各计
- *   一）；无候选、预检拒绝（未派发 too_large）、熔断短路不虚记。N 来源一次全量
- *   请求记 1，绝不冒充 N 次 HTTP；
+ * 记账口径（SAFE-01/JEV-04/计划 §3.3）：
+ * - `n_requests` 仅在 outcome 带 `dispatch`（fetch 已调用）时加一；回答桩可
+ *   `answered=true` 而 `dispatched=false`，此时计零请求、载荷保持 null。熔断短路
+ *   （零 fetch）不虚记。N 来源一次全量请求记 1，绝不冒充 N 次 HTTP；
  * - `n_http_attempts` = 全部请求的真实 fetch 次数（含重试），与 n_requests 分开记；
  * - `latency_ms_total` = 逻辑请求耗时之和（每次 classify 全程），不冒充过滤阶段
  *   墙钟耗时；
- * - answered → per_source 记四题概率与 snippet_scores、model、input_tokens、
- *   request_id；failed 且非熔断短路 → 记 fail_kind；失败来源什么都不动（按"留"，
- *   SAFE-01）；keep 但幸存片段为 0 的来源 → per_source 记 'skipped' 且无请求。
- * - 请求级完整事实（实发载荷、映射、答案、预算）在 `requests`，经
+ * - 用量只在请求级累计；缺少用量完整性信息时 `usage_complete=false`，不由
+ *   answered 自动推定；
+ * - answered → per_source 记四题概率与 snippet_scores、model、request_id；
+ *   failed 且非熔断短路 → 记 fail_kind；失败来源什么都不动（按"留"，SAFE-01）；
+ *   keep 但幸存片段为 0 的来源 → per_source 记 'skipped' 且无请求。
+ * - 请求级完整事实（实发载荷、映射、答案）在 `requests`，经
  *   FilterResult.jev_requests 交样本层；stats.jev.requests 只留无正文摘要（LOG-03）。
  *
  * @returns `{ rows, dispatches, requests }`：rows 为逐源 judged 结果映射（键 = src
  * id `s{index}`）——步 6/7 的裁决消费入口；dispatches 为来源级派发证据（每 keep
- * 来源一条、按表序）；requests 为请求级记录（按派发顺序，single N 条 / all 1 条）。
+ * 来源一条、按表序）；requests 为请求级记录（零条或一条，按派发顺序）。
  */
 const runJevStage = async (
   table: WorkSource[],
@@ -665,13 +655,9 @@ const runJevStage = async (
   dispatches: JevDispatchRecord[];
   requests: JevRequestRecord[];
 }> => {
-  // 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：开关关闭恒 undefined
-  // ——state 不加时间字段、题目保持旧形态（完整功能回退）。开关开启时归一检索时间
-  // 一次，all、single 回退与重试共用同一值；值非法时 state 省略 retrieval_time 但
-  // 页面日期照常携带。绝不隐式读取系统时间（回放必须显式携带日志原 ts）。
-  const temporal = config.jev.temporalContext
-    ? { retrievalTime: normalizeRetrievalTime(request.retrievalTime) }
-    : undefined;
+  // 检索时间归一一次（§3.1）：合法值进 state.retrieval_time，缺失或非法省略——
+  // 同一搜索的请求与重试共用同一值，绝不隐式读取系统时间（回放必须显式携带日志原 ts）
+  const retrievalTime = normalizeRetrievalTime(request.retrievalTime);
   const jev: JevStats = {
     n_requests: 0,
     input_tokens: 0,
@@ -682,12 +668,12 @@ const runJevStage = async (
     requests: [],
   };
   // 带身份候选（04-04 R1）：派发记录需要片段配对身份与候选口径文本，plain 形状给不出
-  const candidates = jevCandidatesFromTable(table, config.jev.temporalContext);
+  const candidates = jevCandidatesFromTable(table);
 
   // 先按表序给每个 keep 来源立 skipped 占位行，候选来源派发后覆盖——per_source
   // 天然保持 Brave 原序（RULES-08），顺序由 Map 的插入序保证；无候选的来源
   // （本地规则删光、未调 Jev）预置 skipped 派发记录（04-04 R1：与候选来源的
-  // "未派发"区分开——skipped 是无内容可发，too_large / breaker_open 是有内容没发）
+  // "未派发"区分开——skipped 是无内容可发，breaker_open 是有内容没发）
   const rows = new Map<string, JevPerSourceStats>();
   const dispatchMap = new Map<string, JevDispatchRecord>();
   const candidateIds = new Set(candidates.map((candidate) => candidate.id));
@@ -726,16 +712,16 @@ const runJevStage = async (
     snippet_texts: candidate.snippets.map((snippet) => snippet.text),
   });
 
-  // 请求级记录（计划 §6.1）：每逻辑请求一条、按派发顺序；ID 在本次搜索内唯一
+  // 请求级记录（计划 §3.3）：每逻辑请求一条、按派发顺序；本次搜索内零条或一条
   const requestRecords: JevRequestRecord[] = [];
   let requestSeq = 0;
   const nextRequestId = (): string => `j${(requestSeq += 1)}`;
 
   /**
-   * 一次 classify 调用与请求级账目的公共路径（single / all 共用）：计时、实发载荷
-   * 捕获、answered / dispatched / usage_complete 独立记、n_requests 与
-   * n_http_attempts 汇总。classify 契约是返回 failed 而非 reject；真 reject 按
-   * 网络失败记账（防御注入面），此时无实发载荷。
+   * 一次 classify 调用与请求级账目的公共路径：计时、实发载荷捕获、
+   * answered / dispatched / usage_complete 独立记、n_requests 与 n_http_attempts
+   * 汇总。classify 契约是返回 failed 而非 reject；真 reject 按网络失败记账（防御
+   * 注入面），此时无实发载荷——没有派发证据绝不虚记请求（§3.3）。
    */
   const runRequest = async (
     record: JevRequestRecord,
@@ -753,29 +739,28 @@ const runJevStage = async (
     jev.latency_ms_total += record.latency_ms;
 
     if (outcome.dispatch !== undefined) {
-      // 请求已派发（fetch 已调用；含已派发但失败）——实发载荷只信这里
+      // 请求已派发（fetch 已调用；含已派发但失败）——实发载荷只信这里；
+      // n_requests 仅在此计一（§3.3：无 dispatch 的 answered 计零请求）
       record.dispatched = true;
       record.state = outcome.dispatch.state;
       record.questions = outcome.dispatch.questions;
+      jev.n_requests += 1;
     }
     if (outcome.status === 'answered') {
       record.answered = true;
       record.model = outcome.model;
       record.answers = outcome.answers;
-      jev.n_requests += 1;
     } else {
+      // 未派发短路（breaker_open）：零 fetch 不计 n_requests；注入面契约外 reject
+      // 无派发证据同样不计——绝不冒充实发
       record.fail_kind = outcome.kind;
-      if (outcome.dispatch !== undefined) {
-        // 已派发但失败：真实消耗了一次逻辑调用（计入 n_requests）
-        jev.n_requests += 1;
-      }
-      // 未派发短路（too_large / breaker_open）：预检拒绝不计 n_requests
     }
     if (outcome.input_tokens !== undefined) {
       record.input_tokens = outcome.input_tokens;
       jev.input_tokens += outcome.input_tokens;
     }
-    record.usage_complete = outcome.usage_complete ?? outcome.status === 'answered';
+    // 用量完整性只信 outcome 的如实回报；缺少信息按不完整处理，不由 answered 推定
+    record.usage_complete = outcome.usage_complete ?? false;
     if (outcome.http_status !== undefined) record.http_status = outcome.http_status;
     if (outcome.http_attempts !== undefined) {
       record.http_attempts = outcome.http_attempts;
@@ -784,264 +769,113 @@ const runJevStage = async (
     return outcome;
   };
 
-  const requestedMode = config.jev.contextMode;
-  // single 回退原因（requested=all 时每个 single 请求携带；配置 single 恒 undefined）
-  let singleFallbackReason: JevFallbackReason | undefined;
-  let useAll = false;
+  if (candidates.length > 0) {
+    // 唯一请求构造器（§3.1）：完整候选数组进同一次共享请求；构造结果与检索时间
+    // 即本次搜索的固定请求身份，重试属于同一逻辑请求
+    const { state, questions, entries } = buildContextRequest(
+      candidates,
+      request.params.query,
+      request.intent,
+      retrievalTime
+    );
+    const record: JevRequestRecord = {
+      request_id: nextRequestId(),
+      source_ids: entries.map((entry) => entry.source_id),
+      dispatched: false,
+      state: null,
+      questions: null,
+      answered: false,
+      input_tokens: null,
+      usage_complete: false,
+      latency_ms: 0,
+      mapping: entries,
+    };
+    requestRecords.push(record);
+    const outcome = await runRequest(record, state, questions);
 
-  // —— all 组织（计划 §3 表格）：仅多候选且规划通过才发一次全量请求 ——
-  if (requestedMode === 'all' && candidates.length > 1) {
-    // temporal 开启时：state 携带时间字段、片段用冻结新题；完整日期与新题加入后
-    // 才做双限额预算检查（planAllRequest 内部顺序，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §7.5）
-    const planResult = planAllRequest(candidates, request.params.query, request.intent, temporal);
-    if (planResult.ok) {
-      useAll = true;
-      const plan = planResult.plan;
-      const record: JevRequestRecord = {
-        request_id: nextRequestId(),
-        mode: 'all',
-        requested: 'all',
-        effective: 'all',
-        source_ids: plan.entries.map((entry) => entry.source_id),
-        dispatched: false,
-        state: null,
-        questions: null,
-        answered: false,
-        input_tokens: null,
-        usage_complete: false,
-        latency_ms: 0,
-        mapping: plan.entries,
-        planned_estimates: plan.estimates,
-      };
-      requestRecords.push(record);
-      const outcome = await runRequest(record, plan.state, plan.questions);
-
-      if (outcome.status === 'answered') {
-        // 投影（计划 §4.2）：按显式映射把全量答案分回各来源行，不按键序、URL 或
-        // 压缩位置猜；全量无阶梯，实发片段范围即候选全长
-        for (const entry of plan.entries) {
-          const candidate = candidates.find((item) => item.id === entry.source_id);
-          if (candidate === undefined) continue; // 映射与候选同源，防御分支
-          const nSnippets = entry.snippet_keys.length;
-          const projected = projectSourceAnswers({
-            sentSnippets: nSnippets,
-            answerAt: (key) => outcome.answers[entry.question_keys[key]],
-          });
-          rows.set(entry.source_id, {
-            src: entry.source_id,
-            url: candidate.url,
-            status: 'answered',
-            answers: projected.answers,
-            ...(projected.snippetScores !== undefined
-              ? { snippet_scores: projected.snippetScores }
-              : {}),
-            // 请求级维度（input_tokens / latency_ms）不逐来源复制（§6.1：N 行同值
-            // 会被误加成 N 倍）——经 request_id 关联请求记录；model 保留供
-            // model_reported 去重投影
-            model: outcome.model,
-            request_id: record.request_id,
-          });
-          dispatchMap.set(entry.source_id, {
-            ...dispatchBase(candidate),
-            request_id: record.request_id,
-            array_index: entry.array_index,
-            dispatched: outcome.dispatch !== undefined,
-            answered: true,
-            snippet_score_validity: projected.scoreValidity,
-            snippet_scores_received: projected.scoresReceived,
-          });
-        }
-      } else if (outcome.dispatch !== undefined) {
-        // 已派发但失败（网络 / 超时 / 4xx / 5xx）：覆盖来源记未完成 Jev 判断，
-        // 绝不自动放大成一批新的 single 请求（计划 §5.2）；已派发失败不可能是
-        // 熔断短路（零 fetch），但 TS 无法从 dispatch 收窄 kind，显式排除
-        for (const entry of plan.entries) {
-          const candidate = candidates.find((item) => item.id === entry.source_id);
-          if (candidate === undefined) continue;
-          rows.set(entry.source_id, {
-            src: entry.source_id,
-            url: candidate.url,
-            status: 'failed',
-            ...(outcome.kind !== 'breaker_open' ? { fail_kind: outcome.kind } : {}),
-            request_id: record.request_id,
-          });
-          dispatchMap.set(entry.source_id, {
-            ...dispatchBase(candidate),
-            request_id: record.request_id,
-            array_index: entry.array_index,
-            dispatched: true,
-            answered: false,
-          });
-        }
-      } else if (outcome.kind === 'too_large') {
-        // 客户端防御在派发前拒绝（规划层已预检，正常不触达）：单次回退 single，
-        // 同一批冻结候选；请求记录保留（未派发，fail_kind 如实）
-        singleFallbackReason = 'client_too_large';
-        useAll = false;
-      } else {
-        // 熔断短路（派发前）：零 HTTP，全部覆盖来源行记 breaker_open，不回退
-        for (const entry of plan.entries) {
-          const candidate = candidates.find((item) => item.id === entry.source_id);
-          if (candidate === undefined) continue;
-          rows.set(entry.source_id, {
-            src: entry.source_id,
-            url: candidate.url,
-            status: outcome.kind === 'breaker_open' ? 'breaker_open' : 'failed',
-            ...(outcome.kind !== 'breaker_open' ? { fail_kind: outcome.kind } : {}),
-            request_id: record.request_id,
-          });
-          dispatchMap.set(entry.source_id, {
-            ...dispatchBase(candidate),
-            request_id: record.request_id,
-            array_index: entry.array_index,
-            dispatched: false,
-            answered: false,
-            ...(outcome.kind === 'breaker_open'
-              ? { not_dispatched_reason: 'breaker_open' as const }
-              : {}),
-          });
-        }
-      }
-    } else {
-      // 规划双限额超限：整批回退 single（over_budget），不构造可发请求
-      singleFallbackReason = 'over_budget';
-    }
-  } else if (requestedMode === 'all' && candidates.length === 1) {
-    singleFallbackReason = 'single_candidate';
-  }
-  // 零候选 + all：零请求、不构造空题目请求，与 single 同态（占位行已全部 skipped）
-
-  // —— single 组织：requested=single，或 all 的单候选 / 超限 / 防御回退 ——
-  if (!useAll) {
-    const dispatch = async (candidate: JevCandidateDetailed): Promise<void> => {
-      // single（含 all 回退）的时间输入（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §3）：
-      // 开关开启时 state 也携带检索时间与页面日期，但评分题沿用旧模板——真实内容
-      // 验证的是 all 新题，不能机械改字段名就宣称单来源等效
-      const state = buildState(
-        candidate.id,
-        candidate.url,
-        candidate.title,
-        candidate.snippets.map((snippet) => snippet.text),
-        request.params.query,
-        request.intent,
-        temporal !== undefined
-          ? {
-              retrievalTime: temporal.retrievalTime,
-              bravePageDate: candidate.bravePageDate ?? null,
-            }
-          : undefined
-      );
-      const questions = buildQuestions(state.source.snippets);
-      const record: JevRequestRecord = {
-        request_id: nextRequestId(),
-        mode: 'single',
-        requested: requestedMode,
-        effective: 'single',
-        ...(singleFallbackReason !== undefined ? { fallback_reason: singleFallbackReason } : {}),
-        source_ids: [candidate.id],
-        dispatched: false,
-        state: null,
-        questions: null,
-        answered: false,
-        input_tokens: null,
-        usage_complete: false,
-        latency_ms: 0,
-        mapping: [
-          {
-            source_id: candidate.id,
-            array_index: 0,
-            snippet_keys: candidate.snippets.map((snippet) => snippet.key),
-            // single 的局部键即请求级键（恒等映射）
-            question_keys: Object.fromEntries(Object.keys(questions).map((key) => [key, key])),
-          },
-        ],
-      };
-      requestRecords.push(record);
-      const outcome = await runRequest(record, state, questions);
-      const latencyMs = record.latency_ms;
-
-      const answered = outcome.status === 'answered';
-      if (outcome.dispatch !== undefined || answered) {
-        // 派发记录：生产客户端必带实发载荷（已派发）；注入面（重录回放 / 测试桩）
-        // 的 answered 不带载荷——按"已取得回答但无实发证据"如实记（dispatched=false、
-        // 载荷在请求级也为 null），answered 独立取自 outcome，绝不互相冒充（04-04 R1）
-        const dispatchRecord = dispatchBase(candidate);
-        dispatchRecord.request_id = record.request_id;
-        dispatchRecord.array_index = 0;
-        dispatchRecord.dispatched = outcome.dispatch !== undefined;
-        dispatchRecord.answered = answered;
-        if (outcome.status === 'answered') {
-          const projected = projectSourceAnswers({
-            sentSnippets: outcome.sent_snippets ?? candidate.snippets.length,
-            answerAt: (key) => outcome.answers[key],
-          });
-          dispatchRecord.snippet_score_validity = projected.scoreValidity;
-          dispatchRecord.snippet_scores_received = projected.scoresReceived;
-          dispatchMap.set(candidate.id, dispatchRecord);
-
-          rows.set(candidate.id, {
-            src: candidate.id,
-            url: candidate.url,
-            status: 'answered',
-            answers: projected.answers,
-            ...(projected.snippetScores !== undefined
-              ? { snippet_scores: projected.snippetScores }
-              : {}),
-            model: outcome.model,
-            input_tokens: outcome.input_tokens,
-            latency_ms: latencyMs,
-            request_id: record.request_id,
-            ...(outcome.ladder !== undefined ? { ladder: outcome.ladder } : {}),
-            // 升降级生效时记录实际发送的片段数（04-02 样本映射对齐用；与 ladder 同
-            // 条件出现——snippet_scores 缺失时它是对齐实发范围的唯一依据）
-            ...(outcome.ladder !== undefined && outcome.sent_snippets !== undefined
-              ? { sent_snippets: outcome.sent_snippets }
-              : {}),
-          });
-        } else {
-          dispatchMap.set(candidate.id, dispatchRecord);
-        }
-      } else {
-        // 未派发：too_large（阶梯不可再砍）/ breaker_open（熔断短路）；防御分支
-        // （契约外 reject 映射的 network）原因未知——省略 not_dispatched_reason
-        const dispatchRecord = dispatchBase(candidate);
-        dispatchRecord.request_id = record.request_id;
-        dispatchRecord.array_index = 0;
-        if (outcome.kind === 'too_large') {
-          dispatchRecord.not_dispatched_reason = 'too_large';
-        } else if (outcome.kind === 'breaker_open') {
-          dispatchRecord.not_dispatched_reason = 'breaker_open';
-        }
-        dispatchMap.set(candidate.id, dispatchRecord);
-      }
-
-      if (answered) {
-        // n_requests / input_tokens 已在 runRequest 记账
-      } else if (outcome.kind === 'breaker_open') {
-        // 熔断短路：不发真实请求，不计 n_requests（SAFE-02 记账口径）
-        rows.set(candidate.id, {
-          src: candidate.id,
+    if (outcome.status === 'answered') {
+      // 投影（计划 §3.3/§4.2）：按显式映射把全量答案分回各来源行，不按键序、URL
+      // 或压缩位置猜；片段数来自当前请求映射，实发范围即候选全长
+      for (const entry of entries) {
+        const candidate = candidates.find((item) => item.id === entry.source_id);
+        if (candidate === undefined) continue; // 映射与候选同源，防御分支
+        const projected = projectSourceAnswers({
+          snippetCount: entry.snippet_keys.length,
+          answerAt: (key) => outcome.answers[entry.question_keys[key]],
+        });
+        rows.set(entry.source_id, {
+          src: entry.source_id,
           url: candidate.url,
-          status: 'breaker_open',
-          latency_ms: latencyMs,
+          status: 'answered',
+          answers: projected.answers,
+          ...(projected.snippetScores !== undefined
+            ? { snippet_scores: projected.snippetScores }
+            : {}),
+          // 请求级维度（input_tokens / latency_ms）不逐来源复制（§6.1：N 行同值
+          // 会被误加成 N 倍）——经 request_id 关联请求记录；model 保留供
+          // model_reported 去重投影
+          model: outcome.model,
           request_id: record.request_id,
         });
-      } else {
-        rows.set(candidate.id, {
-          src: candidate.id,
+        dispatchMap.set(entry.source_id, {
+          ...dispatchBase(candidate),
+          request_id: record.request_id,
+          array_index: entry.array_index,
+          dispatched: outcome.dispatch !== undefined,
+          answered: true,
+          snippet_score_validity: projected.scoreValidity,
+          snippet_scores_received: projected.scoresReceived,
+        });
+      }
+    } else if (outcome.dispatch !== undefined) {
+      // 已派发但失败（网络 / 超时 / 4xx / 5xx）：覆盖来源记未完成 Jev 判断，
+      // 不拆成逐来源请求；已派发失败不可能是熔断短路（零 fetch），但 TS 无法从
+      // dispatch 收窄 kind，显式排除
+      for (const entry of entries) {
+        const candidate = candidates.find((item) => item.id === entry.source_id);
+        if (candidate === undefined) continue;
+        rows.set(entry.source_id, {
+          src: entry.source_id,
           url: candidate.url,
           status: 'failed',
-          fail_kind: outcome.kind,
-          // 阶梯 ④（JEV-05）：too_large = 该来源不问 Jev，per_source 记 'skipped'
-          ...(outcome.kind === 'too_large' ? { ladder: 'skipped' as const } : {}),
-          latency_ms: latencyMs,
+          ...(outcome.kind !== 'breaker_open' ? { fail_kind: outcome.kind } : {}),
           request_id: record.request_id,
         });
+        dispatchMap.set(entry.source_id, {
+          ...dispatchBase(candidate),
+          request_id: record.request_id,
+          array_index: entry.array_index,
+          dispatched: true,
+          answered: false,
+        });
       }
-    };
-
-    await Promise.allSettled(candidates.map(dispatch));
+    } else {
+      // 未派发失败：契约内只有熔断短路（派发前，零 HTTP）；契约外 reject 映射的
+      // network 原因未知——省略 not_dispatched_reason，不伪造派发证据
+      for (const entry of entries) {
+        const candidate = candidates.find((item) => item.id === entry.source_id);
+        if (candidate === undefined) continue;
+        rows.set(entry.source_id, {
+          src: entry.source_id,
+          url: candidate.url,
+          status: outcome.kind === 'breaker_open' ? 'breaker_open' : 'failed',
+          ...(outcome.kind !== 'breaker_open' ? { fail_kind: outcome.kind } : {}),
+          request_id: record.request_id,
+        });
+        dispatchMap.set(entry.source_id, {
+          ...dispatchBase(candidate),
+          request_id: record.request_id,
+          array_index: entry.array_index,
+          dispatched: false,
+          answered: false,
+          ...(outcome.kind === 'breaker_open'
+            ? { not_dispatched_reason: 'breaker_open' as const }
+            : {}),
+        });
+      }
+    }
   }
+  // 零候选：零次 Jev 逻辑调用与 HTTP（占位行已全部 skipped，requests 保持空表）
 
   jev.per_source = [...rows.values()];
   jev.status = jev.per_source.some((row) => row.status === 'breaker_open')
@@ -1049,7 +883,7 @@ const runJevStage = async (
     : jev.per_source.some((row) => row.status === 'failed')
       ? 'degraded'
       : 'ok';
-  // 请求级摘要（无正文——LOG-03）：JSONL 只留身份、模式与计数，正文走样本
+  // 请求级摘要（无正文——LOG-03）：JSONL 只留身份与计数，正文走样本
   jev.requests = requestRecords.map((record) => {
     const {
       state: _state,
@@ -1130,7 +964,7 @@ export function collectJevCandidates(
  * JSON-LD 多段加 `.{part}`）。04-02 v1 曾供样本层重建实发 state 映射；04-04 R1 起
  * 样本层只信管道交来的 JevDispatchRecord（重建会得到阶梯前 state，与实发不符），
  * 本函数无样本层消费方，除作内部 plain 版包装与候选口径核对备用外，开发冒烟脚本
- * （dev/full-context-smoke.mjs）也使用它构造带身份的候选并进行请求规划。
+ * （dev/full-context-smoke.mjs）也使用它构造带身份的候选并组装请求载荷。
  */
 export function collectJevCandidatesDetailed(
   data: BraveLlmContextResponse,
@@ -1141,5 +975,5 @@ export function collectJevCandidatesDetailed(
   const stats = createFilterStats('off', toStatsRequest(request, config), data);
   runLocalRules(table, stats, config);
 
-  return jevCandidatesFromTable(table, config.jev.temporalContext);
+  return jevCandidatesFromTable(table);
 }

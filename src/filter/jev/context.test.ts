@@ -266,7 +266,7 @@ describe('projectSourceAnswers', () => {
       questionKeys[key] = allQuestionKey('s7', key);
     }
     const projected = projectSourceAnswers({
-      sentSnippets: 2,
+      snippetCount: 2,
       answerAt: (key) => {
         const global = questionKeys[key];
         const answers: Record<
@@ -300,7 +300,7 @@ describe('projectSourceAnswers', () => {
 
   it('single mode identity lookup behaves like the previous inline collection (T12 basis)', () => {
     const projected = projectSourceAnswers({
-      sentSnippets: 2,
+      snippetCount: 2,
       answerAt: (key) =>
         key === 'is_off_topic'
           ? answer('noul', 0.9)
@@ -317,7 +317,7 @@ describe('projectSourceAnswers', () => {
   it('keeps holes at their positions: missing middle score does not shift later answers (T05)', () => {
     const scores = [answer('score', 2), undefined, answer('score', 0.3)];
     const projected = projectSourceAnswers({
-      sentSnippets: 3,
+      snippetCount: 3,
       answerAt: (key) => {
         const match = /^snip(\d+)$/.exec(key);
         if (match !== null) return scores[Number(match[1])];
@@ -340,7 +340,7 @@ describe('projectSourceAnswers', () => {
       return answer('noul', 0);
     };
     const projected = projectSourceAnswers({
-      sentSnippets: 4,
+      snippetCount: 4,
       answerAt: answerFor,
     });
     assert.deepEqual(projected.scoreValidity, [false, false, false, false]);

@@ -164,12 +164,12 @@ export function applySourceVerdicts(
  * （严格小于，连续值比较——夹具实证 1.62/1.77，不是整数档位，Pitfall 3）的
  * 片段置 kept = false、reason = 'score'；等于保留。
  *
- * 长度口径（JEV-05）：`scores.length > survivors.length` 整源跳过（防御——
- * 分数比实际片段多，说明对齐依据不成立）；`≤` 时按位置对齐**前 scores.length
- * 个**幸存片段，其后未发送给 Jev 的片段保留（32k 砍尾降级后回来的分数就比
- * 幸存片段少，被砍掉的片段本来也不该有分数，没砍的片段分数照常生效）。
- * 等长时行为与逐条对齐完全一致。异常 score（[0,2] 三档范围外——负值/非有限/越界，
- * 与记录层共用 isUsableSnippetScore 校验，同 T-02-03-1 防御）保守保留该片段。
+ * 等长契约（all-only）：`scores.length !== survivors.length` 时整源跳过评分删除
+ * （防御——长度不匹配说明对齐依据不成立，绝不按"短数组是砍尾前缀"套用）。缺答
+ * 或错型的来源在投影层就不会产出整组 `snippet_scores`（见 projectSourceAnswers），
+ * 天然走这条保守路径；逐题收到的值仍供样本记录。等长时行为与逐条对齐完全一致。
+ * 异常 score（[0,2] 三档范围外——负值/非有限/越界，与记录层共用
+ * isUsableSnippetScore 校验，同 T-02-03-1 防御）保守保留该片段。
  * CJK 加成只抬来源级三道门槛，不抬本门槛（A4 落定：
  * 抬 SNIPPET_MIN 是更激进的方向，与保守原则相反）。
  */
@@ -188,9 +188,10 @@ export function applySnippetScores(
     const scores = row.snippet_scores;
     if (scores === undefined) continue;
 
-    // state 构建时的幸存片段序；runJevStage 构造 state 与本步之间无片段变更，位置对齐
+    // state 构建时的幸存片段序；runJevStage 构造 state 与本步之间无片段变更，位置对齐。
+    // 等长契约：长度不匹配整源跳过，不套前缀、不猜对齐
     const survivors = source.snippets.filter((snippet) => snippet.kept);
-    if (scores.length > survivors.length) continue;
+    if (scores.length !== survivors.length) continue;
 
     for (let i = 0; i < scores.length; i += 1) {
       const score = scores[i];

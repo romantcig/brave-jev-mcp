@@ -18,16 +18,13 @@
  * src/utils.ts 判别联合先例、src/protocols/rebinding.ts 工厂闭包先例。
  */
 
-import { allBudgetEstimatesOf, ALL_LIMIT_32K, ALL_LIMIT_64K, checkAllBudget } from './context.js';
 import type {
   ClassifyDeps,
   ClassifyFailKind,
   ClassifyOutcome,
   JevAnswer,
   JevDispatchPayload,
-  JevLadderLevel,
   JevQuestion,
-  JevSingleState,
   JevState,
 } from '../types.js';
 import type { FilterConfig } from '../types.js';
@@ -70,21 +67,18 @@ export function buildRequest(
  * - 非 200 → `{ ok: false, kind: 'http', status }`（422 超限也在此，重试与否由传输层裁决）。
  * - bodyText 非 JSON、顶层缺 model / answers、usage 缺有限数值 input_tokens
  *   → `{ ok: false, kind: 'shape' }`（JEV-02：input_tokens 是必须带回的契约字段）。
- * - 答案逐键收窄：`type: 'noul'` 缺数值 `noul`、`type: 'score'` 缺数值 `score`
- *   → single 整体 'shape'；全量按题忽略坏值，由来源级校验防御。其余键（未知 type、非对象值）白名单外，忽略不进结果。
+ * - 答案逐键收窄（逐题隔离，all-only 唯一语义）：`type: 'noul'` 缺数值 `noul`、
+ *   `type: 'score'` 缺数值 `score` → 只忽略该题，不拖垮同一响应里其他来源的有效答案，
+ *   由来源级校验防御。顶层协议错误（形状、缺字段）仍整体失败。其余键（未知 type、
+ *   非对象值）白名单外，忽略不进结果。
  *
  * @param status HTTP 状态码
  * @param bodyText 响应原文
- * @param isolateInvalidAnswers 全量请求启用逐题隔离，single 默认保持既有语义
  * @example parseJevResponse(200, '{"model":"jev-1.13.0",...}') → { ok: true, model, answers, input_tokens }
  * @example parseJevResponse(422, '...') → { ok: false, kind: 'http', status: 422 }
  * @example parseJevResponse(200, 'not json') → { ok: false, kind: 'shape' }
  */
-export function parseJevResponse(
-  status: number,
-  bodyText: string,
-  isolateInvalidAnswers = false
-): ParsedJevResponse {
+export function parseJevResponse(status: number, bodyText: string): ParsedJevResponse {
   if (status !== 200) return { ok: false, kind: 'http', status };
 
   let body: unknown;
@@ -105,16 +99,10 @@ export function parseJevResponse(
   for (const [key, value] of Object.entries(body.answers)) {
     if (!isRecord(value)) continue; // 白名单外：忽略该键
     if (value.type === 'noul') {
-      if (typeof value.noul !== 'number') {
-        if (isolateInvalidAnswers) continue;
-        return { ok: false, kind: 'shape' };
-      }
+      if (typeof value.noul !== 'number') continue; // 逐题隔离：坏答案不拖垮其他题
       answers[key] = { kind: 'noul', probability: value.noul };
     } else if (value.type === 'score') {
-      if (typeof value.score !== 'number') {
-        if (isolateInvalidAnswers) continue;
-        return { ok: false, kind: 'shape' };
-      }
+      if (typeof value.score !== 'number') continue; // 逐题隔离：坏答案不拖垮其他题
       answers[key] = { kind: 'score', score: value.score };
     }
     // 其余 type 不在协议白名单内：忽略该键，不抛、不收进结果
@@ -167,17 +155,14 @@ export const RETRY_AFTER_MAX_MS = 5000;
 /** 退避的随机抖动上限比例：`(1 - 0.25 × random)`（PLAN 第 5 节"兜底"行）。 */
 export const RETRY_JITTER_RATIO = 0.25;
 
-/** 片段级 score 题的键形态（`snip{i}`）。 */
-const SNIP_KEY_PATTERN = /^snip\d+$/;
-
 /** 连续瞬态失败达到该次数即开熔断（SAFE-02 / A7）。 */
 export const BREAKER_THRESHOLD = 3;
 
 /** 熔断开启时长毫秒数（SAFE-02：60s；到期直接闭合不做半开探测）。 */
 export const BREAKER_OPEN_MS = 60000;
 
-/** 计入熔断连续计数的失败 kind：瞬态传输类。auth / validation / too_large 是
- * 确定性请求问题，不计入（避免配置错误伪装成熔断——本计划 flagged 微决策）。 */
+/** 计入熔断连续计数的失败 kind：瞬态传输类。auth / validation 是确定性请求
+ * 问题，不计入（避免配置错误伪装成熔断——本计划 flagged 微决策）。 */
 const TRANSIENT_FAILURE_KINDS: ReadonlySet<ClassifyFailKind> = new Set([
   'timeout',
   'rate_limited',
@@ -266,73 +251,6 @@ const httpFailure = (
   detail: `${status} ${bodyText.slice(0, 200)}`,
 });
 
-/**
- * 超限阶梯（JEV-05，A12 判据映射）：发送前复用 `allBudgetEstimatesOf` 对两条
- * 限额做保护（超限后果官方未写明——社区报告为直接拒绝，故发送前自行降级）。
- *
- * - ② 32k（state + 最长单题）超 → 从尾片段开始逐个砍（Brave 序），每砍一片段
- *   同时删对应 `snip{i}` 题，重算直到满足或片段砍光（ladder `cut_tail`）。
- * - ③ 64k（state + 全部问题）超 → 去掉全部 snip 题（来源级题与 state 片段保留，
- *   ladder `source_only_questions`——深于 cut_tail，直接覆盖）。**这一级实用上
- *   走不到**：②先把 state 压进 32k 以内，此后要超 64k 需要约 460 道片段题，保留
- *   作兜底，不为它单独加测试。
- * - ④ 仅来源级题仍超 32k（state 本身不可再砍）→ 返回 null：该来源不问 Jev
- *   （too_large；per_source 的 ladder `'skipped'` 由管道按 kind 记账）。
- *
- * 返回生效后的 state / questions 与**实际带 score 题发出的片段数**（`cut_tail` 砍尾
- * 后比入参少、`source_only_questions` 为 0——该级不发任何 snip 题），供管道把片段
- * 分数按位置对齐到真实发送范围。
- *
- * 估算复用 context.ts 的 `allBudgetEstimatesOf`。
- * 写时复制：绝不改入参 state / questions（砍尾 slice 拷贝、删题浅拷贝）。
- * 阶梯只影响该来源的请求内容。
- *
- * 入参只接受**单来源** state（FULL_CONTEXT_ROLLOUT_PLAN §5.1 红线：全量共享 state
- * 禁止进入单来源砍尾代码——不能硬塞 `.source`、复制正文、删来源或删全量片段题来
- * 避免超限；全量的发送前校验是 `checkAllBudget` 双限额防御，见 classify 内路由）。
- */
-const applyOversizeLadder = (
-  state: JevSingleState,
-  questions: Record<string, JevQuestion>,
-  ladder: { value?: JevLadderLevel }
-): {
-  state: JevSingleState;
-  questions: Record<string, JevQuestion>;
-  sentSnippets: number;
-} | null => {
-  let workState = state;
-  let workQuestions = questions;
-
-  // ② 32k：砍尾片段 + 对应 snip 题，重算直到满足或砍光
-  while (
-    allBudgetEstimatesOf(workState, workQuestions).single_limit_estimate > ALL_LIMIT_32K &&
-    workState.source.snippets.length > 0
-  ) {
-    const snippets = workState.source.snippets.slice(0, -1);
-    workQuestions = { ...workQuestions };
-    delete workQuestions[`snip${snippets.length}`];
-    workState = { ...workState, source: { ...workState.source, snippets } };
-    ladder.value = 'cut_tail';
-  }
-
-  // ③ 64k：去掉全部 snip 题（来源级题保留；state 片段保留）
-  if (allBudgetEstimatesOf(workState, workQuestions).total_limit_estimate > ALL_LIMIT_64K) {
-    workQuestions = Object.fromEntries(
-      Object.entries(workQuestions).filter(([name]) => !SNIP_KEY_PATTERN.test(name))
-    );
-    ladder.value = 'source_only_questions';
-  }
-
-  // ④ 最终同时复查 32k 与 64k，不允许来源题降级后仍超限的请求派发
-  if (!checkAllBudget(workState, workQuestions).ok) return null;
-
-  const sentSnippets = Object.keys(workQuestions).filter((name) =>
-    SNIP_KEY_PATTERN.test(name)
-  ).length;
-
-  return { state: workState, questions: workQuestions, sentSnippets };
-};
-
 /** 测试注入的时钟、睡眠与随机数（缺省用全局实现）。 */
 export type JevClassifierHooks = {
   /** 单调时钟：熔断窗口计时与 Retry-After 日期换算用；缺省 `Date.now`。 */
@@ -372,19 +290,18 @@ export type JevClassifierHooks = {
  *   代替本次退避；> 5s 则不再重试、立即按该状态的 kind 失败（计入熔断）。
  * - 计入熔断的 kind 只有瞬态类（timeout / rate_limited / network）。
  *
- * 超限阶梯（JEV-05）：单来源 state 发送前按 `applyOversizeLadder` 降级；不可再砍
- * → 不发请求直接 failed 'too_large'。answered outcome 带实际生效的 ladder 级别名与
- * 真正发送的片段数 `sent_snippets`（未降级可省略——管道据此把 snip 分数按位置对齐）。
- * 全量共享 state（'source' 不在）绝不进阶梯（FULL_CONTEXT_ROLLOUT_PLAN §5.1）：
- * 发送前仅做 `checkAllBudget` 双限额最终防御校验，超限零 HTTP 返回 too_large。
+ * 请求体（all-only，§3.1）：完整载荷只构造一次，重试原样复用——同一搜索的重试
+ * 复用完全相同的 body、检索时间和题目，属于同一逻辑请求。32K／64K 预检、估算与
+ * 超限阶梯已整体退役；输入限额交给 Jev 服务的 HTTP 拒绝（413／422 按 validation
+ * 处理）与既有保守保留语义兜底。
  *
- * http_attempts（计划 §6.1）：所有返回点带真实 HTTP 尝试次数——重试循环内是当前
- * attempt，熔断短路 / 预检拒绝为 0；注入桩可不带，管道按未知处理。
+ * http_attempts（计划 §3.3）：所有返回点带真实 HTTP 尝试次数——重试循环内是当前
+ * attempt，熔断短路与注入桩可不带或为 0；管道按未知处理。
  *
- * 实发派发捕获（04-04 R1）：请求体定形后（阶梯处理完、fetch 调用前）捕获实发
+ * 实发派发捕获（04-04 R1）：请求体定形后（fetch 调用前）捕获实发
  * state 与题目集合，随所有从重试循环返回的 outcome（answered 或已派发后失败）
  * 以 `dispatch` 交回——样本记录的"实发内容"只信这里，绝不重建。未派发的短路
- * （too_large / breaker_open，进闸前后）不带 dispatch——请求从未离开进程。
+ * （breaker_open，进闸前后）不带 dispatch——请求从未离开进程。
  *
  * 失败一律返回 failed 联合不抛（SAFE-01：单来源失败按"留"）。detail 只含状态码与
  * body 前 200 字符摘要，绝不拼接鉴权头或 key 值（T-02-05-1）。
@@ -433,7 +350,7 @@ export function createJevClassifier(
   let openUntil = 0;
 
   /** 瞬态失败记账：只有 timeout / rate_limited / network 计入熔断连续计数——
-   * auth / validation / too_large 是确定性请求问题，计入会让配置错误伪装成熔断。 */
+   * auth / validation 是确定性请求问题，计入会让配置错误伪装成熔断。 */
   const recordFailure = (kind: ClassifyFailKind): void => {
     if (!TRANSIENT_FAILURE_KINDS.has(kind)) return;
     consecutiveFailures += 1;
@@ -484,50 +401,14 @@ export function createJevClassifier(
       const afterQueue = breakerShortCircuit();
       if (afterQueue !== undefined) return afterQueue;
 
-      // 请求组织路由（FULL_CONTEXT_ROLLOUT_PLAN §5.1）：单来源 state 走既有超限
-      // 阶梯；全量共享 state（'source' 不在）绝不进阶梯——发送前只做双限额最终
-      // 防御校验（规划层已预检，正常不触达；超限零 HTTP 返回 too_large）
-      let sendState: JevState;
-      let sendQuestions: Record<string, JevQuestion>;
-      let ladderLifted = false;
-      let ladderValue: JevLadderLevel | undefined;
-      let sentSnippets = 0;
-      if ('source' in state) {
-        const ladder: { value?: JevLadderLevel } = {};
-        const prepared = applyOversizeLadder(state, questions, ladder);
-        if (prepared === null) {
-          return {
-            status: 'failed',
-            kind: 'too_large',
-            detail:
-              'estimated request still exceeds a 32k or 64k limit after the single-source ladder',
-            http_attempts: 0,
-          };
-        }
-        sendState = prepared.state;
-        sendQuestions = prepared.questions;
-        ladderLifted = ladder.value !== undefined;
-        ladderValue = ladder.value;
-        sentSnippets = prepared.sentSnippets;
-      } else {
-        const check = checkAllBudget(state, questions);
-        if (!check.ok) {
-          return {
-            status: 'failed',
-            kind: 'too_large',
-            detail: `all-context request exceeds the ${check.violation === 'single' ? '32k (state + longest question)' : '64k (state + all questions)'} limit; no HTTP sent`,
-            http_attempts: 0,
-          };
-        }
-        sendState = state;
-        sendQuestions = questions;
-      }
-      const body = JSON.stringify(buildRequest(sendState, sendQuestions, model));
+      // 请求体只构造一次（§3.1）：完整载荷原样发送，同一搜索的重试复用完全相同的
+      // body、检索时间和题目
+      const body = JSON.stringify(buildRequest(state, questions, model));
 
       // 实发派发捕获（04-04 R1）：请求体已定形、即将派发——从这里到本闭包的所有
       // 返回点都属"请求已派发"（fetch 已调用；每次重试复用同一 body，实发内容
       // 不变）。样本层据此如实记录，绝不重跑本地规则重建。
-      const dispatch: JevDispatchPayload = { state: sendState, questions: sendQuestions };
+      const dispatch: JevDispatchPayload = { state, questions };
       let knownInputTokens = 0;
       let attemptsWithUsage = 0;
       let responseStatus: number | undefined;
@@ -596,8 +477,8 @@ export function createJevClassifier(
           knownInputTokens += inputTokens;
           attemptsWithUsage += 1;
         }
-        // 全量响应按题隔离坏值；single 保持既有解析语义。
-        const parsed = parseJevResponse(status, bodyText, 'sources' in sendState);
+        // 全量响应按题隔离坏值（all-only 唯一解析语义）
+        const parsed = parseJevResponse(status, bodyText);
         if (parsed.ok) {
           // 任一成功清零连续失败计数（SAFE-02）
           consecutiveFailures = 0;
@@ -607,10 +488,6 @@ export function createJevClassifier(
               model: parsed.model,
               answers: parsed.answers,
               input_tokens: parsed.input_tokens,
-              ...(ladderLifted ? { ladder: ladderValue } : {}),
-              // 降级后实际带 score 题发出的片段数（不含 snip 题即 0）；未降级可省略，
-              // 管道按"全部发送"理解（见 ClassifyOutcome.sent_snippets 注释）
-              ...(ladderLifted ? { sent_snippets: sentSnippets } : {}),
             },
             attempt
           );

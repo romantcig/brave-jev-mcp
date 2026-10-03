@@ -41,8 +41,9 @@ it('栏目规则只删除指定路径，跳过其 Jev 请求，保留同站文�
   };
   const called: string[] = [];
   const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
-    if (!('source' in state)) return { status: 'failed', kind: 'validation' };
-    called.push(state.source.url);
+    // 全量共享请求：进入 Jev 的来源 URL 全部记录——栏目来源被本地规则删掉就
+    // 不该出现在这里（先于 Jev 生效的证明）
+    for (const source of state.sources) called.push(source.url);
     const answers: Record<string, JevAnswer> = {};
     for (const [key, q] of Object.entries(questions))
       answers[key] =
@@ -55,6 +56,7 @@ it('栏目规则只删除指定路径，跳过其 Jev 请求，保留同站文�
   };
   const a = await filterLlmContext(data, request, config, { classify });
   const b = await filterLlmContext(data, request, { ...config, mode: 'on' }, { classify });
+  // 两次运行各一次共享请求，且只有同站文档进入 Jev（栏目来源未进入）
   assert.deepEqual(called, [docs, docs]);
   assert.deepEqual(a.result, b.result);
   assert.deepEqual(a.stats.sources, b.stats.sources);

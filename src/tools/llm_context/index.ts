@@ -159,11 +159,11 @@ export const execute = async (params: QueryParams) => {
   // ts 与目录日期（B-01）。
   const samplePath: AllocatedSamplePath | undefined = samples?.allocatePath(requestId);
 
-  // 检索时间捕获（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：发起 Brave 请求前取
-  // 一次——test 模式复用样本锚点 Date（样本 ts 与 retrieval_time 同源，回放可复现），
-  // 其他模式同位置取一次；`localIsoWithOffset` 口径得到带时区 ISO 字符串。时间上下文
-  // 开关关闭时管道忽略该值（state 不加字段）；同一搜索的 all、single 回退与重试
-  // 共用同一值。只进过滤内部上下文，不进公开 MCP schema、不混入 Brave 查询参数。
+  // 检索时间捕获：发起 Brave 请求前取一次——test 模式复用样本锚点 Date（样本 ts
+  // 与 retrieval_time 同源，回放可复现），其他模式同位置取一次；`localIsoWithOffset`
+  // 口径得到带时区 ISO 字符串。管道归一后进入 Jev state（`retrieval_time`）；同一
+  // 搜索的 Jev 请求与重试共用同一值。只进过滤内部上下文，不进公开 MCP schema、
+  // 不混入 Brave 查询参数。
   const retrievalTime = localIsoWithOffset(
     samplePath !== undefined ? samplePath.capturedAt : new Date()
   );
@@ -263,7 +263,7 @@ export const execute = async (params: QueryParams) => {
         stats: filtered.stats,
         // 04-04 R1：实发派发记录原样交给样本层——样本 Jev 段只信它
         jevDispatch: filtered.jev_dispatch,
-        // v4（六题全量上下文）：请求级记录原样交入——实发载荷每请求一份
+        // 请求级记录原样交入——实发载荷每请求一份（全量共享请求，一次搜索零或一条）
         jevRequests: filtered.jev_requests,
         payload,
         statusLine: filtered.stats.output.status_line ?? null,

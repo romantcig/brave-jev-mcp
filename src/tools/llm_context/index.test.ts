@@ -8,7 +8,7 @@ import { JEV_CONFIG_FILE_ENV } from '../../filter/config.js';
 import { localIsoWithOffset } from '../../filter/logging.js';
 import { FILTER_RULES_VERSION } from '../../filter/version.js';
 import type { SampleRecord } from '../../filter/sample.js';
-import type { JevAllState, JevQuestion } from '../../filter/types.js';
+import type { JevState, JevQuestion } from '../../filter/types.js';
 import { name, resetFilterStateForTest } from './index.js';
 import { LlmContextInputSchema, RequestParamsSchema } from './schemas/input.js';
 
@@ -412,20 +412,27 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
 
   const flushWrites = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-  /** Jev 回放桩：来源级题全 0（保留；含退役两题旧键，按额外字段忽略）、片段分全 2（保留）——对 ≤3 片段的夹具通吃。 */
+  // Jev 回放桩：来源级题全 0（保留；退役旧键按额外字段忽略）、片段分全 2（保留）。
+  // 全量共享请求的题键是 `${来源ID}__${局部键}`——按 s0..s11 命名空间铺满，
+  // 未提问的键被投影忽略，对 ≤3 片段、≤12 来源的夹具通吃。
+  const localAnswers: Record<string, unknown> = {
+    has_original_reasoning: { type: 'noul', noul: 0 },
+    is_template_filler: { type: 'noul', noul: 0 },
+    is_off_topic: { type: 'noul', noul: 0 },
+    is_listing: { type: 'noul', noul: 0 },
+    self_deprecated: { type: 'noul', noul: 0 },
+    stale: { type: 'noul', noul: 0 },
+    snip0: { type: 'score', score: 2 },
+    snip1: { type: 'score', score: 2 },
+    snip2: { type: 'score', score: 2 },
+  };
   const jevReplay = {
     model: 'jev-1.13.0',
-    answers: {
-      has_original_reasoning: { type: 'noul', noul: 0 },
-      is_template_filler: { type: 'noul', noul: 0 },
-      is_off_topic: { type: 'noul', noul: 0 },
-      is_listing: { type: 'noul', noul: 0 },
-      self_deprecated: { type: 'noul', noul: 0 },
-      stale: { type: 'noul', noul: 0 },
-      snip0: { type: 'score', score: 2 },
-      snip1: { type: 'score', score: 2 },
-      snip2: { type: 'score', score: 2 },
-    },
+    answers: Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => `s${index}`).flatMap((id) =>
+        Object.entries(localAnswers).map(([localKey, value]) => [`${id}__${localKey}`, value])
+      )
+    ),
     usage: { input_tokens: 42, output_tokens: 3 },
   };
 
@@ -573,7 +580,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       };
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
-    // v4（六题全量上下文）：请求级载荷 + 来源级映射引用（FULL_CONTEXT_ROLLOUT_PLAN §6.2）
+    // 请求级载荷 + 来源级映射引用（全量共享请求，一次搜索零或一条）
     assert.equal(sample.format_version, 4);
     assert.match(
       sample.request_id,
@@ -639,12 +646,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       for (const mode of ['test', 'on'] as const) {
         t.mock.timers.setTime(start.getTime());
         const logDir = newLogDir();
-        useFilterConfig({
-          mode,
-          log_dir: logDir,
-          jev: { context_mode: 'all', temporal_context: true },
-        });
-        const sent: Array<{ state: JevAllState; questions: Record<string, JevQuestion> }> = [];
+        useFilterConfig({ mode, log_dir: logDir });
+        const sent: Array<{ state: JevState; questions: Record<string, JevQuestion> }> = [];
         globalThis.fetch = async (input, init) => {
           const url = new URL(input instanceof Request ? input.url : String(input));
           if (url.pathname === '/res/v1/llm/context') {
@@ -688,7 +691,12 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           const { sample: raw } = readSingleSample(logDir);
           const sample = raw as unknown as SampleRecord;
           assert.equal(sample.ts, anchor);
-          assert.equal(sample.config_snapshot.jev.temporal_context, true);
+          // 配置快照的 jev 只含 model / timeout_ms / concurrency（两个开关已退役）
+          assert.deepEqual(Object.keys(sample.config_snapshot.jev).sort(), [
+            'concurrency',
+            'model',
+            'timeout_ms',
+          ]);
           assert.deepEqual(sample.pre_filter, braveResponse);
           assert.deepEqual(sample.final_return, {
             payload: JSON.parse(content[0].text),
@@ -698,13 +706,10 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           const recorded = sample.jev!.requests[0];
           assert.deepEqual(JSON.parse(recorded.state!), sent[0].state);
           assert.deepEqual(recorded.questions, sent[0].questions);
-          assert.equal(recorded.effective, 'all');
+          assert.equal(recorded.dispatched, true);
+          assert.deepEqual(recorded.source_ids, ['s0', 's1']);
           assert.equal(sample.context_layout_id, 'jev-context-2');
           assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
-          // v4 兼容面：旧记录缺少可选开关时仍可读取，无需迁移或回写。
-          const historical: SampleRecord = structuredClone(sample);
-          delete historical.config_snapshot.jev.temporal_context;
-          assert.equal(historical.config_snapshot.jev.temporal_context ?? false, false);
         }
       }
       assert.deepEqual(returns[0], returns[1]);

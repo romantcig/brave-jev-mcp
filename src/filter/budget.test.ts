@@ -23,8 +23,6 @@ const unit: FilterConfig = {
     model: DEFAULT_JEV_MODEL,
     timeoutMs: 15000,
     concurrency: 12,
-    contextMode: 'single',
-    temporalContext: false,
   },
   logDir: join(homedir(), '.brave-jev', 'logs'),
 };
@@ -37,8 +35,6 @@ const doubled: FilterConfig = {
     model: DEFAULT_JEV_MODEL,
     timeoutMs: 15000,
     concurrency: 12,
-    contextMode: 'single',
-    temporalContext: false,
   },
   logDir: join(homedir(), '.brave-jev', 'logs'),
 };

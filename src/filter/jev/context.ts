@@ -122,32 +122,30 @@ export type ProjectedSourceAnswers = {
 };
 
 /**
- * 逐来源答案投影（计划 §4.2）：从一次逻辑请求的答案按显式映射取出该来源的四题
- * 与片段分数。单来源与全量共用同一份实现——single 的查询函数按局部键恒等
- * 查找，all 按映射换算全局键；缺答、错型、越界一律走现有保守语义，绝不把坏答案
- * 当 0 或删除信号，也不把缺答位之后的答案左移（scoreValidity / scoresReceived 按
- * 题位保留，snippetScores 只在整组齐全时产出）。
+ * 逐来源答案投影（计划 §3.3/§4.2）：从一次逻辑请求的答案按显式映射取出该来源的
+ * 四题与片段分数。缺答、错型、越界一律走现有保守语义，绝不把坏答案当 0 或删除
+ * 信号，也不把缺答位之后的答案左移（scoreValidity / scoresReceived 按题位保留，
+ * snippetScores 只在整组齐全时产出）。
  *
- * @param params.sentSnippets 实际带 score 题发送的片段数（single `sent_snippets`；
- *   全量等于候选全长）
+ * @param params.snippetCount 当前请求映射里该来源的片段数（实发范围即候选全长）
  * @param params.answerAt 答案查询（按局部键）
  */
 export function projectSourceAnswers(params: {
-  sentSnippets: number;
+  snippetCount: number;
   answerAt: (localKey: string) => JevAnswer | undefined;
 }): ProjectedSourceAnswers {
   const answers: Record<string, number> = {};
-  // 来源级四题：与既有单来源收集一致——答案存在且为 noul 才收，缺答 / 错型不进表
+  // 来源级四题：缺答 / 错型不进表（保守防御，不冒充 0）
   for (const key of Object.keys(SOURCE_QUESTIONS)) {
     const answer = params.answerAt(key);
     if (answer?.kind === 'noul') answers[key] = answer.probability;
   }
-  // 片段分数：只收实际发送的片段范围（sentSnippets）；逐题有效性与实收值按题位
-  // 保留（含越界值），缺答位不压缩、后续不左移；整组齐全才产出 snippetScores
+  // 片段分数：只收当前请求映射的片段范围（snippetCount）；逐题有效性与实收值按
+  // 题位保留（含越界值），缺答位不压缩、后续不左移；整组齐全才产出 snippetScores
   const scoreValidity: boolean[] = [];
   const scoresReceived: Array<number | null> = [];
   const snippetScores: number[] = [];
-  for (let i = 0; i < params.sentSnippets; i += 1) {
+  for (let i = 0; i < params.snippetCount; i += 1) {
     const answer = params.answerAt(`snip${i}`);
     scoreValidity.push(answer?.kind === 'score' && isUsableSnippetScore(answer.score));
     scoresReceived.push(
@@ -156,7 +154,7 @@ export function projectSourceAnswers(params: {
     if (answer?.kind !== 'score') continue;
     snippetScores.push(answer.score);
   }
-  const scoresComplete = snippetScores.length === params.sentSnippets;
+  const scoresComplete = snippetScores.length === params.snippetCount;
   const result: ProjectedSourceAnswers = {
     answers,
     scoreValidity,

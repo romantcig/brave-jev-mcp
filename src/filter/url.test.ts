@@ -306,8 +306,6 @@ describe('filterLlmContext step 2', () => {
       model: DEFAULT_JEV_MODEL,
       timeoutMs: 15000,
       concurrency: 12,
-      contextMode: 'single',
-      temporalContext: false,
     },
     logDir: join(homedir(), '.brave-jev', 'logs'),
   };

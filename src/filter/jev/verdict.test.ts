@@ -309,7 +309,7 @@ describe('applySourceVerdicts', () => {
 
 // ---------------------------------------------------------------------------
 // applySnippetScores：score < snippetMin 严格小于才删（连续值）、
-// 分数比幸存片段少时按前缀对齐（cut_tail 降级）、多时整来源跳过、
+// 分数数组与幸存片段等长才应用（all-only 等长契约）、长度不匹配整源跳过、
 // CJK 加成不抬 score 门槛
 // ---------------------------------------------------------------------------
 
@@ -347,23 +347,18 @@ describe('applySnippetScores', () => {
     assert.equal(table[0].snippets[2].kept, true);
   });
 
-  it('aligns a shorter score list to the prefix and keeps the unsent tail (cut_tail)', () => {
-    // 32k 砍尾降级后回来的分数比幸存片段少：前 scores.length 个按位置对齐，
-    // 其后未发给 Jev 的片段保留（JEV-05 / 02-FIX 批 D1）
+  it('skips the whole source when the score list is shorter than the surviving snippets', () => {
+    // 等长契约（all-only）：分数比幸存片段少说明对齐依据不成立（如缺答）——
+    // 绝不按"短数组是砍尾前缀"套用；整源跳过评分删除，全部保留
     const table = buildTable([{ texts: ['first', 'second', 'third', 'fourth'] }]);
-    const row = answeredRow('s0', answersWith({}), [2, 0.2]); // 前两段发了，后两段被砍
+    const row = answeredRow('s0', answersWith({}), [2, 0.2]);
     const stats = buildStats([row]);
 
     applySnippetScores(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
 
     assert.deepEqual(
-      table[0].snippets.map((snippet) => [snippet.kept, snippet.reason ?? null]),
-      [
-        [true, null],
-        [false, 'score'],
-        [true, null],
-        [true, null],
-      ]
+      table[0].snippets.map((snippet) => snippet.kept),
+      [true, true, true, true]
     );
   });
 
@@ -381,7 +376,7 @@ describe('applySnippetScores', () => {
     );
   });
 
-  it('behaves exactly as before when the score list has the same length', () => {
+  it('applies scores positionally when the score list length matches the survivors', () => {
     const table = buildTable([{ texts: ['first', 'second', 'third'] }]);
     const row = answeredRow('s0', answersWith({}), [1.5, 0.4, 2]);
     const stats = buildStats([row]);

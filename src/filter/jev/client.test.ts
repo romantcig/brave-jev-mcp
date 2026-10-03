@@ -20,14 +20,13 @@ import type {
   ClassifyDeps,
   FilterConfig,
   FilterRequest,
-  JevAllState,
   JevQuestion,
-  JevSingleState,
+  JevState,
 } from '../types.js';
 import { buildRequest, createJevClassifier, hasJevKey, JEVI_ENDPOINT } from './client.js';
 import { parseJevResponse } from './client.js';
-import { DEFAULT_JEV_MODEL, SOURCE_QUESTIONS, buildQuestions, buildState } from './questions.js';
-import { checkAllBudget } from './context.js';
+import { DEFAULT_JEV_MODEL, SOURCE_QUESTIONS } from './questions.js';
+import { buildContextRequest } from './context.js';
 
 const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
 const expectedRoot = join(fixtureRoot, 'expected');
@@ -103,21 +102,74 @@ const loadExpectedHeader = (
   };
 };
 
-/** 回放传输：按 state.source.id 取录制条目，200 走生产同一条 parseJevResponse 路径。 */
+// ---------------------------------------------------------------------------
+// 全量共享请求辅助（all-only）：全部 classify 桩统一使用 sources[] 形状
+// ---------------------------------------------------------------------------
+
+/** 构造最小全量 state：n 个来源各 m 条片段，日期恒在（无元数据为 null）。 */
+const makeAllState = (sourceCount = 1, snippetsPerSource = 1): JevState => ({
+  query: 'q',
+  intent: 'i',
+  sources: Array.from({ length: sourceCount }, (_, index) => ({
+    id: `s${index}`,
+    url: `https://s${index}.example/`,
+    title: `Title ${index}`,
+    snippets: Array.from({ length: snippetsPerSource }, (_, i) => `snippet ${i} text`),
+    brave_page_date: null,
+  })),
+});
+
+/** 与 state 配套的最小题目表：每来源四道来源级题 + snip0..snip{m-1}（命名空间键）。 */
+const makeQuestions = (state: JevState, snippetsPerSource = 1): Record<string, JevQuestion> =>
+  Object.fromEntries(
+    state.sources.flatMap((source) => [
+      ...Object.keys(SOURCE_QUESTIONS).map(
+        (key) =>
+          [`${source.id}__${key}`, { type: 'noul', instructions: 'x' } as JevQuestion] as const
+      ),
+      ...Array.from(
+        { length: snippetsPerSource },
+        (_, i) =>
+          [`${source.id}__snip${i}`, { type: 'score', instructions: 'x' } as JevQuestion] as const
+      ),
+    ])
+  );
+
+const sharedState = makeAllState(1, 1);
+const sharedQuestions = makeQuestions(sharedState, 1);
+const sharedRequest = { state: sharedState, questions: sharedQuestions };
+
+/**
+ * 回放传输（all-only）：把逐来源录制答案按 `${id}__${localKey}` 命名空间注入
+ * 全量共享请求（只回答实发题集里存在的键），合成单个 200 响应走生产同一条
+ * parseJevResponse 路径；input_tokens 取各来源录制用量之和。
+ */
 const replayClassifier =
   (recording: JevRecording): ClassifyDeps['classify'] =>
-  async ({ state }) => {
-    // 单来源回放夹具只有单来源 state（'source' in state 收窄，不绕类型联合）
-    if (!('source' in state)) return { status: 'failed', kind: 'validation' };
-    const entry = recording.results[state.source.id];
-    if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
-    const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
+  async ({ state, questions }) => {
+    const answers: Record<string, unknown> = {};
+    let inputTokens = 0;
+    for (const source of state.sources) {
+      const entry = recording.results[source.id];
+      if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
+      inputTokens += entry.response.usage.input_tokens;
+      for (const [localKey, value] of Object.entries(entry.response.answers)) {
+        const globalKey = `${source.id}__${localKey}`;
+        if (questions[globalKey] !== undefined) answers[globalKey] = value;
+      }
+    }
+    const parsed = parseJevResponse(
+      200,
+      JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: inputTokens } })
+    );
     return parsed.ok
       ? {
           status: 'answered',
           model: parsed.model,
           answers: parsed.answers,
           input_tokens: parsed.input_tokens,
+          // 模拟生产客户端：回放桩已"派发"（n_requests 计一）；合成用量在请求级记账
+          dispatch: { state, questions },
         }
       : // 录制声称 200 但解析不过：响应形状坏，按校验失败记账（契约里无 'shape' kind）
         { status: 'failed', kind: 'validation' };
@@ -132,30 +184,28 @@ const strictRecording = loadJevRecording('jev_release_strict.jev.json');
 
 describe('buildRequest', () => {
   it('pins the model id and carries state and questions by reference', () => {
-    const state = buildState('s0', 'https://a.example/', 'Title', ['one', 'two'], 'q', 'i');
-    const questions = buildQuestions(2);
+    // 题目模板细节由 questions.test.ts 锁定；这里验证请求体组装与钉版
+    const { state, questions } = buildContextRequest(
+      [
+        {
+          id: 's0',
+          url: 'https://a.example/',
+          title: 'Title',
+          snippets: [
+            { key: '0', text: 'one' },
+            { key: '1', text: 'two' },
+          ],
+          bravePageDate: null,
+        },
+      ],
+      'q',
+      'i'
+    );
     const request = buildRequest(state, questions, DEFAULT_JEV_MODEL);
 
     assert.equal(request.model, 'jev-1.13.0');
     assert.equal(request.state, state);
     assert.equal(request.questions, questions);
-  });
-
-  it('carries four source-level questions plus one per snippet, each prefixed with the global instruction', () => {
-    const request = buildRequest(
-      buildState('s1', 'https://b.example/', 'T', ['a', 'b', 'c'], 'q', 'i'),
-      buildQuestions(3),
-      DEFAULT_JEV_MODEL
-    );
-
-    assert.equal(Object.keys(request.questions).length, 7);
-    for (const question of Object.values(request.questions)) {
-      assert.match(
-        question.instructions,
-        /^Judge only the observable text of `source`\./,
-        'every question must start with the global instruction'
-      );
-    }
   });
 });
 
@@ -242,24 +292,37 @@ describe('parseJevResponse boundaries', () => {
     assert.deepEqual(parsed.answers['is_off_topic'], { kind: 'noul', probability: 0.2 });
   });
 
-  it('returns kind shape when a noul answer lacks its numeric value', () => {
+  it('isolates a noul answer that lacks its numeric value without failing the response', () => {
+    // 逐题隔离（all-only 唯一语义）：坏的单题不拖垮同一响应里其他来源的有效答案
     const body = JSON.stringify({
       model: 'jev-1.13.0',
-      answers: { is_off_topic: { type: 'noul' } },
+      answers: {
+        s0__is_off_topic: { type: 'noul' },
+        s1__is_listing: { type: 'noul', noul: 0.3 },
+      },
       usage: { input_tokens: 5 },
     });
 
-    assert.deepEqual(parseJevResponse(200, body), { ok: false, kind: 'shape' });
+    const parsed = parseJevResponse(200, body);
+    assert.ok(parsed.ok);
+    assert.deepEqual(Object.keys(parsed.answers), ['s1__is_listing']);
+    assert.deepEqual(parsed.answers['s1__is_listing'], { kind: 'noul', probability: 0.3 });
   });
 
-  it('returns kind shape when a score answer lacks its score', () => {
+  it('isolates a score answer that lacks its score without failing the response', () => {
     const body = JSON.stringify({
       model: 'jev-1.13.0',
-      answers: { snip0: { type: 'score', confidence: 0.5 } },
+      answers: {
+        s0__snip0: { type: 'score', confidence: 0.5 },
+        s0__snip1: { type: 'score', score: 1.5 },
+      },
       usage: { input_tokens: 5 },
     });
 
-    assert.deepEqual(parseJevResponse(200, body), { ok: false, kind: 'shape' });
+    const parsed = parseJevResponse(200, body);
+    assert.ok(parsed.ok);
+    assert.deepEqual(Object.keys(parsed.answers), ['s0__snip1']);
+    assert.deepEqual(parsed.answers['s0__snip1'], { kind: 'score', score: 1.5 });
   });
 
   it('returns kind shape when the body is not JSON', () => {
@@ -316,15 +379,18 @@ for (const [name, recording] of Object.entries({
   const outputUrls = result.grounding.generic.map((item) => item.url);
 
   describe(`end-to-end replay · ${name}`, () => {
-    it('answers every candidate with one counted request each', () => {
+    it('answers every candidate through exactly one shared request', () => {
       assert.equal(jev.status, 'ok');
-      assert.equal(jev.n_requests, Object.keys(recording.results).length);
+      assert.equal(jev.n_requests, 1);
       assert.equal(jev.per_source.length, Object.keys(recording.results).length);
       for (const row of jev.per_source) {
         assert.equal(row.status, 'answered', `${row.src} must be answered`);
         assert.equal(row.model, 'jev-1.13.0');
-        assert.equal(typeof row.latency_ms, 'number');
+        assert.equal(row.request_id, 'j1');
+        // 请求级维度不逐来源复制：耗时在请求记录上（§6.1）
+        assert.equal(row.latency_ms, undefined);
       }
+      assert.equal(typeof jev.requests[0]?.latency_ms, 'number');
     });
 
     it('aggregates input_tokens as the sum of recorded usage', () => {
@@ -405,8 +471,6 @@ const jevConfig = {
   model: DEFAULT_JEV_MODEL,
   timeoutMs: 15000,
   concurrency: 12,
-  contextMode: 'single' as const,
-  temporalContext: false as const,
 };
 
 /** 轮询直到条件成立（并发闸用例的挂起计数同步）；超时失败。 */
@@ -439,7 +503,7 @@ describe('hasJevKey', () => {
 });
 
 describe('createJevClassifier', () => {
-  const state = buildState('s0', 'https://a.example/', 'Title', ['one', 'two'], 'q', 'i');
+  const state = makeAllState(1, 2);
 
   it('sends the pinned request shape to the single endpoint with the bearer header', async () => {
     const entry = defaultRecording.results['s0'];
@@ -454,7 +518,7 @@ describe('createJevClassifier', () => {
 
     try {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'official-key' });
-      const questions = buildQuestions(2);
+      const questions = makeQuestions(state, 2);
       const outcome = await classifier.classify({ state, questions });
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -491,17 +555,14 @@ describe('createJevClassifier', () => {
 
     try {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
-      const outcome = await classifier.classify({
-        state,
-        questions: buildQuestions(0),
-      });
+      const outcome = await classifier.classify(sharedRequest);
 
       // 04-04 R1：401 也是已派发的请求——失败 outcome 必须带实发载荷（输入证据）
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'auth',
         detail: '401 unauthorized',
-        dispatch: { state, questions: buildQuestions(0) },
+        dispatch: sharedRequest,
         http_attempts: 1,
         usage_complete: false,
         http_status: 401,
@@ -529,17 +590,14 @@ describe('createJevClassifier', () => {
           sleep: async () => {},
         }
       );
-      const outcome = await classifier.classify({
-        state,
-        questions: buildQuestions(0),
-      });
+      const outcome = await classifier.classify(sharedRequest);
 
       // 超时同样"已派发"：请求已交给传输层，实发载荷照带（04-04 R1）
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'timeout',
         detail: 'This operation was aborted',
-        dispatch: { state, questions: buildQuestions(0) },
+        dispatch: sharedRequest,
         http_attempts: 1,
         usage_complete: false,
       });
@@ -564,16 +622,13 @@ describe('createJevClassifier', () => {
           sleep: async () => {},
         }
       );
-      const outcome = await classifier.classify({
-        state,
-        questions: buildQuestions(0),
-      });
+      const outcome = await classifier.classify(sharedRequest);
 
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'network',
         detail: 'fetch failed',
-        dispatch: { state, questions: buildQuestions(0) },
+        dispatch: sharedRequest,
         http_attempts: 3,
         usage_complete: false,
       });
@@ -600,10 +655,7 @@ describe('createJevClassifier', () => {
           sleep: async () => {},
         }
       );
-      const outcome = await classifier.classify({
-        state,
-        questions: buildQuestions(0),
-      });
+      const outcome = await classifier.classify(sharedRequest);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
       assert.equal(outcome.kind, 'rate_limited');
@@ -640,8 +692,7 @@ describe('createJevClassifier', () => {
 
     try {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
-      const questions = buildQuestions(1);
-      const request = { state, questions };
+      const request = sharedRequest;
 
       // 15 个并发提交：12 个立即进 fetch，3 个在闭包信号量上排队
       const promises = Array.from({ length: 15 }, () => classifier.classify(request));
@@ -676,8 +727,7 @@ describe('createJevClassifier', () => {
 // ---------------------------------------------------------------------------
 
 describe('createJevClassifier retry (SAFE-03)', () => {
-  const state = buildState('s0', 'https://a.example/', 'Title', ['one'], 'q', 'i');
-  const request = { state, questions: buildQuestions(1) };
+  const request = sharedRequest;
 
   /** 桩：按脚本逐次返回（脚本耗尽后重复末项）；计次。 */
   const scriptedFetch = (responses: Array<() => Response | Promise<Response>>): typeof fetch => {
@@ -1095,172 +1145,45 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       globalThis.fetch = saved;
     }
   });
-});
 
-// ---------------------------------------------------------------------------
-// 传输兜底·超限阶梯（02-05 Task 2，JEV-05）：发送前 estimateTokens 加 15% 余量对
-// 两条限额做保护；超限按砍尾片段 → 去片段级题 → 不问 Jev 阶梯降级，级别名记
-// answered outcome 的 ladder。估算全部走 ../tokens.js 的 estimateTokens。
-// ---------------------------------------------------------------------------
-
-describe('createJevClassifier oversize ladder (JEV-05)', () => {
-  for (const scenario of ['cut_tail', 'source_only_questions'] as const) {
-    it(`时间字段经过 ${scenario} 和 HTTP 重试后保持原值`, async () => {
-      const retrievalTime = '2026-10-03T23:59:59.900+08:00';
-      const bravePageDate = '2024-01-01T12:00:00Z';
-      const snippets =
-        scenario === 'cut_tail'
-          ? ['useful text', 'word '.repeat(34000)]
-          : Array.from({ length: 500 }, (_, i) => `small snippet ${i}, measured in 2024.`);
-      const state = buildState('s0', 'https://a.example/', 'Title', snippets, 'q', 'i', {
-        retrievalTime,
-        bravePageDate,
-      });
-      const seen: Array<{ state: JevSingleState; questions: Record<string, JevQuestion> }> = [];
-      const savedFetch = globalThis.fetch;
-      globalThis.fetch = async (_input, init) => {
-        seen.push(JSON.parse(String(init?.body)));
-        return seen.length === 1
-          ? new Response('retry', { status: 503 })
-          : okResponseOf(defaultRecording.results.s0);
-      };
-      try {
-        const classifier = createJevClassifier(
-          jevConfig,
-          { TYPESAFE_API_KEY: 'k' },
-          { sleep: async () => {}, random: () => 0 }
-        );
-        const outcome = await classifier.classify({ state, questions: buildQuestions(snippets) });
-        assert.equal(outcome.status, 'answered');
-        assert.equal(outcome.ladder, scenario);
-        assert.equal(seen.length, 2);
-        assert.deepEqual(seen[0], seen[1], '重试必须复用完整实发载荷');
-        assert.equal(seen[0].state.retrieval_time, retrievalTime);
-        assert.equal(seen[0].state.source.brave_page_date, bravePageDate);
-        assert.equal(seen[0].state.source.snippets.length, scenario === 'cut_tail' ? 1 : 500);
-        assert.ok(
-          Object.values(seen[0].questions).every((q) => !q.instructions.includes('`sources'))
-        );
-        assert.equal(seen[0].questions.snip0?.type, scenario === 'cut_tail' ? 'score' : undefined);
-        assert.deepEqual(outcome.dispatch, { state: seen[0].state, questions: seen[0].questions });
-        assert.equal(state.source.snippets.length, snippets.length);
-      } finally {
-        globalThis.fetch = savedFetch;
-      }
-    });
-  }
-  it('cuts tail snippets and their snip questions when the 32k limit is exceeded (cut_tail)', async () => {
-    // 尾片段 34000 个词 ≈ 34000 tokens：(estState + max estQ) × 1.15 远超 32000，
-    // 砍掉尾部大片段后余下 4 个小片段满足限额
-    const big = 'Measured in 2024. ' + 'word '.repeat(34000);
-    const bigState = buildState(
-      's0',
-      'https://a.example/',
-      'Title',
-      ['small one.', 'small two.', 'small three.', 'small four.', big],
-      'q',
-      'i'
-    );
-    let capturedBody:
-      | { state: { source: { snippets: string[] } }; questions: Record<string, unknown> }
-      | undefined;
+  it('retries reuse the exact same body: retrieval time and page dates unchanged (§3.1)', async () => {
+    // 同一搜索的重试属于同一逻辑请求：复用完全相同的 body（state、题目、检索时间）
+    const state: JevState = {
+      query: 'q',
+      intent: 'i',
+      sources: [
+        {
+          id: 's0',
+          url: 'https://a.example/',
+          title: 'Title',
+          snippets: ['one'],
+          brave_page_date: '2026-09-16',
+        },
+      ],
+      retrieval_time: '2026-10-03T23:59:59.900+08:00',
+    };
+    const seen: Array<{ state: JevState; questions: Record<string, JevQuestion> }> = [];
     const saved = globalThis.fetch;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      capturedBody = JSON.parse(String(init?.body));
-      return okResponseOf(defaultRecording.results['s0']);
+    globalThis.fetch = (async (_input, init) => {
+      seen.push(JSON.parse(String(init?.body)));
+      return seen.length === 1
+        ? new Response('retry', { status: 503 })
+        : okResponseOf(defaultRecording.results['s0']);
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
-      const outcome = await classifier.classify({
-        state: bigState,
-        questions: buildQuestions(bigState.source.snippets),
-      });
+      const classifier = createJevClassifier(
+        jevConfig,
+        { TYPESAFE_API_KEY: 'k' },
+        { sleep: async () => {}, random: () => 0 }
+      );
+      const outcome = await classifier.classify({ state, questions: sharedQuestions });
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      assert.equal(outcome.ladder, 'cut_tail');
-      assert.ok(capturedBody, 'fetch must have been called');
-      assert.equal(
-        capturedBody.state.source.snippets.length,
-        4,
-        'the oversized tail snippet must be cut'
-      );
-      assert.equal(Object.hasOwn(capturedBody.questions, 'snip4'), false);
-      assert.ok(Object.hasOwn(capturedBody.questions, 'snip3'));
-      assert.ok(Object.hasOwn(capturedBody.questions, 'is_off_topic'));
-      assert.deepEqual(bigState.source.snippets.length, 5, 'input state must not be mutated');
-      // cut_tail 降级：answered outcome 必须回报真正发出去的片段数（管道据此对齐分数）
-      assert.equal(outcome.sent_snippets, 4);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('drops all snippet questions when the 64k limit is exceeded (source_only_questions)', async () => {
-    // 500 个小片段：单题很小（32k 不超），片段题总和 × 1.15 超 64000 → 去掉全部
-    // snip 题（来源级四题保留、state 片段保留）
-    const snippets = Array.from({ length: 500 }, (_, i) => `small snippet ${i}, measured in 2024.`);
-    const wideState = buildState('s0', 'https://a.example/', 'Title', snippets, 'q', 'i');
-    let capturedBody:
-      | { state: { source: { snippets: string[] } }; questions: Record<string, unknown> }
-      | undefined;
-    const saved = globalThis.fetch;
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      capturedBody = JSON.parse(String(init?.body));
-      return okResponseOf(defaultRecording.results['s0']);
-    }) as typeof fetch;
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
-      const outcome = await classifier.classify({
-        state: wideState,
-        questions: buildQuestions(snippets),
-      });
-
-      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      assert.equal(outcome.ladder, 'source_only_questions');
-      assert.ok(capturedBody, 'fetch must have been called');
-      assert.equal(
-        Object.keys(capturedBody.questions).length,
-        4,
-        'only the four source-level questions remain'
-      );
-      assert.equal(
-        Object.hasOwn(capturedBody.questions, 'snip0'),
-        false,
-        'all snip questions must be dropped'
-      );
-      assert.equal(capturedBody.state.source.snippets.length, 500, 'state snippets are kept');
-      // 该级别不发任何 snip 题 → 实发片段数 0（管道据此把 snippet_scores 记为 []）
-      assert.equal(outcome.sent_snippets, 0);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('skips the source entirely when even source-level questions exceed 32k (too_large)', async () => {
-    // title 200000 个连续字母 ≈ 33334 tokens：砍光片段后 state 本身仍超 32k →
-    // 不发请求，failed too_large
-    const hugeTitle = 't'.repeat(200000);
-    const hugeState = buildState('s0', 'https://a.example/', hugeTitle, ['x'], 'q', 'i');
-    let fetchCount = 0;
-    const saved = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      fetchCount += 1;
-      return okResponseOf(defaultRecording.results['s0']);
-    }) as typeof fetch;
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
-      const outcome = await classifier.classify({
-        state: hugeState,
-        questions: buildQuestions(1),
-      });
-
-      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
-      assert.equal(outcome.kind, 'too_large');
-      assert.ok(outcome.detail !== undefined);
-      assert.equal(fetchCount, 0, 'an unshrinkable state must never hit the wire');
+      assert.equal(seen.length, 2);
+      assert.deepEqual(seen[0], seen[1], 'retries must reuse the identical request body');
+      assert.equal(seen[0]?.state.retrieval_time, '2026-10-03T23:59:59.900+08:00');
+      assert.equal(seen[0]?.state.sources[0]?.brave_page_date, '2026-09-16');
     } finally {
       globalThis.fetch = saved;
     }
@@ -1271,12 +1194,11 @@ describe('createJevClassifier oversize ladder (JEV-05)', () => {
 // 传输兜底·熔断（02-05 Task 3，SAFE-02 / A7）：同一实例连续 3 次瞬态失败
 // （timeout / rate_limited / network）开 60s 熔断，熔断期 classify 短路
 // breaker_open 且零 fetch；任一成功清零；到期直接闭合不做半开探测；
-// 同波在途请求不取消；auth / validation / too_large 不计入。
+// 同波在途请求不取消；auth / validation 等确定性失败不计入。
 // ---------------------------------------------------------------------------
 
 describe('createJevClassifier breaker (SAFE-02)', () => {
-  const state = buildState('s0', 'https://a.example/', 'Title', ['one'], 'q', 'i');
-  const request = { state, questions: buildQuestions(0) };
+  const request = sharedRequest;
 
   it('opens after three consecutive transient failures and short-circuits with zero fetches', async () => {
     let fetchCount = 0;
@@ -1484,8 +1406,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
 // ---------------------------------------------------------------------------
 
 describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E)', () => {
-  const state = buildState('s0', 'https://a.example/', 'Title', ['one'], 'q', 'i');
-  const request = { state, questions: buildQuestions(1) };
+  const request = sharedRequest;
 
   it('re-checks the breaker after the queue so parked requests do not fire (C3)', async () => {
     // concurrency 1。先制造 2 次连续瞬态失败（离阈值 3 差一步），再让一个请求挂住
@@ -1707,18 +1628,29 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
 });
 
 // ---------------------------------------------------------------------------
-// 全量上下文分支（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T06/T08）：客户端 send 前的
-// checkAllBudget 双限额防御（超限零 HTTP too_large）、预算内全量载荷原样透传、
-// 进程级并发闸对全量请求按同一名额计。
+// 全量上下文分支：完整载荷原样透传（无本地输入尺寸处理）、进程级并发闸对
+// 全量请求按同一名额计。
 // ---------------------------------------------------------------------------
 
 describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/T08)', () => {
-  const allState: JevAllState = {
+  const allState: JevState = {
     query: 'q',
     intent: 'i',
     sources: [
-      { id: 's0', url: 'https://a.example/', title: 'A', snippets: ['one'] },
-      { id: 's1', url: 'https://b.example/', title: 'B', snippets: ['two'] },
+      {
+        id: 's0',
+        url: 'https://a.example/',
+        title: 'A',
+        snippets: ['one'],
+        brave_page_date: null,
+      },
+      {
+        id: 's1',
+        url: 'https://b.example/',
+        title: 'B',
+        snippets: ['two'],
+        brave_page_date: null,
+      },
     ],
   };
   const smallQuestions: Record<string, JevQuestion> = {
@@ -1741,39 +1673,11 @@ describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/
       const outcome = await classifier.classify({ state: allState, questions: smallQuestions });
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      // 全量分支不走超限阶梯：state / questions 原样透传，无 ladder 标记
-      assert.equal(outcome.ladder, undefined);
+      // 完整载荷原样透传：无任何本地输入尺寸处理
       assert.equal(fetchCount, 1);
       const body = JSON.parse(String(capturedInit?.body)) as { state: unknown; questions: unknown };
       assert.deepEqual(body.state, allState);
       assert.deepEqual(body.questions, smallQuestions);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('rejects an over-budget all-context request before any HTTP attempt (T06)', async () => {
-    // 5.6 万个单词的题干 ≈ 5.6 万 token——(state + 该题) × 1.15 超过 32k，
-    // 客户端防御在派发前拒绝（规划层预检之外的第二道闸）
-    const hugeQuestions: Record<string, JevQuestion> = {
-      s0__is_off_topic: { type: 'noul', instructions: 'a '.repeat(56000) },
-    };
-    let fetchCount = 0;
-    const saved = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      fetchCount += 1;
-      return okResponseOf(defaultRecording.results['s0']);
-    }) as typeof fetch;
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
-      const outcome = await classifier.classify({ state: allState, questions: hugeQuestions });
-
-      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
-      assert.equal(outcome.kind, 'too_large');
-      assert.match(outcome.detail ?? '', /32k \(state \+ longest question\)/);
-      assert.equal(outcome.http_attempts, 0);
-      assert.equal(fetchCount, 0, 'an over-budget all request must never reach fetch');
     } finally {
       globalThis.fetch = saved;
     }
@@ -1829,7 +1733,7 @@ describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/
 });
 
 describe('全量接入审查：真实解析与请求账目', () => {
-  const config = parseFilterConfigObject({ mode: 'test', jev: { context_mode: 'all' } });
+  const config = parseFilterConfigObject({ mode: 'test' });
   const request = { params: { query: 'brave browser' }, intent: 'Brave browser engineering facts' };
   const data: BraveLlmContextResponse = {
     grounding: {
@@ -1963,40 +1867,6 @@ describe('全量接入审查：真实解析与请求账目', () => {
     }
   });
 
-  it('单来源降级后仍超 64k 时零 HTTP 拒绝', async () => {
-    const original = globalThis.fetch;
-    let calls = 0;
-    globalThis.fetch = async () => {
-      calls += 1;
-      throw new Error('must not fetch');
-    };
-    try {
-      const state = buildState('s0', 'https://alpha.example/', 'Brave', ['Brave fact'], 'q', 'i');
-      // 每题 2 万词 ≈ 2 万 token：四题总数 × 1.15 远超 64k，而单题（最长题）仍低于 32k
-      const questions = Object.fromEntries(
-        Object.keys(SOURCE_QUESTIONS).map((key) => [
-          key,
-          {
-            type: 'noul' as const,
-            instructions: 'word '.repeat(20000),
-          },
-        ])
-      );
-      const budget = checkAllBudget(state, questions);
-      assert.ok(budget.estimates.single_limit_estimate < 32000);
-      assert.ok(budget.estimates.total_limit_estimate > 64000);
-      const result = await createJevClassifier(config.jev, {
-        TYPESAFE_API_KEY: 'offline-test',
-      }).classify({ state, questions });
-      assert.equal(result.status, 'failed');
-      if (result.status === 'failed') assert.equal(result.kind, 'too_large');
-      assert.equal(result.http_attempts, 0);
-      assert.equal(calls, 0);
-    } finally {
-      globalThis.fetch = original;
-    }
-  });
-
   it('依赖抛出网络异常不伪装成熔断，也不扇出重试', async () => {
     let calls = 0;
     const result = await filterLlmContext(data, request, config, {
@@ -2012,5 +1882,32 @@ describe('全量接入审查：真实解析与请求账目', () => {
       )
     );
     assert.ok(result.jev_dispatch.every((row) => row.not_dispatched_reason !== 'breaker_open'));
+  });
+
+  it('answered without dispatch books zero requests and keeps the payload null (§3.3)', async () => {
+    // 回答桩可 answered=true 而 dispatched=false：计零请求、载荷保持 null、
+    // 缺少量用完整性信息时 usage_complete=false，不由 answered 自动推定
+    const result = await filterLlmContext(data, request, config, {
+      classify: async () => ({
+        status: 'answered',
+        model: DEFAULT_JEV_MODEL,
+        answers: {},
+        input_tokens: 5,
+      }),
+    });
+
+    assert.equal(result.stats.jev?.n_requests, 0);
+    assert.equal(result.stats.jev?.input_tokens, 5);
+    assert.equal(result.jev_requests.length, 1);
+    const record = result.jev_requests[0];
+    assert.equal(record?.answered, true);
+    assert.equal(record?.dispatched, false);
+    assert.equal(record?.state, null);
+    assert.equal(record?.questions, null);
+    assert.equal(record?.input_tokens, 5);
+    assert.equal(record?.usage_complete, false);
+    // 来源行仍按 answered 投影（缺答保守处理），派发记录如实 dispatched=false
+    assert.ok(result.stats.jev?.per_source.every((row) => row.status === 'answered'));
+    assert.ok(result.jev_dispatch.every((row) => row.dispatched === false));
   });
 });
