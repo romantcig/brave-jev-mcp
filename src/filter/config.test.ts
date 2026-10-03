@@ -56,8 +56,6 @@ const defaults = (): FilterConfig => ({
     model: DEFAULT_JEV_MODEL,
     timeoutMs: DEFAULT_JEV_TIMEOUT_MS,
     concurrency: 12,
-    contextMode: 'single',
-    temporalContext: false,
   },
   logDir: join(homedir(), '.brave-jev', 'logs'),
 });
@@ -115,14 +113,13 @@ describe('parseFilterConfigObject: shape and defaults', () => {
     });
   });
 
-  it('has no backend field any more (JEV-01 single backend)', () => {
+  it('has no backend, context_mode or temporal_context fields any more', () => {
+    // all-only 清理：Jev 组只剩 model / timeout_ms / concurrency，请求组织只有 all
     assert.equal(Object.hasOwn(parseFilterConfigObject({}).jev, 'backend'), false);
     assert.deepEqual(Object.keys(parseFilterConfigObject({}).jev), [
       'model',
       'timeoutMs',
       'concurrency',
-      'contextMode',
-      'temporalContext',
     ]);
   });
 
@@ -269,11 +266,34 @@ describe('parseFilterConfigObject: jev group', () => {
       model: DEFAULT_JEV_MODEL,
       timeoutMs: DEFAULT_JEV_TIMEOUT_MS,
       concurrency: DEFAULT_JEV_CONCURRENCY,
-      contextMode: 'single',
-      temporalContext: false,
     });
     assert.equal(lines.length, 1);
     assert.match(lines[0], /config: jev=5 is not an object/);
+  });
+
+  it('ignores the retired context_mode / temporal_context keys like any unknown key', () => {
+    // all-only 清理（ALL_ONLY_FILTER_CLEANUP_PLAN §4 任务 B）：遗留 JSON 里的两个
+    // 退役键按未知键规则忽略——single / all / false / true 都不能切换请求组织或
+    // 评分题模板，也不发告警（与 thresholds 内未知键同口径）
+    const retired: Record<string, unknown>[] = [
+      { context_mode: 'single' },
+      { context_mode: 'all' },
+      { temporal_context: false },
+      { temporal_context: true },
+      { context_mode: 'all', temporal_context: true },
+    ];
+    for (const keys of retired) {
+      const lines: string[] = [];
+      const config = parseFilterConfigObject({ jev: { ...keys, timeout_ms: 20000 } }, (line) =>
+        lines.push(line)
+      );
+      assert.deepEqual(config.jev, {
+        model: DEFAULT_JEV_MODEL,
+        timeoutMs: 20000,
+        concurrency: DEFAULT_JEV_CONCURRENCY,
+      });
+      assert.equal(lines.length, 0, JSON.stringify(keys));
+    }
   });
 });
 
@@ -655,10 +675,27 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
         model: 'jev-1.14.0',
         timeoutMs: 20000,
         concurrency: 6,
-        contextMode: 'single',
-        temporalContext: false,
       },
       logDir: 'C:/logs/jev',
+    });
+  });
+
+  it('keeps parsing a config that still carries the retired keys (ignored silently)', () => {
+    // 遗留配置带着两个退役键照常解析：其余配置生效，退役键不影响任何行为
+    const file = writeFixture(tmpRoot, 'retired-keys.json', {
+      mode: 'test',
+      jev: { context_mode: 'all', temporal_context: true },
+    });
+    let config: FilterConfig | undefined;
+    const stderr = captureStderr(() => {
+      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
+    });
+    assert.equal(stderr.length, 0, stderr.join('\n'));
+    assert.equal(config?.mode, 'test');
+    assert.deepEqual(config?.jev, {
+      model: DEFAULT_JEV_MODEL,
+      timeoutMs: DEFAULT_JEV_TIMEOUT_MS,
+      concurrency: DEFAULT_JEV_CONCURRENCY,
     });
   });
 

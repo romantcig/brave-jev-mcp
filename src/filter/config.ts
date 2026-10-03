@@ -29,7 +29,7 @@ import {
   DEFAULT_JEV_TIMEOUT_MS,
   DEFAULT_THRESHOLDS,
 } from './jev/questions.js';
-import type { FilterConfig, FilterMode, JevRequestMode, JevThresholds } from './types.js';
+import type { FilterConfig, FilterMode, JevThresholds } from './types.js';
 
 /** 指向配置文件的唯一配置类环境变量；未设 → 全部默认（mode off）。 */
 export const JEV_CONFIG_FILE_ENV = 'JEV_FILTER_CONFIG_FILE';
@@ -58,12 +58,6 @@ export const JEV_TIMEOUT_MAX_MS = 60000;
 /** `concurrency` 的合法区间（整数）。 */
 export const JEV_CONCURRENCY_MIN = 1;
 export const JEV_CONCURRENCY_MAX = 64;
-
-/**
- * `context_mode` 合法值集合（FULL_CONTEXT_ROLLOUT_PLAN §3）：single 逐来源一次请求
- * （默认，保持既有行为）；all 全候选共享一次请求。
- */
-const CONTEXT_MODES: ReadonlySet<string> = new Set<string>(['single', 'all']);
 
 /**
  * `snippet_min` 的上限：score 的真实取值上限是 2.0，配成 > 2 会删光全部片段。
@@ -180,11 +174,6 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
  * @example parseFilterConfigObject({ thresholds: { timeout_ms: 1 } }).thresholds deepEqual DEFAULT_THRESHOLDS
  * @example parseFilterConfigObject({ jev: { timeout_ms: 15000.5 } }).jev.timeoutMs === 15000
  * @example parseFilterConfigObject({ jev: { concurrency: 65 } }).jev.concurrency === 12
- * @example parseFilterConfigObject({ jev: { context_mode: 'all' } }).jev.contextMode === 'all'
- * @example parseFilterConfigObject({ jev: { context_mode: 'ALL' } }).jev.contextMode === 'all'
- * @example parseFilterConfigObject({ jev: { context_mode: 'groups' } }).jev.contextMode === 'single'
- * @example parseFilterConfigObject({ jev: { temporal_context: true } }).jev.temporalContext === true
- * @example parseFilterConfigObject({ jev: { temporal_context: 'yes' } }).jev.temporalContext === false
  * @example parseFilterConfigObject({ thresholds: { snippet_min: 2.01 } }).thresholds.snippetMin === 1.0
  */
 export function parseFilterConfigObject(
@@ -250,25 +239,9 @@ export function parseFilterConfigObject(
     else warn(ignored('jev.concurrency', value, DEFAULT_JEV_CONCURRENCY));
   }
 
-  // context_mode：字符串、trim、不分大小写；single / all 两值；集合外（含未设外的
-  // 坏类型）回落 single 并告警（FULL_CONTEXT_ROLLOUT_PLAN §3）
-  let contextMode: JevRequestMode = 'single';
-  if (Object.hasOwn(jevRecord, 'context_mode')) {
-    const value = jevRecord.context_mode;
-    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    if (CONTEXT_MODES.has(text)) contextMode = text as JevRequestMode;
-    else warn(ignored('jev.context_mode', value, 'single'));
-  }
-
-  // temporal_context：布尔开关（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §3），默认
-  // false 精确保留旧请求形态与旧评分题；非布尔回落 false 并告警（0 / "true" 等
-  // JSON 类型错误不猜意图）
-  let temporalContext = false;
-  if (Object.hasOwn(jevRecord, 'temporal_context')) {
-    const value = jevRecord.temporal_context;
-    if (typeof value === 'boolean') temporalContext = value;
-    else warn(ignored('jev.temporal_context', value, false));
-  }
+  // 退役开关（jev.context_mode / jev.temporal_context）不再解析：遗留 JSON 里写着
+  // 这两个键时按已有未知键规则忽略——不切换请求组织、不改评分题模板、不告警
+  // （all-only 清理，ALL_ONLY_FILTER_CLEANUP_PLAN §4 任务 B）。
 
   // thresholds 组：逐键校验，坏值只回落该项
   let thresholdRecord: Record<string, unknown> = {};
@@ -315,7 +288,7 @@ export function parseFilterConfigObject(
     overfetchFactor,
     blocklist: DEFAULT_BLOCKLIST,
     thresholds: Object.freeze(thresholds),
-    jev: { model, timeoutMs, concurrency, contextMode, temporalContext },
+    jev: { model, timeoutMs, concurrency },
     logDir,
     ...(toolDescriptionFile !== undefined ? { toolDescriptionFile } : {}),
   };

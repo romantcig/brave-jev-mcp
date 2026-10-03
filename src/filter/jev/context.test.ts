@@ -1,78 +1,89 @@
 /**
- * 四题全量上下文请求组织纯逻辑单测（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T03/T04/T05/T06）：
- * 全量 state 与命名空间题目构造（数组位置与来源 ID 解耦、引用转换与第十六轮口径
- * 逐字一致）、双限额预算（32k/64k 分别校验、边界含等号）、显式映射与逐来源答案
- * 投影（缺答不左移、坏值不当 0）。
+ * 全量共享上下文请求构造纯逻辑单测：全量 state 与命名空间题目构造（数组位置与
+ * 来源 ID 解耦、引用转换与第十六轮口径逐字一致）、时间上下文字段、单候选唯一
+ * 行为、显式映射与逐来源答案投影（缺答不左移、坏值不当 0）。旧的 32K／64K 双
+ * 限额预检与局部题表已退役——断言直接落在构造出的最终请求上。
  */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   allQuestionKey,
-  allBudgetEstimatesOf,
-  checkAllBudget,
-  planAllRequest,
+  buildContextRequest,
   projectSourceAnswers,
   snippetCountOfState,
 } from './context.js';
-import {
-  buildQuestions,
-  GLOBAL_INSTRUCTION,
-  SNIPPET_LEVELS,
-  TEMPORAL_SNIPPET_CRITERIA,
-} from './questions.js';
-import { estimateTokens } from '../tokens.js';
-import type { JevCandidateDetailed, JevQuestion, JevState } from '../types.js';
+import { GLOBAL_INSTRUCTION, SNIPPET_CRITERIA } from './questions.js';
+import type { JevCandidateDetailed } from '../types.js';
 
-/** 带身份候选构造（key 即管道 snippetKeyOf 格式）。 */
-const candidateOf = (id: string, snippets: string[], keys?: string[]): JevCandidateDetailed => ({
+/** 带身份候选构造（key 即管道 snippetKeyOf 格式；默认给一个确定页级日期）。 */
+const candidateOf = (
+  id: string,
+  snippets: string[],
+  keys?: string[],
+  bravePageDate: string | null = '2026-10-01'
+): JevCandidateDetailed => ({
   id,
   url: `https://${id}.example/post`,
   title: `${id} title`,
   snippets: snippets.map((text, index) => ({ key: keys?.[index] ?? `${index}`, text })),
+  bravePageDate,
 });
 
-describe('planAllRequest: state / questions / mapping', () => {
+describe('buildContextRequest: state / questions / mapping', () => {
   it('builds one shared state in Brave order; array position is decoupled from source id (T03)', () => {
     // 预筛后候选 ID 非连续（s0、s7）：数组位置 0/1，来源 ID 不重编号
     const candidates = [candidateOf('s0', ['a']), candidateOf('s7', ['b', 'c'], ['2', '5'])];
-    const result = planAllRequest(candidates, 'q', 'i');
-    assert.ok(result.ok);
-    const { plan } = result;
-    assert.deepEqual(plan.state, {
+    const request = buildContextRequest(candidates, 'q', 'i');
+    assert.deepEqual(request.state, {
       query: 'q',
       intent: 'i',
       sources: [
-        { id: 's0', url: 'https://s0.example/post', title: 's0 title', snippets: ['a'] },
-        { id: 's7', url: 'https://s7.example/post', title: 's7 title', snippets: ['b', 'c'] },
+        {
+          id: 's0',
+          url: 'https://s0.example/post',
+          title: 's0 title',
+          snippets: ['a'],
+          brave_page_date: '2026-10-01',
+        },
+        {
+          id: 's7',
+          url: 'https://s7.example/post',
+          title: 's7 title',
+          snippets: ['b', 'c'],
+          brave_page_date: '2026-10-01',
+        },
       ],
     });
     // 映射：数组位置与来源 ID、片段配对身份一一对应
-    assert.deepEqual(plan.entries, [
+    assert.deepEqual(request.entries, [
       {
         source_id: 's0',
         array_index: 0,
         snippet_keys: ['0'],
-        question_keys: Object.fromEntries(
-          Object.keys(plan.localQuestions['s0'] ?? {}).map((key) => [
-            key,
-            allQuestionKey('s0', key),
-          ])
-        ),
+        question_keys: {
+          has_original_reasoning: 's0__has_original_reasoning',
+          is_template_filler: 's0__is_template_filler',
+          is_off_topic: 's0__is_off_topic',
+          is_listing: 's0__is_listing',
+          snip0: 's0__snip0',
+        },
       },
       {
         source_id: 's7',
         array_index: 1,
         snippet_keys: ['2', '5'],
-        question_keys: Object.fromEntries(
-          Object.keys(plan.localQuestions['s7'] ?? {}).map((key) => [
-            key,
-            allQuestionKey('s7', key),
-          ])
-        ),
+        question_keys: {
+          has_original_reasoning: 's7__has_original_reasoning',
+          is_template_filler: 's7__is_template_filler',
+          is_off_topic: 's7__is_off_topic',
+          is_listing: 's7__is_listing',
+          snip0: 's7__snip0',
+          snip1: 's7__snip1',
+        },
       },
     ]);
-    assert.equal(plan.state.sources[1]?.id, 's7');
+    assert.equal(request.state.sources[1]?.id, 's7');
   });
 
   it('namespaces question keys and rewrites `source` references exactly like round-16 (§4.1)', () => {
@@ -80,129 +91,46 @@ describe('planAllRequest: state / questions / mapping', () => {
       candidateOf('s0', ['plain text']),
       candidateOf('s7', ['has 2026 year', 'another']),
     ];
-    const result = planAllRequest(candidates, 'q', 'i');
-    assert.ok(result.ok);
-    const { plan } = result;
+    const request = buildContextRequest(candidates, 'q', 'i');
 
     // 题键：`${source.id}__${localQuestionKey}`（例 s7__snip2）
-    const keys = Object.keys(plan.questions);
+    const keys = Object.keys(request.questions);
     for (const key of keys) {
       assert.ok(key.startsWith('s0__') || key.startsWith('s7__'), key);
     }
     assert.ok(keys.includes('s7__snip0'));
 
-    // 题干引用转换：`\bsource\b` → `sources[i]`（i 为数组位置），与
+    // 来源题引用转换：`\bsource\b` → `sources[i]`（i 为数组位置），与
     // dev/filter-round16-quality.ts 的 instructions.replace 同一正则同一结果——
-    // 总指令、来源题、score 题三处引用全部命中
+    // 总指令与来源题的引用全部命中
     assert.equal(
-      plan.questions['s7__is_off_topic']?.instructions,
+      request.questions['s7__is_off_topic']?.instructions,
       GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[1]') +
         ' `sources[1]` is not about the subject of `query`.'
     );
-    assert.equal(
-      plan.questions['s7__snip1']?.instructions,
-      `${GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[1]')} How useful is \`sources[1].snippets[1]\` for \`intent\`?`
-    );
-    assert.equal(plan.questions['s7__snip1']?.criteria, SNIPPET_LEVELS, 'criteria 原样保留');
-    // s0（数组位置 0）引用 sources[0]，不串到 s7 的位置
-    assert.match(
-      plan.questions['s0__is_off_topic']?.instructions ?? /$/,
-      /`sources\[0\]` is not about/
-    );
-
-    // 不加范围限制提示词、不加新总指令：题干只含总指令 + 原题意
-    assert.equal(plan.questions['s7__is_off_topic']?.type, 'noul');
-    assert.equal(plan.questions['s7__snip1']?.type, 'score');
-  });
-
-  it('keeps the per-source local question set byte-equal to buildQuestions (single construction unchanged)', () => {
-    const snippets = ['has 2026 year', 'another text'];
-    const candidates = [candidateOf('s0', snippets)];
-    const result = planAllRequest(candidates, 'q', 'i');
-    assert.ok(result.ok);
-    assert.deepEqual(result.plan.localQuestions['s0'], buildQuestions(snippets));
-  });
-
-  it('does not mutate the input candidates (write-copy)', () => {
-    const candidates = [candidateOf('s0', ['a', 'b'], ['0', '1'])];
-    const frozen = structuredClone(candidates);
-    planAllRequest(candidates, 'q', 'i');
-    assert.deepEqual(candidates, frozen);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 时间上下文规划（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§5/§7.5）：开关开启时
-// state 携带时间字段、片段题换冻结新题，预算在完整载荷加入后才算。
-// ---------------------------------------------------------------------------
-
-describe('planAllRequest: temporal context', () => {
-  it('adds brave_page_date (always present) per source and retrieval_time after sources', () => {
-    const candidates = [
-      { ...candidateOf('s0', ['a']), bravePageDate: '2026-10-01T13:00:00Z' },
-      { ...candidateOf('s7', ['b', 'c'], ['2', '5']), bravePageDate: null },
-    ];
-    const result = planAllRequest(candidates, 'q', 'i', {
-      retrievalTime: '2026-10-02T04:26:27.787+08:00',
-    });
-    assert.ok(result.ok);
-    const { plan } = result;
-    // 键序：brave_page_date 在片段之后；retrieval_time 在 sources 之后（冻结请求同序）
-    assert.deepEqual(Object.keys(plan.state), ['query', 'intent', 'sources', 'retrieval_time']);
-    assert.equal(plan.state.retrieval_time, '2026-10-02T04:26:27.787+08:00');
-    assert.deepEqual(Object.keys(plan.state.sources[0] ?? {}), [
-      'id',
-      'url',
-      'title',
-      'snippets',
-      'brave_page_date',
-    ]);
-    assert.equal(plan.state.sources[0]?.brave_page_date, '2026-10-01T13:00:00Z');
-    assert.equal(plan.state.sources[1]?.brave_page_date, null, '键恒在，无日期为 null');
-  });
-
-  it('omits retrieval_time when the normalized value is missing but keeps page dates', () => {
-    const candidates = [{ ...candidateOf('s0', ['a']), bravePageDate: '2026-10-01' }];
-    const result = planAllRequest(candidates, 'q', 'i', {});
-    assert.ok(result.ok);
-    assert.equal('retrieval_time' in result.plan.state, false);
-    assert.equal(result.plan.state.sources[0]?.brave_page_date, '2026-10-01');
-  });
-
-  it('uses the frozen score question for snip keys while source questions keep the namespace conversion', () => {
-    const candidates = [candidateOf('s0', ['a']), candidateOf('s7', ['b', 'c'], ['2', '5'])];
-    const result = planAllRequest(candidates, 'q', 'i', {
-      retrievalTime: '2026-10-02T04:26:27.787+08:00',
-    });
-    assert.ok(result.ok);
-    const { plan } = result;
-
-    // snip 题：冻结新题干按实际数组位置生成（s7 在位置 1），criteria 换新三档，
-    // 不带总指令前缀（附录 A 逐字）
-    const s7snip1 = plan.questions['s7__snip1'];
-    assert.ok(s7snip1);
-    assert.equal(s7snip1.type, 'score');
+    // 片段题是冻结新题：按数组位置生成、新三档 criteria、不带总指令前缀
+    const s7snip1 = request.questions['s7__snip1'];
+    assert.equal(s7snip1?.type, 'score');
     assert.ok(
-      s7snip1.instructions.startsWith(
+      s7snip1?.instructions.startsWith(
         'How useful is `sources[1].snippets[1]` for answering `intent`?'
       )
     );
-    assert.equal(s7snip1.instructions.includes(GLOBAL_INSTRUCTION), false);
-    assert.ok(s7snip1.instructions.includes("A source's `brave_page_date`"));
-    assert.deepEqual(s7snip1.criteria, TEMPORAL_SNIPPET_CRITERIA);
-    assert.equal(plan.localQuestions.s7.snip1, s7snip1, '局部表与实发评分题共用同一对象');
-
-    // 来源题：沿用 `\bsource\b` → `sources[i]` 旧转换（总指令 + 原题意）
-    assert.equal(
-      plan.questions['s7__is_off_topic']?.instructions,
-      GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[1]') +
-        ' `sources[1]` is not about the subject of `query`.'
+    assert.equal(s7snip1?.instructions.includes(GLOBAL_INSTRUCTION), false);
+    assert.ok(s7snip1?.instructions.includes("A source's `brave_page_date`"));
+    assert.deepEqual(s7snip1?.criteria, SNIPPET_CRITERIA);
+    // s0（数组位置 0）引用 sources[0]，不串到 s7 的位置
+    assert.match(
+      request.questions['s0__is_off_topic']?.instructions ?? /$/,
+      /`sources\[0\]` is not about/
     );
-    assert.equal(plan.questions['s7__is_off_topic']?.type, 'noul');
+  });
 
-    // 题键与键序不变：每来源 4 道来源题 + 逐片段 snip，键结构与非 temporal 完全一致
+  it('keeps the question key structure: four source questions plus one score per snippet', () => {
+    const candidates = [candidateOf('s0', ['a']), candidateOf('s7', ['b', 'c'], ['2', '5'])];
+    const request = buildContextRequest(candidates, 'q', 'i');
     assert.deepEqual(
-      Object.keys(plan.questions).filter((key) => key.startsWith('s7__')),
+      Object.keys(request.questions).filter((key) => key.startsWith('s7__')),
       [
         's7__has_original_reasoning',
         's7__is_template_filler',
@@ -212,183 +140,105 @@ describe('planAllRequest: temporal context', () => {
         's7__snip1',
       ]
     );
-    // 映射键结构同源：投影不依赖题干
-    assert.deepEqual(Object.keys(plan.entries[1]?.question_keys ?? {}), [
-      'has_original_reasoning',
-      'is_template_filler',
-      'is_off_topic',
-      'is_listing',
-      'snip0',
-      'snip1',
-    ]);
+    // 总题数公式：候选数 × 4 + 候选片段数
+    assert.equal(Object.keys(request.questions).length, 2 * 4 + 3);
   });
 
-  it('estimates the budget on the final payload: dates and new questions included before the 32k/64k check', () => {
-    // 记账不变式：planned_estimates 必须等于对最终 state + questions 重算的结果
-    // ——若预算先按旧短题估算、临发替换长题，这里就会不相等
+  it('does not mutate the input candidates (write-copy)', () => {
+    const candidates = [candidateOf('s0', ['a', 'b'], ['0', '1'])];
+    const frozen = structuredClone(candidates);
+    buildContextRequest(candidates, 'q', 'i');
+    assert.deepEqual(candidates, frozen);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§5）：日期与新题恒在，
+// 检索时间只在显式传入时携带——生成不再由任何参数是否存在决定。
+// ---------------------------------------------------------------------------
+
+describe('buildContextRequest: time context', () => {
+  it('always carries brave_page_date per source and adds retrieval_time after sources when supplied', () => {
     const candidates = [
-      { ...candidateOf('s0', ['a'.repeat(500)]), bravePageDate: '2026-10-01' },
-      candidateOf('s7', ['b'.repeat(500), 'c'.repeat(500)]),
+      candidateOf('s0', ['a'], undefined, '2026-10-01T13:00:00Z'),
+      candidateOf('s7', ['b', 'c'], ['2', '5'], null),
     ];
-    const result = planAllRequest(candidates, 'q', 'i', {
-      retrievalTime: '2026-10-02T04:26:27.787+08:00',
-    });
-    assert.ok(result.ok);
-    const { plan } = result;
-    const recomputed = allBudgetEstimatesOf(plan.state, plan.questions);
-    assert.deepEqual(plan.estimates, recomputed);
+    const request = buildContextRequest(candidates, 'q', 'i', '2026-10-02T04:26:27.787+08:00');
+    // 键序：brave_page_date 在片段之后；retrieval_time 在 sources 之后（冻结请求同序）
+    assert.deepEqual(Object.keys(request.state), ['query', 'intent', 'sources', 'retrieval_time']);
+    assert.equal(request.state.retrieval_time, '2026-10-02T04:26:27.787+08:00');
+    assert.deepEqual(Object.keys(request.state.sources[0] ?? {}), [
+      'id',
+      'url',
+      'title',
+      'snippets',
+      'brave_page_date',
+    ]);
+    assert.equal(request.state.sources[0]?.brave_page_date, '2026-10-01T13:00:00Z');
+    assert.equal(request.state.sources[1]?.brave_page_date, null, '键恒在，无日期为 null');
+  });
 
-    // 冻结新题比旧短题长得多：state 里两个 500 字片段 + 4 道新题的估算显著高于
-    // 旧题版本——估算对象确实是完整载荷（旧题单题 ≈ 30 token，新题 ≈ 190 token）
-    const legacy = planAllRequest(candidates, 'q', 'i');
-    assert.ok(legacy.ok);
+  it('omits retrieval_time when no normalized value is supplied but keeps page dates', () => {
+    // 缺失 / 非法的检索时间由调用方归一为 undefined；纯库不读当前时间补"今天"
+    const candidates = [candidateOf('s0', ['a'])];
+    const request = buildContextRequest(candidates, 'q', 'i');
+    assert.equal('retrieval_time' in request.state, false);
+    assert.equal(request.state.sources[0]?.brave_page_date, '2026-10-01');
+    // 片段题仍是冻结新题（题干读取 retrieval_time 的措辞照发，缺输入由 Jev 侧处理）
     assert.ok(
-      plan.estimates.longest_question_tokens > legacy.plan.estimates.longest_question_tokens
-    );
-    assert.ok(plan.estimates.state_tokens > legacy.plan.estimates.state_tokens);
-  });
-});
-
-describe('planAllRequest: dual budget limits (T06)', () => {
-  /** 单调递增的大片段 state：二分找检查翻转点。 */
-  const budgetAt = (L: number) => {
-    const candidates = [candidateOf('s0', ['ab']), candidateOf('s7', ['a'.repeat(L)])];
-    const result = planAllRequest(candidates, 'q', 'i');
-    if (result.ok) return { ok: true as const, estimates: result.plan.estimates };
-    return { ok: false as const, violation: result.violation, estimates: result.estimates };
-  };
-
-  // (state + 最长单题) × 1.15 的浮点等号：estimateTokens 的 0.9/0.5 权重使
-  // (st+longest)*1.15 无法精确等于 32000——用浮点可表示的最接近值从两侧夹，
-  // 验证"≤ 可发、> 拒绝"（含等号语义在此浮点精度下成立）
-  const findSingleBoundary = (): { lastOk: number; firstOver: number } => {
-    let low = 1;
-    let high = 400000;
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2);
-      const check = budgetAt(mid);
-      if (check.ok) low = mid + 1;
-      else high = mid;
-    }
-    return { lastOk: low - 1, firstOver: low };
-  };
-
-  it('allows the request just below the 32k limit and rejects just above (single violation)', () => {
-    const { lastOk, firstOver } = findSingleBoundary();
-    const okCheck = budgetAt(lastOk);
-    assert.ok(okCheck.ok, '最后一个可发组合必须通过（≤ 含等号）');
-    assert.ok(okCheck.estimates.single_limit_estimate <= 32000);
-    assert.ok(okCheck.estimates.single_limit_estimate > 31900, '贴近边界（不是远低于）');
-    assert.ok(okCheck.estimates.total_limit_estimate <= 64000, 'total 同时成立');
-    const overCheck = budgetAt(firstOver);
-    assert.deepEqual(
-      { ok: overCheck.ok, violation: overCheck.ok ? null : overCheck.violation },
-      { ok: false, violation: 'single' }
-    );
-    assert.ok(overCheck.estimates.single_limit_estimate > 32000);
-  });
-
-  it('allows the request just below the 64k limit and rejects just above (total violation)', () => {
-    // 大量片段（每片段一道 score 题）使 state + 全部题目之和超 64k，而
-    // state + 最长单题仍远低于 32k——两条限额独立检查
-    const totalAt = (nSnippets: number) => {
-      const candidates = [
-        candidateOf(
-          's0',
-          Array.from({ length: nSnippets }, (_, i) => `snippet ${i} text`)
-        ),
-        candidateOf('s7', ['b']),
-      ];
-      const result = planAllRequest(candidates, 'q', 'i');
-      if (result.ok) return { ok: true as const, estimates: result.plan.estimates };
-      return { ok: false as const, violation: result.violation, estimates: result.estimates };
-    };
-    let low = 1;
-    let high = 10000;
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2);
-      const check = totalAt(mid);
-      if (check.ok) low = mid + 1;
-      else high = mid;
-    }
-    const okCheck = totalAt(low - 1);
-    assert.ok(okCheck.ok);
-    assert.ok(okCheck.estimates.total_limit_estimate <= 64000);
-    // 贴近边界：距上限不足一步（一步 = 一个片段 + 一道 score 题）。窗口按单步
-    // 增量推导而非固定常数——题库规模变化会平移落点，固定窗口会随动失准
-    const prev = totalAt(low - 2);
-    assert.ok(prev.ok);
-    const step = okCheck.estimates.total_limit_estimate - prev.estimates.total_limit_estimate;
-    assert.ok(step > 0);
-    assert.ok(okCheck.estimates.total_limit_estimate > 64000 - step, '贴近边界');
-    const overCheck = totalAt(low);
-    assert.deepEqual(
-      { ok: overCheck.ok, violation: overCheck.ok ? null : overCheck.violation },
-      { ok: false, violation: 'total' }
+      request.questions['s0__snip0']?.instructions.startsWith(
+        'How useful is `sources[0].snippets[0]` for answering `intent`?'
+      )
     );
   });
 });
 
-describe('checkAllBudget / allBudgetEstimatesOf', () => {
-  it('computes the estimates exactly as the ladder margin formula', () => {
-    const state: JevState = {
-      query: 'q',
-      intent: 'i',
-      sources: [{ id: 's0', url: 'u', title: 't', snippets: ['hello world text'] }],
-    };
-    const questions = {
-      [allQuestionKey('s0', 'is_off_topic')]: {
-        type: 'noul' as const,
-        instructions: 'short instruction',
+describe('buildContextRequest: single candidate', () => {
+  it('uses the shared sources[0] shape and the frozen score question for one candidate too (§3.1)', () => {
+    // 一个或多个候选都走同一构造：单元素也是 sources[0] + 新题，没有特殊模板
+    const request = buildContextRequest(
+      [candidateOf('s0', ['only surviving snippet'])],
+      'q',
+      'i',
+      '2026-10-03T12:00:00Z'
+    );
+    assert.equal(request.state.sources.length, 1);
+    assert.deepEqual(request.state.sources[0]?.snippets, ['only surviving snippet']);
+    assert.equal(Object.keys(request.questions).length, 4 + 1);
+    const snip0 = request.questions['s0__snip0'];
+    assert.equal(snip0?.type, 'score');
+    assert.ok(
+      snip0?.instructions.startsWith(
+        'How useful is `sources[0].snippets[0]` for answering `intent`?'
+      )
+    );
+    assert.deepEqual(request.entries, [
+      {
+        source_id: 's0',
+        array_index: 0,
+        snippet_keys: ['0'],
+        question_keys: {
+          has_original_reasoning: 's0__has_original_reasoning',
+          is_template_filler: 's0__is_template_filler',
+          is_off_topic: 's0__is_off_topic',
+          is_listing: 's0__is_listing',
+          snip0: 's0__snip0',
+        },
       },
-      [allQuestionKey('s0', 'snip0')]: {
-        type: 'score' as const,
-        instructions: 'a much longer score instruction that dominates the maximum',
-        criteria: SNIPPET_LEVELS,
-      },
-    };
-    const estimates = allBudgetEstimatesOf(state, questions);
-    assert.equal(estimates.state_tokens, estimateTokens(JSON.stringify(state)));
-    assert.equal(
-      estimates.longest_question_tokens,
-      Math.max(...Object.values(questions).map((q) => estimateTokens(JSON.stringify(q))))
-    );
-    assert.equal(
-      estimates.total_questions_tokens,
-      Object.values(questions).reduce((sum, q) => sum + estimateTokens(JSON.stringify(q)), 0)
-    );
-    assert.equal(
-      estimates.single_limit_estimate,
-      (estimates.state_tokens + estimates.longest_question_tokens) * 1.15
-    );
-    assert.equal(
-      estimates.total_limit_estimate,
-      (estimates.state_tokens + estimates.total_questions_tokens) * 1.15
-    );
-    assert.equal(checkAllBudget(state, questions).ok, true);
+    ]);
   });
 });
 
 describe('snippetCountOfState', () => {
-  it('reads the per-source snippet count for both state shapes and rejects bad indices', () => {
-    const single: JevState = {
-      query: 'q',
-      intent: 'i',
-      source: { id: 's0', url: 'u', title: 't', snippets: ['a', 'b', 'c'] },
-    };
-    const all: JevState = {
-      query: 'q',
-      intent: 'i',
-      sources: [
-        { id: 's0', url: 'u', title: 't', snippets: ['a'] },
-        { id: 's7', url: 'v', title: 'u', snippets: ['x', 'y'] },
-      ],
-    };
-    assert.equal(snippetCountOfState(single, 0), 3);
-    assert.equal(snippetCountOfState(single, 1), undefined, 'single state has no array slot 1');
-    assert.equal(snippetCountOfState(all, 0), 1);
-    assert.equal(snippetCountOfState(all, 1), 2);
-    assert.equal(snippetCountOfState(all, 2), undefined);
+  it('reads the per-source snippet count by array index and rejects bad indices', () => {
+    const state = buildContextRequest(
+      [candidateOf('s0', ['a']), candidateOf('s7', ['x', 'y'])],
+      'q',
+      'i'
+    ).state;
+    assert.equal(snippetCountOfState(state, 0), 1);
+    assert.equal(snippetCountOfState(state, 1), 2);
+    assert.equal(snippetCountOfState(state, 2), undefined, '越界数组位按未知处理');
   });
 });
 
@@ -399,14 +249,11 @@ describe('projectSourceAnswers', () => {
     'is_template_filler',
     'has_original_reasoning',
   ];
-  /** 局部题集（与 buildQuestions 同形的最小投影；instructions 不参与投影逻辑）。 */
-  const localQuestions = (nSnippets: number): Record<string, JevQuestion> => {
-    const questions: Record<string, JevQuestion> = {};
-    for (const key of QUESTION_KEYS) questions[key] = { type: 'noul', instructions: 'x' };
-    for (let i = 0; i < nSnippets; i += 1)
-      questions[`snip${i}`] = { type: 'score', instructions: 'x' };
-    return questions;
-  };
+  /** 局部键全集（与构造的题键同形；instructions 不参与投影逻辑）。 */
+  const localKeys = (nSnippets: number): string[] => [
+    ...QUESTION_KEYS,
+    ...Array.from({ length: nSnippets }, (_, i) => `snip${i}`),
+  ];
   const answer = (kind: 'noul' | 'score', value: number) =>
     kind === 'noul'
       ? { kind: 'noul' as const, probability: value }
@@ -414,9 +261,8 @@ describe('projectSourceAnswers', () => {
 
   it('projects via the mapping for all mode: answers land on the right source, no cross-source bleed (T04)', () => {
     // s7 在数组位置 1；映射把局部键换到 s7__ 前缀
-    const questions = localQuestions(2);
     const questionKeys: Record<string, string> = {};
-    for (const [key, value] of Object.entries(questions)) {
+    for (const key of localKeys(2)) {
       questionKeys[key] = allQuestionKey('s7', key);
     }
     const projected = projectSourceAnswers({

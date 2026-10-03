@@ -14,8 +14,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createFilterStats } from '../stats.js';
 import type { FilterStats, JevPerSourceStats } from '../types.js';
-import { DEFAULT_THRESHOLDS } from './questions.js';
-import { applySnippetScores, applySourceVerdicts, cjkShareOf } from './verdict.js';
+import { DEFAULT_THRESHOLDS, SNIPPET_CRITERIA } from './questions.js';
+import {
+  applySnippetScores,
+  applySourceVerdicts,
+  cjkShareOf,
+  isUsableSnippetScore,
+} from './verdict.js';
 import type { VerdictSourceRow } from './verdict.js';
 
 // ---------------------------------------------------------------------------
@@ -115,6 +120,30 @@ describe('cjkShareOf', () => {
     assert.equal(cjkShareOf('Hello', ['plain text']), 0);
     assert.equal(cjkShareOf('', []), 0);
     assert.equal(cjkShareOf('', ['']), 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isUsableSnippetScore：合法范围来自唯一评分题的三档 criteria（all-only 清理后
+// 记录与裁决共用同一判定），异常分数保守保留
+// ---------------------------------------------------------------------------
+
+describe('isUsableSnippetScore', () => {
+  it('derives the usable range from the single criteria set (three levels)', () => {
+    // 范围锚定 SNIPPET_CRITERIA 的档数：criteria 变档这里跟着红
+    assert.equal(SNIPPET_CRITERIA.length, 3);
+    for (const value of [0, 0.5, 1, 1.99, 2]) {
+      assert.equal(isUsableSnippetScore(value), true, `score ${value} must be usable`);
+    }
+    for (const value of [-0.01, -1, 2.01, 3, Number.NaN, Number.POSITIVE_INFINITY]) {
+      assert.equal(isUsableSnippetScore(value), false, `score ${value} must be unusable`);
+    }
+  });
+
+  it('rejects non-number inputs defensively', () => {
+    for (const value of ['1', null, undefined, true, { score: 1 }]) {
+      assert.equal(isUsableSnippetScore(value), false);
+    }
   });
 });
 

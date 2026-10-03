@@ -15,7 +15,7 @@
  */
 
 import { CJK_SEGMENT, SCRIPT_PATTERN } from '../tokenize.js';
-import { SNIPPET_LEVELS } from './questions.js';
+import { SNIPPET_CRITERIA } from './questions.js';
 import type {
   FilterStats,
   JevThresholds,
@@ -75,12 +75,12 @@ export function cjkShareOf(title: string, texts: readonly string[]): number {
 const usableProbability = (value: number | undefined): number | undefined =>
   value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
 
-/** 评分题的合法范围由三档 legend 决定；记录与裁决共用，异常分数保守保留。 */
+/** 评分题的合法范围由唯一评分题的三档 criteria 决定；记录与裁决共用，异常分数保守保留。 */
 export const isUsableSnippetScore = (value: unknown): value is number =>
   typeof value === 'number' &&
   Number.isFinite(value) &&
   value >= 0 &&
-  value <= SNIPPET_LEVELS.length - 1;
+  value <= SNIPPET_CRITERIA.length - 1;
 
 /**
  * 步 6：来源级裁决链，固定顺序 off_topic → listing →
