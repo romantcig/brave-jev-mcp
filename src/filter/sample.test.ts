@@ -1,13 +1,15 @@
 /**
- * 样本写入器单测（04-02；04-04 R1-R5 返修；v4 六题全量上下文请求级载荷）：记录形状
+ * 样本写入器单测（04-02；04-04 R1-R5 返修；v5 全量共享请求载荷）：记录形状
  * 与 pretty 格式、片段配对身份（URL 合并 / JSON-LD 拆分 / 页内重复 / 空源排除）、
- * 请求级实发载荷（真实超限路径 + fetch 桩的深相等、已派发失败保留输入证据、
- * skipped / too_large / breaker_open 分状态）、no_key 如实记账、写入失败路径与目录
+ * 请求级实发载荷（完整载荷直接发送 + fetch 桩的深相等、已派发失败保留输入证据、
+ * skipped / breaker_open 分状态）、no_key 如实记账、写入失败路径与目录
  * 自愈、相对 log_dir 的绝对路径、过滤规则版本区分能力、构建异常 fail-open。
  *
- * v4 语义：实发 state / questions / answers / 映射在 jev.requests[]（每逻辑请求
- * 一份），来源级 sent[] 经 request_id 引用；in_state / score_question_sent 按题目
- * 映射对实发载荷逐位检查——没有实发载荷（注入面 answered 无 dispatch）就不冒充。
+ * v5 语义：实发 state / questions / answers / 映射在 jev.requests[]（一次搜索至多
+ * 一条共享请求），来源级 sent[] 经 request_id 引用；in_state / score_question_sent
+ * 按题目映射对实发载荷逐位检查——没有实发载荷（注入面 answered 无 dispatch）就不
+ * 冒充。退役字段（mode / context_mode / temporal_context / planned_estimates /
+ * fallback_reason / ladder / sent_snippets）在 v5 样本中不存在，负向断言把关。
  *
  * 身份与过程映射断言跑真实管道（filterLlmContext + 合成 classify 全保留），
  * 不复述实现——统计投影与候选口径都是生产口径。实发断言用**生产客户端**
@@ -34,12 +36,9 @@ import {
   DEFAULT_THRESHOLDS,
   GLOBAL_INSTRUCTION,
   QUESTION_SET_ID,
-  SNIPPET_LEVELS,
+  SNIPPET_CRITERIA,
   SOURCE_QUESTIONS,
-  TEMPORAL_SNIPPET_CRITERIA,
-  buildState,
-  singleScoreInstructions,
-  temporalScoreInstructions,
+  snippetScoreInstructions,
 } from './jev/questions.js';
 import { createJevClassifier } from './jev/client.js';
 import { filterLlmContext } from './pipeline.js';
@@ -70,28 +69,24 @@ const configOf = (logDir: string, concurrency = 12): FilterConfig => ({
     model: DEFAULT_JEV_MODEL,
     timeoutMs: 15000,
     concurrency,
-    contextMode: 'single',
-    temporalContext: false,
   },
   logDir,
 });
 
-/** 全保留合成 classify：来源级题全 0.0（低于一切丢弃门槛；含退役两题旧键，按额外字段忽略），片段分全 2.0。 */
-const keepAllClassify: ClassifyDeps['classify'] = async () => ({
+/**
+ * 全保留合成 classify：按实际题表逐题给保留答案（noul 0.0 低于一切丢弃门槛、
+ * score 2.0 满分），全局键原样回填——一次共享请求覆盖全部候选（当前题库四来源题 +
+ * 每片段一道评分题，键为 `{sourceId}__{localKey}` 命名空间）。
+ */
+const keepAllClassify: ClassifyDeps['classify'] = async ({ questions }) => ({
   status: 'answered',
   model: DEFAULT_JEV_MODEL,
-  answers: {
-    has_original_reasoning: { kind: 'noul', probability: 0 },
-    is_template_filler: { kind: 'noul', probability: 0 },
-    is_off_topic: { kind: 'noul', probability: 0 },
-    is_listing: { kind: 'noul', probability: 0 },
-    self_deprecated: { kind: 'noul', probability: 0 },
-    stale: { kind: 'noul', probability: 0 },
-    snip0: { kind: 'score', score: 2 },
-    snip1: { kind: 'score', score: 2 },
-    snip2: { kind: 'score', score: 2 },
-    snip3: { kind: 'score', score: 2 },
-  },
+  answers: Object.fromEntries(
+    Object.entries(questions).map(([key, question]) => [
+      key,
+      question.type === 'score' ? { kind: 'score', score: 2 } : { kind: 'noul', probability: 0 },
+    ])
+  ),
   input_tokens: 42,
 });
 
@@ -232,18 +227,17 @@ const answeredText = (body: CapturedRequest): string => {
 describe('QUESTION_SET_ID', () => {
   it('is 12 lowercase hex chars derived from the normalized question bank (recipe pinned)', () => {
     assert.match(QUESTION_SET_ID, /^[0-9a-f]{12}$/);
-    // 食谱镜像：总指令、来源题、旧 score 完整模板、旧三档 legend、时间上下文新题
-    // 完整模板及其 criteria 的规范化 JSON SHA-256 前 12 位——意外改配方（键序、
-    // 包裹方式、漏掉新题干）会在这里红（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5）
+    // 食谱镜像：总指令、来源题、当前时间上下文 score 完整模板 (0,0) 及其 criteria
+    // 的规范化 JSON SHA-256 前 12 位——意外改配方（键序、包裹方式、漏掉新题干）
+    // 会在这里红。旧 score 模板与三档 legend 已随 all-only 清理退役、不再进哈希
+    //（清理前双模板哈希锚 e307a770fb87 见 git 历史）
     const expected = createHash('sha256')
       .update(
         JSON.stringify([
           GLOBAL_INSTRUCTION,
           SOURCE_QUESTIONS,
-          SNIPPET_LEVELS,
-          singleScoreInstructions(0),
-          temporalScoreInstructions(0, 0),
-          TEMPORAL_SNIPPET_CRITERIA,
+          snippetScoreInstructions(0, 0),
+          SNIPPET_CRITERIA,
         ])
       )
       .digest('hex')
@@ -294,18 +288,18 @@ describe('createSampleWriter', () => {
         for (const [key, question] of Object.entries(body.questions)) {
           answers[key] =
             (question as { type: string }).type === 'score'
-              ? { type: 'score', score: key === 'snip0' ? 2 : 0.4 }
-              : { type: 'noul', noul: key === 'has_original_reasoning' ? 0.9 : 0 };
+              ? { type: 'score', score: key === 's0__snip0' ? 2 : 0.4 }
+              : { type: 'noul', noul: key === 's0__has_original_reasoning' ? 0.9 : 0 };
         }
-        if (scenario === 'missing-score') delete answers.snip0;
-        if (scenario === 'wrong-score-type') answers.snip0 = { type: 'noul', noul: 0 };
-        if (scenario === 'negative-score') answers.snip0.score = -1;
-        if (scenario === 'above-range') answers.snip0.score = 3;
-        if (scenario === 'nonfinite-score') answers.snip0.score = 'overflow';
-        if (scenario === 'missing-source-answer') delete answers.is_listing;
+        if (scenario === 'missing-score') delete answers['s0__snip0'];
+        if (scenario === 'wrong-score-type') answers['s0__snip0'] = { type: 'noul', noul: 0 };
+        if (scenario === 'negative-score') answers['s0__snip0'].score = -1;
+        if (scenario === 'above-range') answers['s0__snip0'].score = 3;
+        if (scenario === 'nonfinite-score') answers['s0__snip0'].score = 'overflow';
+        if (scenario === 'missing-source-answer') delete answers['s0__is_listing'];
         if (scenario === 'legacy-extra-answer')
           answers.worth_keeping = { type: 'noul', noul: 0.42 };
-        if (scenario === 'source-drop') answers.is_off_topic.noul = 1;
+        if (scenario === 'source-drop') answers['s0__is_off_topic'].noul = 1;
         const text = JSON.stringify({
           model: DEFAULT_JEV_MODEL,
           answers,
@@ -345,15 +339,25 @@ describe('createSampleWriter', () => {
         'saved'
       );
       const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as SampleRecord;
-      // v4：实发载荷在请求级（single 模式一请求一来源），来源行经 request_id 引用
+      // v5：实发载荷在请求级（一次共享请求覆盖全部候选），来源行经 request_id 引用
       assert.equal(sample.jev!.requests.length, 1);
       const request = sample.jev!.requests[0]!;
       const sent = sample.jev!.sent[0]!;
       assert.equal(sent.request_id, request.request_id);
-      assert.equal(request.mode, 'single');
-      assert.equal(request.requested, 'single');
-      assert.equal(request.effective, 'single');
-      assert.equal(request.fallback_reason, undefined);
+      // v5 请求级记录无模式切换字段（all-only：一次搜索至多一条共享请求）
+      for (const retired of [
+        'mode',
+        'requested',
+        'effective',
+        'fallback_reason',
+        'planned_estimates',
+      ]) {
+        assert.equal(
+          Object.hasOwn(request, retired),
+          false,
+          `v5 request must not carry retired key '${retired}'`
+        );
+      }
       assert.deepEqual(request.source_ids, ['s0']);
       assert.equal(request.dispatched, true);
       assert.equal(request.answered, true);
@@ -368,8 +372,12 @@ describe('createSampleWriter', () => {
           source_id: 's0',
           array_index: 0,
           snippet_keys: ['0', '1'],
+          // 局部键 → 全局键（{sourceId}__{localKey}）；全局题键从截获请求推导
           question_keys: Object.fromEntries(
-            Object.keys(captured[0]!.questions).map((key) => [key, key])
+            Object.keys(captured[0]!.questions).map((key) => [
+              key.startsWith('s0__') ? key.slice('s0__'.length) : key,
+              key,
+            ])
           ),
         },
       ]);
@@ -484,7 +492,7 @@ describe('createSampleWriter', () => {
       'filter_program_version',
       'filter_rules_version',
     ]);
-    assert.equal(sample.format_version, 4);
+    assert.equal(sample.format_version, 5);
     assert.equal(sample.request_id, requestId);
     assert.match(String(sample.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
     assert.equal(sample.mode, 'test');
@@ -507,8 +515,9 @@ describe('createSampleWriter', () => {
     // final_return 原样回放
     assert.deepEqual(sample.final_return, { payload, status_line: statusLine });
 
-    // config_snapshot：九项阈值 snake_case 投影 + jev 组（v4 加 context_mode，时间
-    // 上下文接入加 temporal_context）+ 黑名单 + mode
+    // config_snapshot：九项阈值 snake_case 投影 + jev 组（v5 起只含
+    // model/timeout_ms/concurrency——context_mode/temporal_context 已退役）+
+    // 黑名单 + mode
     const snapshot = sample.config_snapshot as Record<string, unknown>;
     assert.deepEqual(Object.keys(snapshot), [
       'thresholds',
@@ -528,12 +537,15 @@ describe('createSampleWriter', () => {
       cjk_bonus: DEFAULT_THRESHOLDS.cjkBonus,
       cjk_share: DEFAULT_THRESHOLDS.cjkShare,
     });
+    assert.deepEqual(Object.keys(snapshot.jev as Record<string, unknown>), [
+      'model',
+      'timeout_ms',
+      'concurrency',
+    ]);
     assert.deepEqual(snapshot.jev, {
       model: DEFAULT_JEV_MODEL,
       timeout_ms: 15000,
       concurrency: 12,
-      context_mode: 'single',
-      temporal_context: false,
     });
     assert.equal(snapshot.overfetch_factor, 1);
     assert.equal(snapshot.mode, 'test');
@@ -573,10 +585,10 @@ describe('createSampleWriter', () => {
     const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
       jev: {
         status: string;
+        n_requests: number;
         per_source: Array<{ src: string; status: string; snippet_scores?: number[] }>;
         requests: Array<{
           request_id: string;
-          mode: string;
           dispatched: boolean;
           state: string | null;
           questions: Record<string, unknown> | null;
@@ -638,17 +650,18 @@ describe('createSampleWriter', () => {
       sample.jev.sent.map((entry) => entry.src),
       ['s0', 's2', 's3']
     );
-    // 注入面（合成 classify）无实发载荷：每个请求记录存在但 state/questions 为
-    // null——v4 的 in_state / score_question_sent 按映射对实发载荷检查，无载荷
-    // 即 false，绝不按 answered 冒充"已提交"
-    assert.equal(sample.jev.requests.length, 2);
-    assert.ok(
-      sample.jev.requests.every((request) => request.state === null && request.questions === null)
-    );
+    // 注入面（合成 classify）无实发载荷：一次共享请求覆盖 s0 与 s2，载荷为 null
+    // ——v5 的 in_state / score_question_sent 按映射对实发载荷检查，无载荷即
+    // false，绝不按 answered 冒充"已提交"；answered 无 dispatch 计零请求
+    assert.equal(sample.jev.requests.length, 1);
+    assert.equal(sample.jev.requests[0]!.state, null);
+    assert.equal(sample.jev.requests[0]!.questions, null);
+    assert.equal(sample.jev.n_requests, 0);
     const s0 = sample.jev.sent[0]!;
     assert.equal(s0.dispatched, false);
     assert.equal(s0.answered, true);
     assert.ok(s0.request_id, 'request_id links the source row to its request record');
+    assert.equal(sample.jev.sent[1]!.request_id, s0.request_id, 's2 shares the same request');
     assert.deepEqual(
       s0.snippets.map((snippet) => [
         snippet.snippet,
@@ -674,12 +687,12 @@ describe('createSampleWriter', () => {
     assert.equal(s2.snippets[0]?.text, uniqueBody);
   });
 
-  it('records the real dispatched payload deep-equal to the intercepted request when a cut ladder fires (review R1)', async () => {
-    // 真实超限路径：生产客户端（createJevClassifier + applyOversizeLadder）+ fetch 桩。
-    // 第二片段是 32000 个 CJK 字符（×0.9 ×1.15 余量 > 32k）→ 阶梯砍尾 → 实发 state
-    // 只有第一段；样本请求级载荷必须记录砍后 state 且与截获请求深相等——阶梯前的
-    // 重建口径（v1 的病灶）在这里会带两段，当场红。
-    const logDir = join(root, 'cut-tail', 'logs');
+  it('records the real dispatched payload deep-equal to the intercepted request when the full payload is sent (review R1)', async () => {
+    // 完整载荷直接发送（32K/64K 预检与阶梯已退役）：第二片段是 32000 个 CJK 字符
+    // （超过旧 32K 检测范围）→ 不删正文、不删题、不拆请求，一次共享请求原样发出；
+    // 样本请求级载荷必须记录实发 state 且与截获请求深相等——本地重建口径（v1 的
+    // 病灶）或任何输入缩减在这里当场红。
+    const logDir = join(root, 'full-send', 'logs');
     const config = configOf(logDir);
     const giant = '資料'.repeat(16000);
     const response: BraveLlmContextResponse = {
@@ -712,15 +725,20 @@ describe('createSampleWriter', () => {
     } finally {
       restore();
     }
-    const lastRequest = captured.at(-1);
-    assert.ok(lastRequest, 'the classifier must have dispatched a request');
-    assert.ok('source' in lastRequest.state, 'single dispatches carry a single-source state');
-    // 截获请求实证：阶梯把实发 state 砍到只剩第一段、snip 题只剩 snip0
-    assert.equal(lastRequest.state.source.snippets.length, 1);
-    assert.equal(lastRequest.state.source.snippets[0], articleBody);
+    // 一次共享请求、一次 HTTP 尝试；实发 state 完整携带两段片段、snip 题齐全
+    assert.equal(captured.length, 1);
+    const lastRequest = captured[0]!;
     assert.deepEqual(
-      Object.keys(lastRequest.questions).filter((key) => /^snip/.test(key)),
-      ['snip0']
+      lastRequest.state.sources.map((source) => source.snippets.length),
+      [2]
+    );
+    assert.equal(lastRequest.state.sources[0]!.snippets[1], giant);
+    // 题键为 {sourceId}__{localKey} 命名空间：两道评分题都随请求提交
+    assert.deepEqual(
+      Object.keys(lastRequest.questions)
+        .filter((key) => /__snip\d+$/.test(key))
+        .sort(),
+      ['s0__snip0', 's0__snip1']
     );
 
     const writer = createSampleWriter(config);
@@ -743,7 +761,9 @@ describe('createSampleWriter', () => {
 
     const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
       jev: {
-        per_source: Array<{ src: string; status: string; ladder?: string; sent_snippets?: number }>;
+        n_requests: number;
+        n_http_attempts: number;
+        per_source: Array<{ src: string; status: string }>;
         requests: Array<{
           request_id: string;
           dispatched: boolean;
@@ -765,19 +785,24 @@ describe('createSampleWriter', () => {
         }>;
       };
     };
-    assert.equal(sample.jev.per_source[0]?.ladder, 'cut_tail');
-    assert.equal(sample.jev.per_source[0]?.sent_snippets, 1);
-    // R1 核心证据：请求级记录的实发 state 与截获请求深相等（砍后实发，仅 1 段）
+    // v5 无 ladder / sent_snippets 记账（整批一次请求，无逐源缩减动作）
+    for (const row of sample.jev.per_source) {
+      assert.equal(Object.hasOwn(row, 'ladder'), false);
+      assert.equal(Object.hasOwn(row, 'sent_snippets'), false);
+    }
+    // R1 核心证据：请求级记录的实发 state 与截获请求深相等（完整实发，两段都在）
     assert.equal(sample.jev.requests.length, 1);
     const request = sample.jev.requests[0]!;
     assert.equal(request.dispatched, true);
     assert.ok(request.state, 'dispatched request must carry the input evidence');
     assert.deepEqual(JSON.parse(request.state), lastRequest.state);
     assert.deepEqual(request.questions, lastRequest.questions);
+    assert.equal(sample.jev.n_requests, 1);
+    assert.equal(sample.jev.n_http_attempts, 1);
     const s0 = sample.jev.sent[0]!;
     assert.equal(s0.request_id, request.request_id);
     assert.equal(s0.dispatched, true);
-    // 状态三维拆分：第二片段没进 state、题没提交（按映射检查）、也没有评分——各字段独立表达
+    // 状态三维拆分：两段都进实发 state、题都提交、都有有效评分——各字段独立表达
     assert.deepEqual(
       s0.snippets.map((snippet) => [
         snippet.snippet,
@@ -787,10 +812,11 @@ describe('createSampleWriter', () => {
       ]),
       [
         ['0', true, true, true],
-        ['1', false, false, false],
+        ['1', true, true, true],
       ]
     );
-    // 被砍片段的候选口径文本保留（凭身份键回 pre_filter 对齐），但不冒充实发
+    // 候选口径文本与实发文本一致（完整发送，无缩减）
+    assert.equal(s0.snippets[0]?.text, articleBody);
     assert.equal(s0.snippets[1]?.text, giant);
   });
 
@@ -884,12 +910,12 @@ describe('createSampleWriter', () => {
     assert.equal(s0.answered, false);
   });
 
-  it('separates too_large and breaker_open from dispatched failures in the dispatch map (review R1)', async () => {
-    // 生产客户端 + 串行并发闸：前三个来源网络失败各计一次熔断计数（1→2→3 达阈值），
-    // 第四个来源进闸即被熔断短路（零 fetch）——too_large / breaker_open 与
-    // "已派发但失败"三种状态在同一份派发映射里可区分。
-    const logDir = join(root, 'ladder-states', 'logs');
-    const config = configOf(logDir, 1);
+  it('keeps the dispatched-but-failed shared request with retry attempts in the sample (review R1)', async () => {
+    // 生产客户端 + fetch 桩网络失败：一次共享请求重试 RETRY_ATTEMPTS(3) 次后放弃
+    // ——请求级账目 n_requests=1、n_http_attempts=3，实发 state 保留作输入证据；
+    // 覆盖的四个来源都按"未完成 Jev 判断"保守保留，不拆成逐来源请求。
+    const logDir = join(root, 'network-retry', 'logs');
+    const config = configOf(logDir);
     const sources = ['s0', 's1', 's2', 's3'].map((_, index) => ({
       url: `https://host${index}.example/post`,
       title: `Post ${index}`,
@@ -919,8 +945,8 @@ describe('createSampleWriter', () => {
     } finally {
       restore();
     }
-    assert.equal(captured.length, 9, 'three sources x three attempts must dispatch nine fetches');
-    assert.equal(degraded.stats.jev?.status, 'breaker_open');
+    assert.equal(captured.length, 3, 'one shared request retries three times in total');
+    assert.equal(degraded.stats.jev?.status, 'degraded');
 
     const writer = createSampleWriter(config);
     const requestId = '55555555-aaaa-3333-4444-555555555555';
@@ -947,6 +973,7 @@ describe('createSampleWriter', () => {
         per_source: Array<{ src: string; status: string; fail_kind?: string }>;
         requests: Array<{
           request_id: string;
+          source_ids: string[];
           dispatched: boolean;
           answered: boolean;
           state: string | null;
@@ -960,56 +987,53 @@ describe('createSampleWriter', () => {
           request_id?: string;
           dispatched: boolean;
           answered: boolean;
-          not_dispatched_reason?: string;
         }>;
       };
     };
-    // 请求级账目：4 个逻辑请求（各一来源）；前三个已派发失败（各 3 次 fetch、
-    // 计 n_requests），第四个熔断短路（0 次 fetch、不计 n_requests）——N 来源
-    // 不冒充 N 次正常请求，重试可见
-    assert.equal(sample.jev.requests.length, 4);
-    assert.equal(sample.jev.n_requests, 3);
-    assert.equal(sample.jev.n_http_attempts, 9);
-    const requests = new Map(sample.jev.requests.map((entry) => [entry.request_id, entry]));
-    const sent = new Map(sample.jev.sent.map((entry) => [entry.src, entry]));
-    // 已派发但网络失败：dispatched=true、输入证据保留、usage 未知不伪称、attempts=3
-    for (const src of ['s0', 's1', 's2']) {
-      const entry = sent.get(src);
-      assert.ok(entry, src);
-      assert.equal(entry.dispatched, true, src);
-      assert.equal(entry.answered, false, src);
-      const request = requests.get(entry.request_id ?? '');
-      assert.ok(request, `${src} links to its request record`);
-      assert.ok(request.state, `${src} keeps its dispatched input evidence`);
-      assert.equal(request.fail_kind, 'network');
-      assert.equal(request.input_tokens, null);
-      assert.equal(request.usage_complete, false);
-      assert.equal(request.http_attempts, 3);
+    // 请求级账目：一次共享请求（4 来源）、已派发但失败——N 来源不冒充 N 次请求，
+    // 重试次数如实记录、实发 state 保留、usage 未知不伪称
+    assert.equal(sample.jev.requests.length, 1);
+    assert.equal(sample.jev.n_requests, 1);
+    assert.equal(sample.jev.n_http_attempts, 3);
+    const request = sample.jev.requests[0]!;
+    assert.deepEqual(request.source_ids, ['s0', 's1', 's2', 's3']);
+    assert.equal(request.dispatched, true);
+    assert.equal(request.answered, false);
+    assert.ok(request.state, 'dispatched-but-failed keeps its input evidence');
+    assert.equal(request.fail_kind, 'network');
+    assert.equal(request.input_tokens, null);
+    assert.equal(request.usage_complete, false);
+    assert.equal(request.http_attempts, 3);
+    // 来源级：四行都引用同一请求、都未完成检查
+    assert.deepEqual(
+      sample.jev.sent.map((entry) => [
+        entry.src,
+        entry.request_id,
+        entry.dispatched,
+        entry.answered,
+      ]),
+      [
+        ['s0', request.request_id, true, false],
+        ['s1', request.request_id, true, false],
+        ['s2', request.request_id, true, false],
+        ['s3', request.request_id, true, false],
+      ]
+    );
+    for (const row of sample.jev.per_source) {
+      assert.equal(row.status, 'failed');
+      assert.equal(row.fail_kind, 'network');
     }
-    // 熔断短路：零 fetch，未派发，原因明确——不与失败混同
-    const s3 = sent.get('s3');
-    assert.ok(s3);
-    assert.equal(sample.jev.per_source[3]?.status, 'breaker_open');
-    const s3Request = requests.get(s3.request_id ?? '');
-    assert.ok(s3Request);
-    assert.equal(s3Request.dispatched, false);
-    assert.equal(s3Request.state, null);
-    assert.equal(s3Request.fail_kind, 'breaker_open');
-    assert.equal(s3Request.http_attempts, 0);
-    assert.equal(s3.dispatched, false);
-    assert.equal(s3.answered, false);
-    assert.equal(s3.not_dispatched_reason, 'breaker_open');
   });
 
-  it('marks skipped sources (nothing to dispatch) and too_large states distinctly from sent ones', async () => {
-    // 巨型 title：砍光片段后 state + 来源级题仍超 32k → 阶梯 ④ too_large（零 fetch）；
-    // 第二来源片段全空白 → 本地规则删光 → skipped 占位（零 fetch）。
-    const logDir = join(root, 'skip-too-large', 'logs');
+  it('marks skipped sources (nothing to dispatch) distinctly from sent ones', async () => {
+    // 第一来源正常片段 → 进入共享请求（生产客户端实发）；第二来源片段全空白 →
+    // 本地规则删光 → skipped 占位（零 fetch、无请求记录）。
+    const logDir = join(root, 'skip', 'logs');
     const config = configOf(logDir, 1);
     const response: BraveLlmContextResponse = {
       grounding: {
         generic: [
-          { url: 'https://a.example/post', title: 'x'.repeat(200000), snippets: [articleBody] },
+          { url: 'https://a.example/post', title: 'A Post', snippets: [articleBody] },
           { url: 'https://b.example/post', title: 'B Page', snippets: ['   '] },
         ],
         map: [],
@@ -1036,7 +1060,7 @@ describe('createSampleWriter', () => {
     } finally {
       restore();
     }
-    assert.equal(captured.length, 0, 'neither source may dispatch a real request');
+    assert.equal(captured.length, 1, 'only the source with content enters the shared request');
 
     const writer = createSampleWriter(config);
     const requestId = '66666666-aaaa-3333-4444-555555555555';
@@ -1060,10 +1084,11 @@ describe('createSampleWriter', () => {
       jev: {
         n_requests: number;
         requests: Array<{
+          request_id: string;
+          source_ids: string[];
           dispatched: boolean;
           state: string | null;
           questions: Record<string, unknown> | null;
-          fail_kind?: string;
         }>;
         sent: Array<{
           src: string;
@@ -1074,26 +1099,24 @@ describe('createSampleWriter', () => {
         }>;
       };
     };
-    // 预检拒绝不计 n_requests；请求记录如实保留（state null、fail_kind too_large）
-    assert.equal(sample.jev.n_requests, 0);
+    // 正常来源进共享请求计一；skipped 占位不构造请求
+    assert.equal(sample.jev.n_requests, 1);
     assert.equal(sample.jev.requests.length, 1);
     const request = sample.jev.requests[0]!;
-    assert.equal(request.dispatched, false);
-    assert.equal(request.state, null);
-    assert.equal(request.questions, null);
-    assert.equal(request.fail_kind, 'too_large');
+    assert.deepEqual(request.source_ids, ['s0']);
+    assert.equal(request.dispatched, true);
+    assert.ok(request.state, 'the dispatched shared request keeps its input evidence');
     const sent = new Map(sample.jev.sent.map((entry) => [entry.src, entry]));
     const s0 = sent.get('s0');
     assert.ok(s0, 's0 must appear in the dispatch map');
-    assert.equal(s0.dispatched, false);
-    assert.equal(s0.not_dispatched_reason, 'too_large');
+    assert.equal(s0.dispatched, true);
     assert.deepEqual(
       s0.snippets.map((snippet) => snippet.in_state),
-      [false]
+      [true]
     );
     assert.deepEqual(
       s0.snippets.map((snippet) => snippet.score_question_sent),
-      [false]
+      [true]
     );
     const s1 = sent.get('s1');
     assert.ok(s1, 'skipped sources appear with their own reason');
@@ -1308,38 +1331,24 @@ describe('createSampleWriter', () => {
     );
   });
 
-  it('records degraded jev bodies verbatim (fail_kind, breaker_open) without pretending completion', async () => {
-    const logDir = join(root, 'degraded', 'logs');
+  it('records breaker_open jev bodies verbatim without pretending completion', async () => {
+    const logDir = join(root, 'breaker', 'logs');
     const config = configOf(logDir);
     const stats = emptyStats('test');
     stats.jev = {
-      n_requests: 1,
+      n_requests: 0,
       input_tokens: 0,
-      latency_ms_total: 20,
-      status: 'degraded',
-      n_http_attempts: 2,
+      latency_ms_total: 0,
+      status: 'breaker_open',
+      n_http_attempts: 0,
       requests: [],
       per_source: [
-        {
-          src: 's0',
-          url: 'https://a.example/post',
-          status: 'failed',
-          fail_kind: 'timeout',
-          latency_ms: 15,
-        },
+        { src: 's0', url: 'https://a.example/post', status: 'breaker_open', latency_ms: 0 },
         { src: 's2', url: 'https://b.example/', status: 'breaker_open', latency_ms: 0 },
       ],
     };
-    // 手工派发与请求记录同形（生产管道形状）：s0 已派发但超时（实发 state 保留在
-    // 请求级）、s2 熔断短路（未派发）
-    const dispatchedState = buildState(
-      's0',
-      'https://a.example/post',
-      'A Post',
-      [articleBody],
-      QUERY,
-      INTENT
-    );
+    // 手工派发与请求记录同形（生产管道形状：进程级熔断在前一次搜索达阈值后打开，
+    // 本次搜索的共享请求进闸即被短路——零 fetch、未派发、载荷 null）
     const jevDispatch = [
       {
         src: 's0',
@@ -1347,11 +1356,12 @@ describe('createSampleWriter', () => {
         title: 'A Post',
         request_id: 'j1',
         array_index: 0,
-        dispatched: true,
+        dispatched: false,
         answered: false,
         snippet_score_validity: null,
         snippet_scores_received: null,
         source_verdict_valid: false,
+        not_dispatched_reason: 'breaker_open' as const,
         snippet_keys: ['0'],
         snippet_texts: [articleBody],
       },
@@ -1359,8 +1369,8 @@ describe('createSampleWriter', () => {
         src: 's2',
         url: 'https://b.example/',
         title: 'B Page',
-        request_id: 'j2',
-        array_index: 0,
+        request_id: 'j1',
+        array_index: 1,
         dispatched: false,
         answered: false,
         snippet_score_validity: null,
@@ -1374,34 +1384,7 @@ describe('createSampleWriter', () => {
     const jevRequests: JevRequestRecord[] = [
       {
         request_id: 'j1',
-        mode: 'single',
-        requested: 'single',
-        effective: 'single',
-        source_ids: ['s0'],
-        dispatched: true,
-        state: dispatchedState,
-        questions: null,
-        answered: false,
-        input_tokens: null,
-        usage_complete: false,
-        http_attempts: 2,
-        latency_ms: 15,
-        fail_kind: 'timeout',
-        mapping: [
-          {
-            source_id: 's0',
-            array_index: 0,
-            snippet_keys: ['0'],
-            question_keys: {},
-          },
-        ],
-      },
-      {
-        request_id: 'j2',
-        mode: 'single',
-        requested: 'single',
-        effective: 'single',
-        source_ids: ['s2'],
+        source_ids: ['s0', 's2'],
         dispatched: false,
         state: null,
         questions: null,
@@ -1411,7 +1394,10 @@ describe('createSampleWriter', () => {
         http_attempts: 0,
         latency_ms: 0,
         fail_kind: 'breaker_open',
-        mapping: [{ source_id: 's2', array_index: 0, snippet_keys: ['0'], question_keys: {} }],
+        mapping: [
+          { source_id: 's0', array_index: 0, snippet_keys: ['0'], question_keys: {} },
+          { source_id: 's2', array_index: 1, snippet_keys: ['0'], question_keys: {} },
+        ],
       },
     ];
 
@@ -1436,9 +1422,11 @@ describe('createSampleWriter', () => {
     const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as {
       jev: {
         status: string;
+        n_requests: number;
         per_source: Array<{ src: string; status: string; fail_kind?: string }>;
         requests: Array<{
           request_id: string;
+          source_ids: string[];
           dispatched: boolean;
           answered: boolean;
           state: string | null;
@@ -1454,35 +1442,30 @@ describe('createSampleWriter', () => {
         }>;
       };
     };
-    // 降级记账原样：failed kind 与熔断行都进样本，不伪装成完成检查
-    assert.equal(sample.jev.status, 'degraded');
-    const rows = new Map(sample.jev.per_source.map((row) => [row.src, row]));
-    assert.equal(rows.get('s0')?.fail_kind, 'timeout');
-    assert.equal(rows.get('s2')?.status, 'breaker_open');
-    // 请求级状态区分：超时请求已派发、实发 state 保留输入证据；熔断请求未派发
-    const requests = new Map(sample.jev.requests.map((entry) => [entry.request_id, entry]));
-    const s0Request = requests.get('j1');
-    assert.ok(s0Request);
-    assert.equal(s0Request.dispatched, true);
-    assert.equal(s0Request.answered, false);
-    assert.ok(s0Request.state);
-    assert.deepEqual(JSON.parse(s0Request.state), dispatchedState);
-    assert.equal(s0Request.http_attempts, 2);
-    const s2Request = requests.get('j2');
-    assert.ok(s2Request);
-    assert.equal(s2Request.dispatched, false);
-    assert.equal(s2Request.state, null);
-    assert.equal(s2Request.fail_kind, 'breaker_open');
-    // 来源级经 request_id 关联；熔断行原因 breaker_open
+    // 熔断记账原样：breaker_open 行都进样本，不伪装成完成检查
+    assert.equal(sample.jev.status, 'breaker_open');
+    for (const row of sample.jev.per_source) {
+      assert.equal(row.status, 'breaker_open');
+    }
+    // 请求级：未派发短路——零 fetch 不计 n_requests、载荷 null、attempts 0
+    assert.equal(sample.jev.requests.length, 1);
+    assert.equal(sample.jev.n_requests, 0);
+    const request = sample.jev.requests[0]!;
+    assert.equal(request.dispatched, false);
+    assert.equal(request.answered, false);
+    assert.equal(request.state, null);
+    assert.equal(request.fail_kind, 'breaker_open');
+    assert.equal(request.http_attempts, 0);
+    // 来源级经 request_id 关联；未派发原因 breaker_open
     const sent = new Map(sample.jev.sent.map((entry) => [entry.src, entry]));
     const s0 = sent.get('s0');
     assert.ok(s0);
     assert.equal(s0.request_id, 'j1');
-    assert.equal(s0.dispatched, true);
-    assert.equal(s0.answered, false);
+    assert.equal(s0.dispatched, false);
+    assert.equal(s0.not_dispatched_reason, 'breaker_open');
     const s2 = sent.get('s2');
     assert.ok(s2);
-    assert.equal(s2.request_id, 'j2');
+    assert.equal(s2.request_id, 'j1');
     assert.equal(s2.dispatched, false);
     assert.equal(s2.not_dispatched_reason, 'breaker_open');
   });

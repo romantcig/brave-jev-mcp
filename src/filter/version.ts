@@ -9,15 +9,23 @@
  * - Docker / 无 .git 环境照样可得；不需要给 `npm run build`（tsc + shx）加生成
  *   步骤；git 方案要解决"构建时把 commit 固化进产物"的额外机制，收益相同。
  *
- * 递增纪律：凡改变过滤决策语义的改动（本地规则、Jev 裁决、新颖度、超限阶梯、
- * 预算截断等）必须递增本值并在 git 提交信息里注明——回放时按值定位实现区间；
- * 题库改动不在此处（已有 QUESTION_SET_ID 哈希锚点，改题必须重调 Jev）。
+ * 递增纪律：凡改变过滤决策语义的改动（本地规则、Jev 裁决、新颖度、预算截断等）
+ * 必须递增本值并在 git 提交信息里注明——回放时按值定位实现区间；题库改动不在此处
+ * （已有 QUESTION_SET_ID 哈希锚点，改题必须重调 Jev）。
  *
  * 版本不可得时（理论上不可能：常量在编译单元内）样本层回落 'unknown'，绝不拿
  * 包版本号冒充实现标识。
  */
 
-/** 15 = GitHub 本地清洗更新：撤下搜索块与反应状态行；加入 PR Uh oh!、仓库纯 Topics
+/**
+ * 16 = all-only 清理（2026-10，ALL_ONLY_FILTER_CLEANUP_PLAN）：Jev 请求组织固定为
+ *  全量共享上下文——退役 `jev.context_mode` / `jev.temporal_context` 两开关、旧评分
+ *  题回退、single 请求路径与 32K/64K 预检及全部降级阶梯（不替换成切块、分组或删题
+ *  的输入限额）；时间上下文字段常开，缺日期不回退旧题。零候选零请求，非空候选一次
+ *  共享请求，重试复用同一载荷。样本升级 v5（请求级记录去模式/估算字段、配置快照
+ *  只含 model/timeout_ms/concurrency）；管道顺序、四题门槛、原创论证保护、去重、
+ *  片段评分阈值与 Brave 原序不变。
+ *  15 = GitHub 本地清洗更新：撤下搜索块与反应状态行；加入 PR Uh oh!、仓库纯 Topics
  *  卡片与 About 完整包含回声；成对比较提示扩展至 Release 列表页。管道顺序、
  *  全局 shingle 门槛和题库不变，退役动作名只兼容读取旧样本。
  *  14 = 时间上下文试运行接入（2026-10-03，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN）：
@@ -61,10 +69,16 @@
  *  检查），样板前缀表增补 CTA 条目；乱码碎词原型经审核证实误删真实代码（审核 F1）
  *  撤下未接入。5 = 来源题精简为六道并取消当事方播种排序（去重与输出统一 Brave
  *  原序）；4 = 带年份片段的时间判断；3 = 明确非一手组稳定排序及页面/栏目名单。 */
-export const FILTER_RULES_VERSION = 'filter-rules-15';
+export const FILTER_RULES_VERSION = 'filter-rules-16';
 
-/** 单来源 source / 全量 sources[i] 与 s{id}__题键的首版布局；题意另由题库 ID 标识。
- *  2 = 时间上下文字段进入 state（`retrieval_time` 顶层、每来源 `brave_page_date`），
- *  all 模式片段评分题换用冻结新题（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5）；题键
- *  与数组位置语义不变。 */
-export const CONTEXT_LAYOUT_ID = 'jev-context-2';
+/**
+ * 题键命名空间布局版本：`s{id}__{局部题键}` 全局键、按 state.sources 数组位置生成
+ * 题目（数组位置与来源 ID 数字解耦）。3 = all-only 清理（2026-10）：state 的
+ * `sources[]` 全量数组成为唯一形状（single 的单来源 `source` 形状退役），一次搜索
+ * 至多一次共享请求；题键结构、原题序与数组位置语义不变（2 及更早的差异见 git
+ * 历史）。题意另由题库 ID 标识。
+ * 2 = 时间上下文字段进入 state（`retrieval_time` 顶层、每来源 `brave_page_date`），
+ * all 模式片段评分题换用冻结新题（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5）；题键
+ * 与数组位置语义不变。
+ */
+export const CONTEXT_LAYOUT_ID = 'jev-context-3';

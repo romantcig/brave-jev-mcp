@@ -581,7 +581,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
     // 请求级载荷 + 来源级映射引用（全量共享请求，一次搜索零或一条）
-    assert.equal(sample.format_version, 4);
+    assert.equal(sample.format_version, 5);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -708,7 +708,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           assert.deepEqual(recorded.questions, sent[0].questions);
           assert.equal(recorded.dispatched, true);
           assert.deepEqual(recorded.source_ids, ['s0', 's1']);
-          assert.equal(sample.context_layout_id, 'jev-context-2');
+          assert.equal(sample.context_layout_id, 'jev-context-3');
           assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
         }
       }
