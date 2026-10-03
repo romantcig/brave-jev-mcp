@@ -7,18 +7,20 @@
  * 用法：node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|test|on]
  * mode 缺省 off；其他值 stderr 一行并以退出码 1 结束。
  *
- * test / on 模式是回放：读夹具同目录的 <stem>.jev.json 录制，内联 replayClassifier
- * （与 02-02 回放测试同形：按 state.source.id 取 results 条目，http 200 走生产
- * 同一条 parseJevResponse 路径，否则 failed kind network——单来源失败按"留"）。
+ * test / on 模式是固定回答注入（all-only 共享请求形状）：读夹具同目录的
+ * <stem>.jev.json 录制，内联 replayClassifier——录制值是 v3 十题时代的历史固定回答，
+ * 按候选 ID 查数值后映射到当前全局题键（`{id}__{localKey}`；旧额外题不进回答表，
+ * 片段分数仅当当前候选片段数与录制一致才按位置映射，否则该源缺答保守）。合成桩
+ * 不带 dispatch（管道计零实发），input_tokens=0、usage_complete=false 注明合成用量。
  * 候选集经 collectJevCandidates 与管道步 5 同源核对，录制里缺的候选 id 打一行
- * WARN（源 id 加 url）后照跑；录制缺失或 results 为空 → stderr 提示先重录并
- * 以退出码 1 结束。全程零网络：不 import createJevClassifier，回放零 fetch。
+ * WARN（源 id 加 url）后照跑（该源按缺答保守"留"）；录制缺失或 results 为空 →
+ * stderr 说明并退出码 1。全程零网络：不 import createJevClassifier，注入零 fetch。
  *
  * query / intent / request 取自 fixtures/expected/<stem>.off.json（与标注同参数，
  * dev/dump_local_rules.ts 先例；sanity/noise 子目录夹具沿目录向上找 expected/
  * 全树扫描同名 .off.json）。夹具本体用三形状加载器收窄（复制自
  * src/filter/pipeline.fixtures.test.ts 的 loadBraveFixture，不建 src/testUtils/
- * 新文件）。输出列形态照 dev/jev_probe.py 的对齐表先例翻译。dev/ 不进 tsc /
+ * 新文件）。输出列形态沿既有对齐表先例。dev/ 不进 tsc /
  * prettier 门禁；相对导入带 .js 后缀（NodeNext ESM 直跑约定）。
  */
 import { readFileSync, readdirSync } from 'node:fs';
@@ -26,12 +28,15 @@ import { basename, dirname, join } from 'node:path';
 
 import { parseFilterConfigObject } from '../src/filter/config.js';
 import { parseJevResponse } from '../src/filter/jev/client.js';
+import { allQuestionKey } from '../src/filter/jev/context.js';
+import { SOURCE_QUESTIONS } from '../src/filter/jev/questions.js';
 import { collectJevCandidates, filterLlmContext } from '../src/filter/pipeline.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
   FilterRequest,
   FilterResult,
+  JevAnswer,
   SourceStats,
 } from '../src/filter/types.js';
 
@@ -144,41 +149,63 @@ const request = {
 /** 录制夹具里单个来源的答案条目（只声明回放关心的字段，形状以 probe 落盘为准）。 */
 type RecordedEntry = { url: string; http: number; response: unknown };
 
-/** 录制装载：缺失或 results 为空 → stderr 提示先重录并以退出码 1 结束（计划明文）。 */
+/** 录制装载：缺失或 results 为空 → stderr 说明并以退出码 1 结束。录制是历史固定
+ * 回答资产（v3 十题时代录制，仅作数值来源），不再由 probe 工具重录。 */
 const loadRecording = (): Record<string, RecordedEntry> => {
   const recPath = join(dirname(fxPath), `${stem}.jev.json`);
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(recPath, 'utf8'));
   } catch {
-    die(`读不到录制 ${recPath}——test/on 模式需先重录：python dev/jev_probe.py ${fxPath} "<intent>"`);
+    die(
+      `读不到录制 ${recPath}——test/on 模式需要同目录录制夹具作为固定回答的数值来源`
+    );
   }
   if (!isRecord(parsed) || !isRecord(parsed.results)) {
-    die(`录制缺 results 表：${recPath}——先重录：python dev/jev_probe.py ${fxPath} "<intent>"`);
+    die(`录制缺 results 表：${recPath}`);
   }
   const results = parsed.results as Record<string, RecordedEntry>;
   if (Object.keys(results).length === 0) {
-    die(`录制 results 为空：${recPath}——先重录：python dev/jev_probe.py ${fxPath} "<intent>"`);
+    die(`录制 results 为空：${recPath}`);
   }
   return results;
 };
 
-/** 回放传输（02-02 回放测试同形）：按 state.source.id 取录制条目，200 走生产同一条 parseJevResponse。 */
+/** 固定回答注入（all-only 共享请求形状，合成桩；与 pipeline.fixtures.test.ts 同契约）：
+ * 一次共享请求构造一张完整 answers 表——来源级四题按候选 ID 查录制值映射到全局题键
+ * `{id}__{localKey}`，旧额外题（v3 十题残留）不进回答表；片段分数仅当当前候选片段
+ * 数与录制 snip 键数一致才按位置映射（身份一致），否则该源整体缺答保守，绝不按压缩
+ * 位置错位套用。不带 dispatch（管道计零实发）；input_tokens=0、usage_complete=false
+ * 注明合成用量。 */
 const replayClassifier =
   (results: Record<string, RecordedEntry>): ClassifyDeps['classify'] =>
   async ({ state }) => {
-    const entry = results[state.source.id];
-    if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
-    const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
-    return parsed.ok
-      ? {
-          status: 'answered',
-          model: parsed.model,
-          answers: parsed.answers,
-          input_tokens: parsed.input_tokens,
+    const answers: Record<string, JevAnswer> = {};
+    for (const source of state.sources) {
+      const entry = results[source.id];
+      if (!entry || entry.http !== 200) continue;
+      const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
+      if (!parsed.ok) continue;
+      const recorded = parsed.answers;
+      for (const localKey of Object.keys(SOURCE_QUESTIONS)) {
+        const answer = recorded[localKey];
+        if (answer?.kind === 'noul') answers[allQuestionKey(source.id, localKey)] = answer;
+      }
+      const recordedSnipCount = Object.keys(recorded).filter((key) => /^snip\d+$/.test(key)).length;
+      if (recordedSnipCount === source.snippets.length) {
+        for (let i = 0; i < source.snippets.length; i += 1) {
+          const answer = recorded[`snip${i}`];
+          if (answer?.kind === 'score') answers[allQuestionKey(source.id, `snip${i}`)] = answer;
         }
-      : // 录制声称 200 但解析不过：响应形状坏，按校验失败记账（契约里无 'shape' kind）
-        { status: 'failed', kind: 'validation' };
+      }
+    }
+    return {
+      status: 'answered',
+      model: 'fixture-replay',
+      answers,
+      input_tokens: 0,
+      usage_complete: false,
+    };
   };
 
 // ---------------------------------------------------------------------------
@@ -189,7 +216,7 @@ const config = parseFilterConfigObject(mode === 'off' ? {} : { mode });
 const results = mode === 'off' ? undefined : loadRecording();
 
 // 候选覆盖核对（与管道步 5 同源 collectJevCandidates）：录制里缺的候选 id 打一行
-// WARN（源 id 加 url）后照跑——replayClassifier 对缺失按 failed network → "留"
+// WARN（源 id 加 url）后照跑——注入桩对缺失候选不给答案，来源级缺答保守 → "留"
 if (results !== undefined) {
   for (const candidate of collectJevCandidates(data, request, config)) {
     if (!(candidate.id in results)) {

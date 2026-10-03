@@ -23,13 +23,15 @@ import { fileURLToPath } from 'node:url';
 import { parseFilterConfigObject } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
 import { parseJevResponse } from './jev/client.js';
-import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
+import { allQuestionKey } from './jev/context.js';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
 import { filterLlmContext } from './pipeline.js';
 import { zeroLocal } from './stats.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
   FilterRequest,
+  JevAnswer,
   LocalStats,
   SnippetStats,
   SourceStats,
@@ -455,8 +457,6 @@ describe('budget trimming on a real fixture', () => {
           model: DEFAULT_JEV_MODEL,
           timeoutMs: 15000,
           concurrency: 12,
-          contextMode: 'single',
-          temporalContext: false,
         },
         logDir: join(homedir(), '.brave-jev', 'logs'),
       }
@@ -536,22 +536,51 @@ const loadRecording = (rel: string): Record<string, { http: number; response: un
   return parsed.results as Record<string, { http: number; response: unknown }>;
 };
 
-/** 回放传输：按 state.source.id 取录制条目，200 走生产同一条 parseJevResponse。 */
+/** 回放注入（任务 E 固定回答契约，合成桩）：
+ *  - 一次共享请求（state.sources[] + 命名空间题表）构造一张完整 answers 表返回，
+ *    classify 恰被调用一次；
+ *  - 来源级四道当前题按候选 ID 查录制条目，录制 noul 值映射到全局题键
+ *    `{id}__{localKey}`（如 s0 的 is_off_topic → s0__is_off_topic）；旧额外题
+ *    （v3 十题残留的 worth_keeping 等）不参与裁决，不进回答表；
+ *  - 片段分数按位置映射到当前候选片段——实测两份夹具每源的当前片段数与录制
+ *    snip 键数逐一相等（位置映射即身份映射）；若未来本地规则变化导致片段数
+ *    不一致，该源片段分数整体不给（缺答保守），绝不按压缩位置错位套用旧分数。
+ *    旧分数用于当前时间上下文评分题是合成桩：只验证管道的等长应用与裁决行为，
+ *    不代表模型对新题的真实回答；
+ *  - 纯回答注入不带 dispatch（计划 §3.3）：管道计零实发；input_tokens 为 0 且
+ *    usage_complete=false，注明合成用量。 */
 const replayClassifier =
   (results: Record<string, { http: number; response: unknown }>): ClassifyDeps['classify'] =>
-  async ({ state }) => {
-    if (!('source' in state)) return { status: 'failed', kind: 'validation' };
-    const entry = results[state.source.id];
-    if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
-    const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
-    return parsed.ok
-      ? {
-          status: 'answered',
-          model: parsed.model,
-          answers: parsed.answers,
-          input_tokens: parsed.input_tokens,
+  async ({ state, questions }) => {
+    const answers: Record<string, JevAnswer> = {};
+    for (const source of state.sources) {
+      const entry = results[source.id];
+      if (!entry || entry.http !== 200) continue;
+      const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
+      if (!parsed.ok) continue;
+      const recorded = parsed.answers;
+      // 来源级：按当前题库的来源级键查录制值，再按生产连接符映射到全局题键
+      // （如 s0 的 is_off_topic → s0__is_off_topic）；录制缺键时缺答保守
+      for (const localKey of Object.keys(SOURCE_QUESTIONS)) {
+        const answer = recorded[localKey];
+        if (answer?.kind === 'noul') answers[allQuestionKey(source.id, localKey)] = answer;
+      }
+      // 片段级：当前片段数与录制 snip 键数一致才按位置映射，否则整体缺答
+      const recordedSnipCount = Object.keys(recorded).filter((key) => /^snip\d+$/.test(key)).length;
+      if (recordedSnipCount === source.snippets.length) {
+        for (let i = 0; i < source.snippets.length; i += 1) {
+          const answer = recorded[`snip${i}`];
+          if (answer?.kind === 'score') answers[allQuestionKey(source.id, `snip${i}`)] = answer;
         }
-      : { status: 'failed', kind: 'validation' };
+      }
+    }
+    return {
+      status: 'answered',
+      model: 'fixture-replay',
+      answers,
+      input_tokens: 0,
+      usage_complete: false,
+    };
   };
 
 /** 期望文件头三件套（回放与 off 期望同参数，管道夹具测试同口径）。 */
@@ -702,11 +731,21 @@ for (const stem of ['jev_release_default', 'jev_release_strict']) {
     fixtureRequest,
     offConfig
   );
+  // testRun 的注入桩带调用计数：验证一次共享请求覆盖全部候选（任务 E 固定回答契约）
+  let classifyCalls = 0;
+  let classifiedSourceCount = 0;
+  const innerClassify = replayClassifier(recording);
   const testRun = await filterLlmContext(
     loadBraveFixture(`${stem}.json`),
     fixtureRequest,
     { ...offConfig, mode: 'test' },
-    { classify: replayClassifier(recording) }
+    {
+      classify: async (req) => {
+        classifyCalls += 1;
+        classifiedSourceCount = req.state.sources.length;
+        return innerClassify(req);
+      },
+    }
   );
   const onRun = await filterLlmContext(
     loadBraveFixture(`${stem}.json`),
@@ -728,8 +767,20 @@ for (const stem of ['jev_release_default', 'jev_release_strict']) {
       assert.deepEqual(testRun.stats.sources, onRun.stats.sources);
     });
 
-    it('still calls Jev for every candidate and books verdict/reason in per_source', () => {
-      assert.equal(testRun.stats.jev?.n_requests, Object.keys(recording).length);
+    it('sends one shared request covering every candidate and books verdict/reason in per_source', () => {
+      // 一次共享请求：classify 恰被调用一次、载荷带全部候选（§3.1）；纯回答注入
+      // 不带 dispatch（§3.3）→ n_requests 计零实发，per_source 行仍逐来源记账
+      assert.equal(classifyCalls, 1, 'classify must be called exactly once per filter run');
+      assert.equal(
+        classifiedSourceCount,
+        Object.keys(recording).length,
+        'the shared request must cover every candidate'
+      );
+      assert.equal(
+        testRun.stats.jev?.n_requests,
+        0,
+        'pure answer injection without dispatch books zero requests (§3.3)'
+      );
       const rows = testRun.stats.jev?.per_source ?? [];
       assert.equal(rows.length, Object.keys(recording).length);
       for (const row of rows) {

@@ -1,9 +1,14 @@
 /**
  * 本地规则后候选集 dump（02-01）：对一份 Brave 夹具跑 `collectJevCandidates`
  * （本地规则层步 1–4 的幸存口径），stdout 只打印一行 JSON：
- * `{ query, intent, sources: JevCandidate[] }`。`dev/jev_probe.py` 以子进程调用
- * 本脚本，只对幸存来源发请求、对幸存片段录答案——录好的 `.jev.json` 因此与
- * 管道步 5 发送的 state 逐源逐片段对齐（02-RESEARCH A14 的解法）。
+ * `{ query, intent, sources: JevCandidate[] }`。本工具保留为本地候选查看工具——
+ * 不构造、不发送任何 Jev 请求。
+ *
+ * 历史配套说明：`dev/jev_probe.py`（v3 历史十题录制工具，已迁入 archive/ 不再维护）
+ * 曾以子进程调用本脚本，只对幸存来源发请求、对幸存片段录答案——两份 fixtures/
+ * *.jev.json 历史录制因此与管道步 5 发送的 state 逐源逐片段对齐（02-RESEARCH A14）。
+ * probe 退役后本脚本输出仍是核对"当前规则下哪些候选会进入 Jev 共享请求"的直接
+ * 手段：sources 数组即请求 state.sources 的内容，每来源 snippets 数即其片段评分题数。
  *
  * 用法：node --import tsx dev/dump_local_rules.ts fixtures/<stem>.json
  *

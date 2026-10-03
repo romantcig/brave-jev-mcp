@@ -1,8 +1,15 @@
 /**
  * 全量接入的有限真实冒烟与严格离线回放。使用已构建 dist；正文及 HTTP 证据只写外部目录。
  * node dev/full-context-smoke.mjs <仓库外目录> --plan|--live|--offline
- * 目录预置 cases.json：[{ id, origin, data, request: {params,intent}, config }]。
- * 默认只规划；live 最多两次逻辑请求、六次 HTTP、60000 估算 token（含重试余量）。
+ * 目录预置 cases.json：[{ id, origin, data, request: {params,intent,retrievalTime?}, config }]。
+ * 默认只规划；live 最多两次逻辑请求、六次 HTTP——重试是传输层对真实失败的反应，
+ * 不设输入 token 估算额度（旧"60000 估算 token"固定轮次额度是过去一次冒烟的累计
+ * 约束，不是 Jev 服务上限，已随预检体系退役，不重建输入 token 检测）。
+ *
+ * all-only（ALL_ONLY_FILTER_CLEANUP_PLAN §3.1/§4 任务 E）：载荷用唯一构造器
+ * buildContextRequest 准备，与实际管道调用共用同一个显式检索时间
+ * （cases.json 的 request.retrievalTime，经 dist 的 normalizeRetrievalTime 归一一次——
+ * 两个位置绝不分别取时间，也从不读取系统时间补值）。
  */
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -11,7 +18,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFilterConfigObject } from '../dist/filter/config.js';
 import { collectJevCandidatesDetailed, filterLlmContext } from '../dist/filter/pipeline.js';
-import { planAllRequest } from '../dist/filter/jev/context.js';
+import { buildContextRequest } from '../dist/filter/jev/context.js';
+import { normalizeRetrievalTime } from '../dist/filter/temporal.js';
 import { createJevClassifier, hasJevKey, JEVI_ENDPOINT } from '../dist/filter/jev/client.js';
 import { QUESTION_SET_ID } from '../dist/filter/jev/questions.js';
 import { CONTEXT_LAYOUT_ID, FILTER_RULES_VERSION } from '../dist/filter/version.js';
@@ -47,14 +55,23 @@ const prepared = cases.map((item) => {
   const config = parseFilterConfigObject({
     ...item.config,
     mode: 'test',
-    jev: { ...item.config?.jev, context_mode: 'all' },
+    jev: { ...item.config?.jev },
     log_dir: join(root, 'samples'),
   });
   const candidates = collectJevCandidatesDetailed(item.data, item.request, config);
   assert.ok(candidates.length > 1, '本轮须覆盖多来源全量路径');
-  const planned = planAllRequest(candidates, item.request.params.query, item.request.intent);
-  assert.ok(planned.ok, '本轮不自动扩展为 single 网络请求');
-  const { state, questions, estimates } = planned.plan;
+  // 检索时间归一一次、两处共用：准备载荷与实际管道调用使用同一显式值
+  const retrievalTime = normalizeRetrievalTime(item.request.retrievalTime);
+  const request = {
+    ...item.request,
+    ...(retrievalTime !== undefined ? { retrievalTime } : {}),
+  };
+  const { state, questions } = buildContextRequest(
+    candidates,
+    item.request.params.query,
+    item.request.intent,
+    retrievalTime
+  );
   const payload = { state, questions };
   const identity = {
     runtime_hash: runtimeHash,
@@ -64,7 +81,7 @@ const prepared = cases.map((item) => {
     model: config.jev.model,
     payload,
   };
-  return { item, config, payload, identity, key: hash(identity), estimates };
+  return { item, config, request, payload, identity, key: hash(identity) };
 });
 const plan = prepared.map((entry) => ({
   id: entry.item.id,
@@ -75,14 +92,7 @@ const plan = prepared.map((entry) => ({
   model: entry.config.jev.model,
   sources: entry.payload.state.sources.length,
   questions: Object.keys(entry.payload.questions).length,
-  temporal_questions: Object.keys(entry.payload.questions).filter((key) =>
-    key.includes('__time_snip')
-  ).length,
-  estimates: entry.estimates,
-  retry_upper_estimate: entry.estimates.total_limit_estimate * 3,
 }));
-const upperEstimate = plan.reduce((sum, entry) => sum + entry.retry_upper_estimate, 0);
-assert.ok(upperEstimate <= 60000, '累计含重试估算超过本轮上限');
 const manifest = {
   mode,
   runtime_hash: runtimeHash,
@@ -91,7 +101,6 @@ const manifest = {
   question_set: QUESTION_SET_ID,
   logical_requests: 2,
   max_http_attempts: 6,
-  estimated_input_upper_bound: upperEstimate,
   plan,
 };
 console.log(JSON.stringify(manifest, null, 2));
@@ -106,7 +115,6 @@ if (mode === '--live') {
 }
 
 let attempts = 0;
-let chargedEstimate = 0;
 let active;
 const nativeFetch = globalThis.fetch;
 const summary = { ...manifest, http_attempts: 0, known_input_tokens: 0, results: [] };
@@ -117,9 +125,8 @@ globalThis.fetch = async (url, init) => {
   assert.ok(active);
   const sent = JSON.parse(String(init?.body));
   assert.deepEqual(sent, { model: active.config.jev.model, ...active.payload });
-  assert.ok(attempts < 6 && chargedEstimate + active.estimates.total_limit_estimate <= 60000);
+  assert.ok(attempts < 6, '两次逻辑请求的六次 HTTP 上限（含真实重试）');
   const attempt = ++attempts;
-  chargedEstimate += active.estimates.total_limit_estimate;
   const evidence = { case_id: active.item.id, attempt, request: sent };
   save(`http-${attempt}.json`, evidence);
   try {
@@ -138,7 +145,7 @@ globalThis.fetch = async (url, init) => {
 try {
   for (const entry of prepared) {
     active = entry;
-    const { item, config } = entry;
+    const { item, config, request } = entry;
     let outcome;
     let calls = 0;
     const client = createJevClassifier(config.jev, process.env);
@@ -150,13 +157,29 @@ try {
         save(`${item.id}.record.json`, { key: entry.key, identity: entry.identity, outcome });
       } else {
         const recorded = read(join(root, `${item.id}.record.json`));
+        // 先按版本标识拒绝旧 identity，再核对完整载荷身份
+        assert.equal(
+          recorded.identity?.rules,
+          FILTER_RULES_VERSION,
+          '录制来自旧 filter_rules_version，拒绝复用旧答案——请用当前构建重录'
+        );
+        assert.equal(
+          recorded.identity?.layout,
+          CONTEXT_LAYOUT_ID,
+          '录制来自旧 context_layout_id，拒绝复用旧答案——请用当前构建重录'
+        );
+        assert.equal(
+          recorded.identity?.question_set,
+          QUESTION_SET_ID,
+          '录制来自旧 question_set，拒绝复用旧答案——请用当前构建重录'
+        );
         assert.equal(recorded.key, entry.key, '输入或构建改变，拒绝复用旧答案');
         assert.deepEqual(recorded.identity, entry.identity);
         outcome = recorded.outcome;
       }
       return structuredClone(outcome);
     };
-    const filtered = await filterLlmContext(item.data, item.request, config, { classify });
+    const filtered = await filterLlmContext(item.data, request, config, { classify });
     const writer = createSampleWriter(config);
     const requestId = randomUUID();
     const path = writer.allocatePath(requestId);
@@ -179,7 +202,7 @@ try {
       'saved'
     );
     const sample = read(path.absolute);
-    assert.equal(sample.format_version, 4);
+    assert.equal(sample.format_version, 5);
     assert.equal(sample.context_layout_id, CONTEXT_LAYOUT_ID);
     assert.deepEqual(sample.pre_filter, item.data);
     assert.deepEqual(sample.final_return, { payload: filtered.result, status_line: statusLine });
@@ -209,7 +232,7 @@ try {
         return structuredClone(outcome);
       },
     };
-    const on = await filterLlmContext(item.data, item.request, { ...config, mode: 'on' }, replay);
+    const on = await filterLlmContext(item.data, request, { ...config, mode: 'on' }, replay);
     assert.deepEqual(on.result, filtered.result);
     assert.deepEqual(on.stats.sources, filtered.stats.sources);
     assert.deepEqual(on.stats.local, filtered.stats.local);
@@ -236,6 +259,5 @@ try {
 } finally {
   globalThis.fetch = nativeFetch;
   summary.http_attempts = attempts;
-  summary.dispatched_input_estimate = chargedEstimate;
   save(`${mode.slice(2)}-summary.json`, summary);
 }

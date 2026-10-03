@@ -27,12 +27,16 @@
  *     ——CONTEXT 允许 test 多出样本定位元信息，04-02）；状态行 sample 路径指向真实
  *     存在的样本文件、样本 request_id 与该次 JSONL 记录相同、JSONL 信封
  *     sample.status 为 saved（SC3 全链）；per_source 断言（恰 12 行
- *     全部 answered、无 fail_kind、十题答案与 snippet_scores 对齐录制真值）与 on
+ *     全部 answered、无 fail_kind、当前四题答案与 snippet_scores 对齐录制真值）与 on
  *     同口径；新记录不再产生 shadow_diff（恒 null，字段仅为读旧记录保留）；
- *   - on：片段总数 = on 期望（61，由夹具契约差集推导：59 − 删 9 + 恢复 11）；
+ *   - on：片段总数 = on 期望（59，由夹具契约差集推导：59 − 删 9 + 恢复 9，净差 0
+ *     ——filter-rules-5 取消播种序后 datacamp#0 与 mezha#4 随 off 归一）；
  *     逐 URL 幸存索引身份对照 ON_KEPT_SNIPPETS 常数（独立运行固化，9 删/11 恢复以
  *     身份差集互钉）；per_source 断言同 test——no_key 静默短路、空回答、
  *     validation 兜底都在这里现形（E-01/E-02 的直接防线）。
+ *   - all-only 请求计数（all-only 清理）：test/on 各恰 1 次共享请求（桩侧记账行与
+ *     日志 n_requests 交叉验证），off 恰 0；样本 format_version 5、requests 恰 1 条、
+ *     sent 仍逐来源 12 行。
  *
  * --live（D-18，R-09 合并 E-04/IN-01，F-03/F-04）：真实网络手动开关，目标是确认
  * Brave + Jev 链路。配置解析与生产同口径（复用 src/filter/config.ts 导出的
@@ -77,7 +81,11 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 import { JEV_CONFIG_FILE_ENV, parseFilterConfigObject } from '../src/filter/config.js';
 import { JEVI_ENDPOINT } from '../src/filter/jev/client.js';
-import { DEFAULT_JEV_MODEL } from '../src/filter/jev/questions.js';
+import {
+  DEFAULT_JEV_MODEL,
+  SNIPPET_CRITERIA,
+  SOURCE_QUESTIONS,
+} from '../src/filter/jev/questions.js';
 
 // ---------------------------------------------------------------------------
 // argv：--mode off|test|on（缺省三模式全量）；--live 真实网络手动开关（互斥）
@@ -143,28 +151,30 @@ const expected = JSON.parse(
 // ---------------------------------------------------------------------------
 
 // on 相对 off 的片段差集计数（夹具契约，与 pipeline.fixtures.test.ts 的差集真值
-// 同源）：off − on 删 9 条、on − off 恢复 11 条（逐条身份清单见 ON_KEPT_SNIPPETS
-// 注释），净增 2。旧 shadow_diff 四字段随双链退役（04-01）不再产生，这里只保留
-// 差集计数作 on 期望推导与身份差集互钉。
+// 同源）：off − on 删 9 条、on − off 恢复 9 条（逐条身份清单见 ON_KEPT_SNIPPETS
+// 注释），净差 0。filter-rules-5 取消当事方播种序后 datacamp#0 与 mezha#4 随 off
+// 归一（不再恢复），旧值恢复 11 作废；旧 shadow_diff 四字段随双链退役（04-01）
+// 不再产生，这里只保留差集计数作 on 期望推导与身份差集互钉。
 const ON_DELTA_REMOVED = 9;
-const ON_DELTA_RESTORED = 11;
+const ON_DELTA_RESTORED = 9;
 
 // off 幸存片段总数来自期望文件 final.n_snippets；on 期望按夹具契约差集推导
-// （59 − 9 + 11 = 61），与夹具测试同口径，不另立硬编码
+// （59 − 9 + 9 = 59，净差 0），与夹具测试同口径，不另立硬编码
 const OFF_N_SNIPPETS = expected.final.n_snippets;
 const ON_N_SNIPPETS = OFF_N_SNIPPETS - ON_DELTA_REMOVED + ON_DELTA_RESTORED;
 
 // on 侧逐 URL 幸存片段索引（F-05，R-11 身份验收的 on 半边；键与 off 期望文件同式，
-// "i" 或 "i.p"，幸存序）。导出方法：2026-09-29 一次性脚本 import src/filter 的
+// "i" 或 "i.p"，幸存序）。导出方法：2026-10-04 一次性脚本 import src/filter 的
 // filterLlmContext，同 pipeline.fixtures.test.ts 口径（fixtures/jev_release_default.
 // jev.json 录制 + 夹具答案回放）跑 off 与 on 各一次——off 先对期望文件逐条核对
 // （URL 序 / 逐 URL 幸存索引 / 总数 59）通过后，才取 on 的 stats.sources 幸存键。
 // 期望不由冒烟自身的被测运行反推；夹具或过滤语义改动时必须重跑导出并与
 // pipeline.fixtures.test.ts 同步。差集身份（与 ON_DELTA_REMOVED / ON_DELTA_RESTORED
-// 的 9/11 互钉）：
+// 的 9/9 互钉，与 fixtures.test 的 TEST_REMOVED_SNIPPET_IDS / TEST_DIFF_EXPECTED
+// 同源互证）：
 // off − on 删 9 = typesafe.ai#4/#5/#6/#7、ua.news#1/#4/#6、mezha#0/#2；
-// on − off 恢复 11 = theregister#7、explainx#1.0/#1.4、flowtivity#1/#3.0/#3.1/#3.3、
-// datacamp#0、typesafe.ai#0/#2、mezha#4。
+// on − off 恢复 9 = theregister#7、explainx#1.0/#1.4、flowtivity#1/#3.0/#3.1/#3.3、
+// typesafe.ai#0/#2。
 const ON_KEPT_SNIPPETS: Record<string, string[]> = {
   'https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711':
     ['0', '1', '2', '3', '4', '5', '6', '7'],
@@ -198,23 +208,25 @@ const ON_KEPT_SNIPPETS: Record<string, string[]> = {
     '3.3',
     '3.4',
   ],
-  'https://www.datacamp.com/blog/system-one-models-jev': ['0', '3', '4', '5', '6', '7'],
+  'https://www.datacamp.com/blog/system-one-models-jev': ['3', '4', '5', '6', '7'],
   'https://www.kucoin.com/news/flash/typesafe-ai-launches-jev-a-non-chat-ai-model-193x-faster-than-claude':
     ['1', '2', '4'],
   'https://typesafe.ai/blog/introducing-system-one-models-and-jev': ['0', '1', '2', '3'],
   'https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch':
     ['0', '2', '3'],
-  'https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/': ['1', '3', '4', '5', '7'],
+  'https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/': ['1', '3', '5', '7'],
   'https://www.therundown.ai/news/typesafe-jev-ai-decisions-software': ['3', '4'],
 };
 
-// 片段文本形态见证（F-05/R2）：返回文本 → 片段索引位置级匹配的期望。46 条原文
+// 片段文本形态见证（F-05/R2）：返回文本 → 片段索引位置级匹配的期望。44 条原文
 // 形态无需见证（夹具原文逐字相等）；17 条按独立运行的幸存输出逐字固化：JSON-LD
 // 转换段（explainx#1 六段、flowtivity#3 五段——文本派生自 JSON 不在原文里）、样板
 // 行剥除后按行重组的 theregister#1 与 aiwiki#0（不再是原文连续片段）、剥样板后的
 // 完整尾部 heise#1 与 pasquale#2（R2 起逐字相等，通用后缀匹配已删——空串与任意
-// 截断不再假绿）。与 ON_KEPT_SNIPPETS 同一次脚本导出，覆盖 off/on 两模式的全部
-// 转换形态（转换形态与模式无关）。
+// 截断不再假绿）、样板剥除后不再等于原文的 ua.news#1 与 mezha#1（filter-rules-13/15
+// 的本地清洗更新所致，2026-10-04 重导出；幸存索引身份与差集不变）。与
+// ON_KEPT_SNIPPETS 同一次脚本导出，覆盖 off/on 两模式的全部转换形态（转换形态与
+// 模式无关）。
 const SNIPPET_WITNESS_TEXTS: Record<string, Record<string, string>> = {
   'https://www.heise.de/en/news/AI-model-Jev-to-make-machines-decide-faster-11457071.html': {
     '1': 'TypeSafe AI demonstrates how Jev could help companies using customer service routing as an example. Jev decides there how an incoming request should be processed. A simple question about order status can go to normal program code, a product question to a language model, and a complex or uncertain case to a human.',
@@ -255,6 +267,14 @@ const SNIPPET_WITNESS_TEXTS: Record<string, Record<string, string>> = {
     '3.4':
       'Q: Is Jev available to use today?\nA: Only via early access waitlist at typesafe.ai as of September 16, 2026. There is no OpenRouter or AWS Bedrock listing yet, and TypeSafe has published no architecture paper or public benchmark scores.',
   },
+  'https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch': {
+    '1':
+      '# TypeSafe unveils Jev model for software automation — TechCrunch\nLev Shevtsov 18 September 2026 21:58',
+  },
+  'https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/': {
+    '1':
+      '# TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation\n### Russian Drones Kill Two Men in Tekstylne, Kherson Region\n\nFriday, 18 September 2026, 23:01\n\n\nA former OpenAI contributor says the next automation breakthrough may not speak back at all, but quietly choose the right action',
+  },
 };
 
 // 9 删 / 11 恢复从计数升级为身份清单（F-05）：差集只从两份常数推导（off 期望文件
@@ -292,10 +312,11 @@ const jevRecording = JSON.parse(
     string,
     { url: string; http: number; response: { answers?: Record<string, unknown> } }
   >;
-  questions?: Record<string, string>;
 };
 const nRecordedSources = Object.keys(jevRecording.results).length;
-const SOURCE_QUESTION_KEYS = Object.keys(jevRecording.questions ?? {}).sort();
+// 当前四题键（all-only 唯一题库的来源级部分）：单一来源是 src 的 SOURCE_QUESTIONS，
+// 桩回放的 answers 只覆盖这四题（旧 v3 十题的其余键不进响应）
+const CURRENT_SOURCE_KEYS = Object.keys(SOURCE_QUESTIONS).sort();
 
 // 录制夹具装载自检：全 200（全 answered 契约的前提）且每源 snip 答案键连续——
 // 夹具坏了在这里死，不留给断言去误报
@@ -542,6 +563,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       BRAVE_API_KEY: FAKE_BRAVE_KEY,
       SMOKE_JEV_MODEL: DEFAULT_JEV_MODEL,
       SMOKE_JEV_ENDPOINT: JEVI_ENDPOINT,
+      SMOKE_JEV_CRITERIA: JSON.stringify(SNIPPET_CRITERIA),
     },
     stderr: 'pipe',
   });
@@ -783,8 +805,8 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       );
       assert.equal(
         jev.n_requests,
-        nRecordedSources,
-        `log: ${runMode} jev.n_requests must equal the recording's ${nRecordedSources} sources, got ${jev.n_requests}`
+        1,
+        `log: ${runMode} jev.n_requests must be 1 (one shared request covers every candidate), got ${jev.n_requests}`
       );
       const rows = jev.per_source;
       assert.ok(Array.isArray(rows), `log: ${runMode} jev.per_source must be an array`);
@@ -812,23 +834,18 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           jevRecording.results[id]?.url,
           `log: per_source ${id} url must match the recording entry`
         );
-        // 十题答案齐全：键集合等于录制顶层 questions 的来源级键
+        // 当前四题答案齐全：键集合等于 SOURCE_QUESTIONS（旧 v3 十题的其余键不进
+        // 桩响应；time_snip 独立时间题已退役，answers 不得再出现）
         const answers = row.answers;
         assert.ok(
           answers !== undefined && typeof answers === 'object',
-          `log: per_source ${id} must carry the ten source-level answers`
+          `log: per_source ${id} must carry the four source-level answers`
         );
         assert.deepEqual(
-          Object.keys(answers)
-            .filter((key) => !/^time_snip\d+$/.test(key))
-            .sort(),
-          SOURCE_QUESTION_KEYS,
-          `log: per_source ${id} answers must cover exactly the recorded source-level questions`
+          Object.keys(answers).sort(),
+          CURRENT_SOURCE_KEYS,
+          `log: per_source ${id} answers must cover exactly the current four source-level questions`
         );
-        // 仅离线冒烟的新增时间题使用合成零值；旧十题仍逐键对账。
-        for (const [key, value] of Object.entries(answers)) {
-          if (/^time_snip\d+$/.test(key)) assert.equal(value, 0);
-        }
         // snippet_scores 齐全：数组、长度等于该源候选数真值（录制 snip 键数）、全有限数
         assert.ok(
           Array.isArray(row.snippet_scores),
@@ -872,14 +889,14 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `sample for filter debugging - original results, filtered results, Jev decisions: the status-line path must exist at return time — ${sampleAbsPath}`
         );
         const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
-        // 全量接入：v4 按请求保存实发载荷；历史 v1–v3 必须按旧格式读取
+        // 全量接入：v5 按共享请求保存实发载荷；历史 v1–v4 必须按旧格式读取
         assert.equal(
           sample.format_version,
-          4,
-          'sample for filter debugging - original results, filtered results, Jev decisions: format_version must be 4'
+          5,
+          'sample for filter debugging - original results, filtered results, Jev decisions: format_version must be 5'
         );
-        // v4 来源必须关联到真实请求；不能只改版本号而漏掉新的证据链。
-        assert.equal(sample.jev?.requests?.length, nRecordedSources);
+        // all-only：一次共享请求覆盖全部候选；每来源行必须关联到这条真实请求
+        assert.equal(sample.jev?.requests?.length, 1);
         for (const source of sample.jev?.sent ?? []) {
           const request = sample.jev?.requests?.find(
             (item) => item.request_id === source.request_id
@@ -924,7 +941,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           'sample for filter debugging - original results, filtered results, Jev decisions: pre_filter must carry the full pre-filter response'
         );
         // 实发映射（04-04 R1 v2 捕获口径）：keep 来源恰 12（本夹具全部来源
-        // answered），片段三维全 true（无阶梯降级、分数收齐、全部进入实发 state）
+        // answered），片段三维全 true（一次共享请求覆盖、分数收齐、全部进入实发 state）
         assert.equal(
           sample.jev?.sent?.length,
           nRecordedSources,
@@ -954,13 +971,14 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       !stderrText.includes('[smoke-stub]'),
       `stderr: the stub must accept every request identity (R-12 markers absent) — ${stderrText}`
     );
-    // 桩侧 Jev 请求数（R-11 #1 的桩侧计数 / #8 的记账对账）：off 恰 0，test/on 恰 12。
-    // 日志 n_requests 是服务器自报，这里以桩的独立计数交叉验证
-    const replays = [...stderrText.matchAll(/\[smoke-replay\] jev /g)].length;
+    // 桩侧 Jev 请求数（R-11 #1 的桩侧计数 / #8 的记账对账）：off 恰 0，test/on 恰 1
+    // （all-only：全部候选进同一次共享请求）。日志 n_requests 是服务器自报，这里以
+    // 桩的独立计数交叉验证
+    const replays = [...stderrText.matchAll(/\[smoke-replay\] shared request /g)].length;
     assert.equal(
       replays,
-      runMode === 'off' ? 0 : nRecordedSources,
-      `stderr: stub replay count must be ${runMode === 'off' ? 0 : nRecordedSources} in ${runMode}, got ${replays}`
+      runMode === 'off' ? 0 : 1,
+      `stderr: stub replay count must be ${runMode === 'off' ? 0 : 1} in ${runMode}, got ${replays}`
     );
 
     return { content };
