@@ -66,7 +66,6 @@ export type {
   JevCandidateDetailed,
   JevDispatchPayload,
   JevDispatchRecord,
-  JevRequestMode,
   JevRequestRecord,
   LocalStats,
   SnippetRemovalReason,
