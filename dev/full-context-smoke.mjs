@@ -113,6 +113,30 @@ if (mode === '--live') {
   // 首次派发之前永久认领目录；中断后也不能覆盖证据或从零重算调用预算。
   claimLiveRun(root, manifest);
 }
+if (mode === '--offline') {
+  // 旧 identity 在进入管道前拒绝：classify 闭包里的断言会被管道防御语义转成
+  // network failed（§3.3：注入面意外 reject 记网络失败），错误消息无法冒出——
+  // 预检同样的 identity 链，让拒绝原因（旧录制 / 缺录制）直接可见。
+  for (const entry of prepared) {
+    const recorded = read(join(root, `${entry.item.id}.record.json`));
+    assert.equal(
+      recorded.identity?.rules,
+      FILTER_RULES_VERSION,
+      `${entry.item.id}: 录制来自旧 filter_rules_version，拒绝复用旧答案——请用当前构建重录`
+    );
+    assert.equal(
+      recorded.identity?.layout,
+      CONTEXT_LAYOUT_ID,
+      `${entry.item.id}: 录制来自旧 context_layout_id，拒绝复用旧答案——请用当前构建重录`
+    );
+    assert.equal(
+      recorded.identity?.question_set,
+      QUESTION_SET_ID,
+      `${entry.item.id}: 录制来自旧 question_set，拒绝复用旧答案——请用当前构建重录`
+    );
+    assert.equal(recorded.key, entry.key, `${entry.item.id}: 输入或构建改变，拒绝复用旧答案`);
+  }
+}
 
 let attempts = 0;
 let active;
