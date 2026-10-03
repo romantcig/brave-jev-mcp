@@ -50,7 +50,19 @@ Jev 请求组织只有一种：全部候选共享一次请求（all）。曾经�
 3. 请求级记录 `jev.requests` 一次搜索至多一条：`request_id`、`source_ids`、`dispatched`／`answered`／`usage_complete`、真实 `input_tokens`、`mapping`；字段中没有 `mode`、`requested`、`effective`、`fallback_reason`、`planned_estimates`。`n_requests` ≤ 1，`n_http_attempts` 单独记真实 HTTP 尝试（含重试）。
 4. `question_set_id` 为 `0ef644dda1ad`，`filter_rules_version` 为 `filter-rules-16`。
 
-旧样本按其自身版本语义读取，不迁移、不改写（v1 的 sent 段是阶梯前重建口径、v2/v3 是逐来源 state、v4 起有请求级载荷——读取规则见 `src/filter/sample.ts` 头注释）。核对生效版本应查看配置快照、实际请求记录和保存的题目，不能只凭题库 ID 判断。
+旧样本按其自身 `format_version` 读取，不迁移、不改写：
+
+| 版本 | 载荷与映射                                                                             | 读取时的边界                                                                                              |
+| ---- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| v1   | `sent` 段在输入降级前重建，片段只有单一 `sent` 布尔                                    | 不能作为实际发送内容或有效评分的证据；没有规则版本字段                                                    |
+| v2   | 从派发处捕获输入，`sent[].state` 是逐来源字符串                                        | `scored` 仍可能由题数推断，不能当作有效评分证据                                                           |
+| v3   | 仍是逐来源 state；逐题记录有效评分，分开 `score_applied` 与来源裁决有效性              | 不能把 `sent[].state` 当作请求级共享载荷                                                                  |
+| v4   | `requests[]` 保存每次逻辑请求的载荷，`sent[]` 经 `request_id` 引用；新增 HTTP 尝试计数 | 请求带 `mode`，可能逐来源多条；配置可能包含 `context_mode` / `temporal_context`，不能套用 v5 的单请求约束 |
+| v5   | 只使用全量共享请求，一次搜索至多一条；请求记录去掉模式、回退与预估字段                 | 未派发的载荷为 null；Jev 配置只含模型、超时和并发；未派发原因仅 `skipped` / `breaker_open`                |
+
+`dispatched` 表示 fetch 已调用，不保证服务端收到或处理；`in_state`、`score_question_sent`、`answered`、`scored` 与 `score_applied` 分别表示不同阶段的事实，不能互相代替。缺答或无效评分不能从题目数量推断成“已评分”。
+
+核对生效版本应查看配置快照、实际请求记录和保存的题目，不能只凭题库 ID 判断。
 
 ## 回退与关闭
 
@@ -63,11 +75,11 @@ Jev 请求组织只有一种：全部候选共享一次请求（all）。曾经�
 
 filter-rules-15 接入的 GitHub 本地清洗在现行版本保留：`test/on` 下、送入 Jev 前处理以下内容，`off` 不应用这些 GitHub 专属规则：
 
-| 页面 | 清理范围 |
-| --- | --- |
-| 仓库首页 | 仓库导航行；独立 About / Topics 标签卡片；被同来源前序本地幸存文本完整包含的 About 简介 |
-| PR 详情 | 当前仓库分支引用后的复制按钮文字；独立 `Uh oh!` 行 |
-| Release 列表与具体 tag 页 | 相邻成对的 `Choose a tag to compare` / `No results found`，允许间隔空行 |
+| 页面                      | 清理范围                                                                                |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| 仓库首页                  | 仓库导航行；独立 About / Topics 标签卡片；被同来源前序本地幸存文本完整包含的 About 简介 |
+| PR 详情                   | 当前仓库分支引用后的复制按钮文字；独立 `Uh oh!` 行                                      |
+| Release 列表与具体 tag 页 | 相邻成对的 `Choose a tag to compare` / `No results found`，允许间隔空行                 |
 
 `search_block` 和 `reactions_unavailable` 不再执行。`Conversation`、真实许可证、提交表格及混有实质正文的 Topics 片段保留。代码与引用区域受保护，幸存文本保持原序。
 

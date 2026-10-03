@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-// 库目录就是本文件所在目录；递归列出，Phase 2 的 src/filter/jev/ 子目录也在扫描范围内
+// 递归检查整个过滤库，包含 jev 子目录。
 const libraryDir = fileURLToPath(new URL('./', import.meta.url));
 
 const isLibrarySource = (file: string): boolean =>
@@ -28,9 +28,7 @@ describe('src/filter purity', () => {
     describe(file, () => {
       const src = readFileSync(join(libraryDir, file), 'utf8');
 
-      // 纯度门禁按深度分级（02-02）：src/filter/ 顶层文件禁一切 `../`（任何向上
-      // 都逃出库边界）；src/filter/jev/ 子目录允许一级向上（`../types.js` 导入库
-      // 内兄弟模块），禁 `../../`（逃出库边界即拦）。
+      // 顶层向上导入会越过库边界；jev 子目录允许一级向上导入库内模块，禁止两级向上。
       const nested = file.includes('/');
       const staticImportRe = nested
         ? /(?:^|[\s;{(])import[^\n]*?from\s*['"][^'"]*\.\.\/\.\.\//m

@@ -2,11 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 
-/**
- * githubCleanup 当前规则与退役行为的回归锁定：
- * 的正例与边界、页面类型与 URL 边界、成对/连续块的打断保留、保护区域、暂缓规则
- * 逐字保留、幂等与原序。测试文本以 2026-09-30..10-02 现场样本的真实形态为原型。
- */
+/** GitHub 清洗的命中、保护区域、原序与幂等回归；也检查不应再删除的界面文字。 */
 
 const REPO_ROOT = 'https://github.com/HexRaysSA/ida-mcp';
 const PR = 'https://github.com/HexRaysSA/ida-mcp/pull/8';

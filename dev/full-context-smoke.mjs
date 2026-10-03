@@ -1,15 +1,9 @@
 /**
- * 全量接入的有限真实冒烟与严格离线回放。使用已构建 dist；正文及 HTTP 证据只写外部目录。
- * node dev/full-context-smoke.mjs <仓库外目录> --plan|--live|--offline
+ * 使用已构建 dist 进行有限实发或严格离线回放，正文和 HTTP 证据写入仓库外目录。
+ * 用法：node dev/full-context-smoke.mjs <仓库外目录> --plan|--live|--offline
  * 目录预置 cases.json：[{ id, origin, data, request: {params,intent,retrievalTime?}, config }]。
- * 默认只规划；live 最多两次逻辑请求、六次 HTTP——重试是传输层对真实失败的反应，
- * 不设输入 token 估算额度（旧"60000 估算 token"固定轮次额度是过去一次冒烟的累计
- * 约束，不是 Jev 服务上限，已随预检体系退役，不重建输入 token 检测）。
- *
- * all-only（ALL_ONLY_FILTER_CLEANUP_PLAN §3.1/§4 任务 E）：载荷用唯一构造器
- * buildContextRequest 准备，与实际管道调用共用同一个显式检索时间
- * （cases.json 的 request.retrievalTime，经 dist 的 normalizeRetrievalTime 归一一次——
- * 两个位置绝不分别取时间，也从不读取系统时间补值）。
+ * 默认仅规划；live 最多两次逻辑请求、六次 HTTP 尝试，不作输入 token 预检。
+ * 载荷与管道共用显式检索时间，缺失时不补当前时间。
  */
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -114,9 +108,8 @@ if (mode === '--live') {
   claimLiveRun(root, manifest);
 }
 if (mode === '--offline') {
-  // 旧 identity 在进入管道前拒绝：classify 闭包里的断言会被管道防御语义转成
-  // network failed（§3.3：注入面意外 reject 记网络失败），错误消息无法冒出——
-  // 预检同样的 identity 链，让拒绝原因（旧录制 / 缺录制）直接可见。
+  // 先核对录制身份，让缺失或不匹配的错误直接可见。
+  // 若只在 classify 中检查，管道会将异常转为 network 失败，掩盖回放拒绝原因。
   for (const entry of prepared) {
     const recorded = read(join(root, `${entry.item.id}.record.json`));
     assert.equal(

@@ -8,7 +8,7 @@ describe('tokenize', () => {
   });
 
   it('cuts Han runs into character bigrams, never into one long token', () => {
-    // RESEARCH Pitfall 9：[\p{L}]+ 会把整段汉字粘成一个 token，中文片段将永远"不含实词"
+    // 连续汉字须拆为字符二元，不能整句成为单个 token。
     assert.deepEqual(tokenize('内容发布'), ['内容', '容发', '发布']);
     assert.equal(tokenize('内容发布').includes('内容发布'), false);
   });

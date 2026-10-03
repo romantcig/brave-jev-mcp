@@ -1,11 +1,6 @@
 /**
- * Jev 客户端纯函数与回放端到端（JEV-02/JEV-07/VERDICT-06/SAFE-01）。
- *
- * 回放口径（02-01）：两份重录 `.jev.json` 的 `results` 键（s0..s11）与管道
- * `collectJevCandidates` 的候选 id 同源——把录好的 results 变成 classify 依赖，
- * `filterLlmContext` 的"请求构造 → classify → 解析 → stats 记账"整条真实路径
- * 即可零网络复现。replayClassifier 内联在本文件（不建 src/testUtils/ 新文件），
- * 200 走生产同一条 `parseJevResponse` 路径。
+ * 客户端解析、传输与管道回放测试，全部使用本地回答或 fetch 桩。
+ * 录制按候选 ID 配对，响应解析复用生产实现；历史回答只验证规则行为。
  */
 
 import assert from 'node:assert/strict';
@@ -15,6 +10,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseFilterConfigObject } from '../config.js';
 import { filterLlmContext } from '../pipeline.js';
+import { estimateTokens } from '../tokens.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
@@ -140,19 +136,18 @@ const sharedQuestions = makeQuestions(sharedState, 1);
 const sharedRequest = { state: sharedState, questions: sharedQuestions };
 
 /**
- * 回放传输（all-only）：把逐来源录制答案按 `${id}__${localKey}` 命名空间注入
+ * 固定回答注入（all-only 合成桩）：把逐来源录制答案按 `${id}__${localKey}` 命名空间注入
  * 全量共享请求（只回答实发题集里存在的键），合成单个 200 响应走生产同一条
- * parseJevResponse 路径；input_tokens 取各来源录制用量之和。
+ * parseJevResponse 路径。没有 fetch，不带 dispatch，计零实发；合成用量为 0、
+ * usage_complete=false，旧 single 录制用量不作为当前共享请求的用量。
  */
 const replayClassifier =
   (recording: JevRecording): ClassifyDeps['classify'] =>
   async ({ state, questions }) => {
     const answers: Record<string, unknown> = {};
-    let inputTokens = 0;
     for (const source of state.sources) {
       const entry = recording.results[source.id];
       if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
-      inputTokens += entry.response.usage.input_tokens;
       for (const [localKey, value] of Object.entries(entry.response.answers)) {
         const globalKey = `${source.id}__${localKey}`;
         if (questions[globalKey] !== undefined) answers[globalKey] = value;
@@ -160,7 +155,7 @@ const replayClassifier =
     }
     const parsed = parseJevResponse(
       200,
-      JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: inputTokens } })
+      JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 0 } })
     );
     return parsed.ok
       ? {
@@ -168,8 +163,7 @@ const replayClassifier =
           model: parsed.model,
           answers: parsed.answers,
           input_tokens: parsed.input_tokens,
-          // 模拟生产客户端：回放桩已"派发"（n_requests 计一）；合成用量在请求级记账
-          dispatch: { state, questions },
+          usage_complete: false,
         }
       : // 录制声称 200 但解析不过：响应形状坏，按校验失败记账（契约里无 'shape' kind）
         { status: 'failed', kind: 'validation' };
@@ -269,10 +263,7 @@ describe('parseJevResponse', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 解析边界（T-02-02-1 白名单收窄的六个具名用例）：畸形/恶意形状一律 ok:false
-// 而非 spread 或抛错；白名单外的键忽略不进结果。
-// ---------------------------------------------------------------------------
+// 响应解析边界：畸形顶层返回失败，未知键忽略。
 
 describe('parseJevResponse boundaries', () => {
   it('ignores answer keys outside the protocol whitelist', () => {
@@ -368,7 +359,7 @@ for (const [name, recording] of Object.entries({
   jev_release_strict: strictRecording,
 })) {
   const expected = loadExpectedHeader(`${name}.off.json`);
-  // 录制口径守卫（02-01 的 probe 校验镜像）：intent 不一致即错录，回放对齐不成立
+  // 录制与期望的 intent 必须一致，否则不能用于此回放。
   assert.equal(recording.intent, expected.intent, `${name} recording intent mismatch`);
 
   const data = loadBraveFixture(`${name}.json`);
@@ -378,8 +369,13 @@ for (const [name, recording] of Object.entries({
     intent: expected.intent,
   };
   // 顶层 await：管道一次跑完，describe 闭包共享（node:test 等模块求值完成后开跑）
-  const { result, stats } = await filterLlmContext(data, request, config, {
-    classify: replayClassifier(recording),
+  const replay = replayClassifier(recording);
+  let classifyCalls = 0;
+  const { result, stats, jev_requests } = await filterLlmContext(data, request, config, {
+    classify: async (input) => {
+      classifyCalls += 1;
+      return replay(input);
+    },
   });
   const jev = stats.jev;
   assert.ok(jev, 'on mode with classify must populate stats.jev');
@@ -387,9 +383,16 @@ for (const [name, recording] of Object.entries({
   const outputUrls = result.grounding.generic.map((item) => item.url);
 
   describe(`end-to-end replay · ${name}`, () => {
-    it('answers every candidate through exactly one shared request', () => {
+    it('一次共享回答注入覆盖全部候选，零实发且不伪造载荷', () => {
       assert.equal(jev.status, 'ok');
-      assert.equal(jev.n_requests, 1);
+      assert.equal(classifyCalls, 1);
+      assert.equal(jev.n_requests, 0);
+      assert.equal(jev.n_http_attempts, 0);
+      assert.equal(jev_requests.length, 1);
+      assert.equal(jev_requests[0].answered, true);
+      assert.equal(jev_requests[0].dispatched, false);
+      assert.equal(jev_requests[0].state, null);
+      assert.equal(jev_requests[0].questions, null);
       assert.equal(jev.per_source.length, Object.keys(recording.results).length);
       for (const row of jev.per_source) {
         assert.equal(row.status, 'answered', `${row.src} must be answered`);
@@ -401,12 +404,10 @@ for (const [name, recording] of Object.entries({
       assert.equal(typeof jev.requests[0]?.latency_ms, 'number');
     });
 
-    it('aggregates input_tokens as the sum of recorded usage', () => {
-      const expectedSum = Object.values(recording.results).reduce(
-        (sum, entry) => sum + entry.response.usage.input_tokens,
-        0
-      );
-      assert.equal(jev.input_tokens, expectedSum);
+    it('合成回答计零用量，不把旧逐来源用量合计成共享请求用量', () => {
+      assert.equal(jev.input_tokens, 0);
+      assert.equal(jev_requests[0].input_tokens, 0);
+      assert.equal(jev_requests[0].usage_complete, false);
     });
 
     it('records the current source-level probabilities per source exactly as recorded', () => {
@@ -448,9 +449,7 @@ for (const [name, recording] of Object.entries({
   });
 }
 
-// ---------------------------------------------------------------------------
-// VERDICT-06：空输入 + classify 注入 → 空输出且零请求（不变式在 Jev 路径激活时成立）
-// ---------------------------------------------------------------------------
+// 空输入即使注入分类器也应零请求。
 
 describe('empty response with classify injected (VERDICT-06)', () => {
   it('returns empty output and makes zero requests without fabricating sources', async () => {
@@ -469,12 +468,9 @@ describe('empty response with classify injected (VERDICT-06)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 传输兜底（02-05 Task 1）：globalThis.fetch 桩（装卸纪律照 mcpTestHarness 26-46）
-// ——零网络验证请求形状、状态码映射、key 语义与进程级并发闸。
-// ---------------------------------------------------------------------------
+// fetch 桩验证真实客户端传输，测试后恢复全局 fetch。
 
-/** createJevClassifier 的入参 config（02-02 config 解析的同形状字面量）。 */
+/** 客户端测试配置。 */
 const jevConfig = {
   model: DEFAULT_JEV_MODEL,
   timeoutMs: 15000,
@@ -565,7 +561,7 @@ describe('createJevClassifier', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(sharedRequest);
 
-      // 04-04 R1：401 也是已派发的请求——失败 outcome 必须带实发载荷（输入证据）
+      // 401 也是已派发请求，失败结果应保留输入载荷。
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'auth',
@@ -590,7 +586,7 @@ describe('createJevClassifier', () => {
     }) as typeof fetch;
 
     try {
-      // 超时不重试（2026-09-27 定）：一次失败即返回，注入 no-op sleep 只是为了不走真退避
+      // 超时立即返回；注入空 sleep 避免真实等待。
       const classifier = createJevClassifier(
         jevConfig,
         { TYPESAFE_API_KEY: 'k' },
@@ -600,7 +596,7 @@ describe('createJevClassifier', () => {
       );
       const outcome = await classifier.classify(sharedRequest);
 
-      // 超时同样"已派发"：请求已交给传输层，实发载荷照带（04-04 R1）
+      // 超时仍保留已派发的输入证据。
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'timeout',
@@ -622,7 +618,7 @@ describe('createJevClassifier', () => {
     }) as typeof fetch;
 
     try {
-      // 恒抛 → 耗尽重试（SAFE-03 网络异常白名单）；注入 no-op sleep 不真等
+      // 持续网络异常应耗尽重试次数，空 sleep 避免真实退避。
       const classifier = createJevClassifier(
         jevConfig,
         { TYPESAFE_API_KEY: 'k' },
@@ -727,12 +723,7 @@ describe('createJevClassifier', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 传输兜底·重试（2026-09-27 定）：超时（含读正文）不重试；fetch 其他异常、408、
-// 429/529、其余 5xx 重试；401/403/422/其他 4xx/200 形状坏不重试。退避
-// min(500×2^(n-1), 5000) 再乘 (1 - 0.25×random)；Retry-After 优先，> 5s 就不再
-// 重试。hooks 注入 sleep / random / now，测试不真等。
-// ---------------------------------------------------------------------------
+// 重试策略与等待时长；用 hooks 注入时间、睡眠和随机数，避免真实等待。
 
 describe('createJevClassifier retry (SAFE-03)', () => {
   const request = sharedRequest;
@@ -860,7 +851,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
-      // 04-04 R1：已派发失败的请求保留实发载荷（输入证据），失败 kind 照旧
+      // 派发后失败仍保留输入证据。
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'auth',
@@ -909,8 +900,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify(request);
 
-      // 422：请求已派发并被拒绝——实发载荷必须随失败 outcome 带回（04-04 R1，
-      // 样本层据此保留输入证据，不再把"没有有效回答"写成"没发送"）
+      // HTTP 拒绝仍是已发送请求，样本必须保留其载荷。
       assert.deepEqual(outcome, {
         status: 'failed',
         kind: 'validation',
@@ -952,8 +942,8 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
   it('sends a synthetic request over the old 32K/64K detection range whole — no trimming, no question drops, no splitting (all-only §6)', async () => {
     const saved = globalThis.fetch;
-    // 单来源 ~80k 字符正文：旧 32K／64K 预检体系下会触发阶梯／降级，
-    // 现在必须一次完整原样发出——没有输入限额检测，也不重建边界计算器
+    // 80k 个 CJK 字符按旧估算仅正文就达 72k token，超过两条旧限额；
+    // 现在必须一次完整原样发出。这里只验证测试输入，不恢复生产预算检测。
     const bigState: JevState = {
       query: 'q',
       intent: 'i',
@@ -962,11 +952,15 @@ describe('createJevClassifier retry (SAFE-03)', () => {
           id: 's0',
           url: 'https://s0.example/',
           title: 'Title',
-          snippets: ['x'.repeat(80_000)],
+          snippets: ['中'.repeat(80_000)],
           brave_page_date: null,
         },
       ],
     };
+    assert.ok(
+      estimateTokens(JSON.stringify(bigState)) > 64_000,
+      '仅 state 已超过旧 64K token 限额'
+    );
     const bigQuestions = makeQuestions(bigState, 1);
     let capturedBody: string | undefined;
     let calls = 0;
@@ -976,7 +970,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       return new Response(
         JSON.stringify({
           model: 'jev-1.13.0',
-          answers: { s0__has_original_reasoning: { kind: 'noul', probability: 0.1 } },
+          answers: { s0__has_original_reasoning: { type: 'noul', noul: 0.1 } },
           usage: { input_tokens: 7 },
         }),
         { status: 200, headers: { 'content-type': 'application/json' } }
@@ -987,15 +981,14 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
       const outcome = await classifier.classify({ state: bigState, questions: bigQuestions });
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+      assert.deepEqual(outcome.answers.s0__has_original_reasoning, {
+        kind: 'noul',
+        probability: 0.1,
+      });
 
       const sent = JSON.parse(String(capturedBody)) as { state: JevState; questions: unknown };
-      assert.ok(String(capturedBody).length > 64_000, '合成请求必须真的超过旧 64K 检测范围');
       assert.deepEqual(sent.state, bigState, '正文不得被删改');
-      assert.equal(
-        Object.keys(sent.questions as Record<string, unknown>).length,
-        Object.keys(bigQuestions).length,
-        '题目不得被删减'
-      );
+      assert.deepEqual(sent.questions, bigQuestions, '题目不得被删减或改写');
       assert.equal(calls, 1, '不得拆成多次请求');
     } finally {
       globalThis.fetch = saved;
@@ -1274,12 +1267,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 传输兜底·熔断（02-05 Task 3，SAFE-02 / A7）：同一实例连续 3 次瞬态失败
-// （timeout / rate_limited / network）开 60s 熔断，熔断期 classify 短路
-// breaker_open 且零 fetch；任一成功清零；到期直接闭合不做半开探测；
-// 同波在途请求不取消；auth / validation 等确定性失败不计入。
-// ---------------------------------------------------------------------------
+// 熔断阈值、窗口、成功清零与失败分类；已在途请求不应被取消。
 
 describe('createJevClassifier breaker (SAFE-02)', () => {
   const request = sharedRequest;
@@ -1484,10 +1472,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 批 C 的另外两处 + 批 E 的两个测试盲区（02-FIX）：熔断在出闸后复查、并发闸名额
-// 交接、失败路径还名额、超时值不被写死。
-// ---------------------------------------------------------------------------
+// 排队后的熔断复查、名额交接与归还、配置超时的传递。
 
 describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E)', () => {
   const request = sharedRequest;
@@ -1560,11 +1545,9 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
   });
 
   it('hands the slot to the head waiter instead of reopening a gap (C4)', async () => {
-    // concurrency 1。旧实现 release 先 `active -= 1` 再唤醒等待者，等待者的
-    // `active += 1` 在微任务里才跑——两者之间进入的新调用会看到空位直接开跑，
-    // 在途数超过上限。A 的 fetch 放行后还要读正文、解析、进 finally 才 release，
-    // 窗口落在第几个微任务不固定，所以扫描式插入：A 放行后让 C 延迟 k 个微任务
-    // 再进闸（k = 0..29），每轮重建分类器，所有轮次的在途峰值都必须是 1（审查 R1）。
+    // 并发上限为 1，等待者接棒期间的新请求不能抢到同一名额。
+    // A 释放前还要读取正文和解析，微任务窗口不固定，因此让 C 延迟不同微任务数进入。
+    // 每轮新建分类器，所有时序的在途峰值都应保持为 1。
     const saved = globalThis.fetch;
     try {
       for (let k = 0; k < 30; k += 1) {

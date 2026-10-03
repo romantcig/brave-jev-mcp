@@ -1,14 +1,6 @@
 /**
- * 中英分词、实词集与 5-gram 相似度助手。
- *
- * 分词先按 Unicode script 切段（Han、假名、谚文各成连续段），CJK 段转**字符二元**
- * （「内容发布」→ 内容 / 容发 / 发布，单字保留），Latin 与数字段小写后整段输出——
- * 直接用 `[\p{L}]+` 会把整段汉字粘成一个 token（RESEARCH Pitfall 9），中文片段将
- * 永远"不含实词"。实词集 = token 去停用词；5-gram shingle 与两种相似度供页内
- * 逐字重复判定使用。
- *
- * 依据：01-RESEARCH.md「通用：分词与实词集」「Code Examples: 5-gram shingle 与两种相似度」、
- * notes/local-rules-design.md §3。
+ * 按 Unicode script 分词，提供实词集和 shingle 相似度。
+ * CJK 连续段拆成字符二元，避免整句汉字成为单个 token；其他词段转小写。
  */
 
 /**
@@ -24,10 +16,7 @@ export const SCRIPT_PATTERN: RegExp =
 /** 段是否为 CJK（Han / 假名 / 谚文，假名含 scx 收编的 ー）；此类段转字符二元，其余段按词输出。样板/标记表的中文条目判定也用它。 */
 export const CJK_SEGMENT = /^[\p{Script=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{Script=Hangul}]+$/u;
 
-/**
- * 停用词：英文功能词与搜索套话、中文二元套话。
- * 列表**可增补**；出处 01-RESEARCH.md「通用：分词与实词集」（notes/local-rules-design.md §3）。
- */
+/** 英文功能词、搜索套话与中文二元停用词。 */
 export const STOPWORDS: ReadonlySet<string> = new Set([
   // 英文功能词与搜索套话
   'the',
@@ -114,12 +103,7 @@ export function tokenize(text: string): string[] {
   return tokens;
 }
 
-/**
- * 实词集：多段文本合并 tokenize 后去停用词。步 3 传 query ∪ intent，步 8 只传 query。
- * @returns 去重后的实词集合（新对象，不共享内部状态）
- * @example contentTerms('Jev TypeSafe AI model release') 含 'jev' 与 'release'，不含 'the'
- * @example contentTerms('怎么 如何') 为空集（中文套话二元全被剔除）
- */
+/** 多段文本分词后去除停用词，返回新的实词集合；一句话来源判断只传 query。 */
 export function contentTerms(...texts: string[]): Set<string> {
   const terms = new Set<string>();
   for (const text of texts) {
@@ -158,12 +142,8 @@ export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number 
 }
 
 /**
- * 包含度：交集除以较小集合的大小（RESEARCH 规则 3 / Assumption A11 要求的两种相似度
- * 之一）。isNearDuplicate **不**用它：判定方向是"候选自身被幸存者覆盖的比例"（交/|候选|），
- * 若用 containment，候选是幸存者超集时包含度恒为 1，信息更全的后一条会被误删。
- * @returns `|A∩B| / min(|A|, |B|)`；任一集合为空时返回 0
- * @example containment(new Set(['a', 'b']), new Set(['a', 'b', 'c'])) === 1
- * @example containment(new Set(), new Set(['a'])) === 0
+ * 包含度为交集除以较小集合大小，任一集合为空时为 0。
+ * isNearDuplicate 使用候选自身覆盖率，不用此值，避免误删信息更全的超集。
  */
 export function containment(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
   const [small, big] = a.size <= b.size ? [a, b] : [b, a];

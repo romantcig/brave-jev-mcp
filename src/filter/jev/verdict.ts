@@ -1,17 +1,7 @@
 /**
- * 来源级裁决链（步 6）与片段 score 删除（步 7 前半）。
- *
- * 只消费单来源的 judged 答案与阈值——输入没有跨来源数据结构，Jev 裁决绝不越权做
- * 跨来源比较、重排或补回（PLAN §3.3）；工作表上只翻 `verdict` / `reason` /
- * `kept` 标记，不 sort、不 filter 出新数组（RULES-08）。裁决结果回写
- * `stats.jev.per_source` 对应行（Phase 3 状态行的共同来源；test 与 on 的记账形状
- * 一致——单链语义，04-CONTEXT）。
- *
- * 最小行类型照 `budget.ts` 先例：pipeline 的工作表结构上满足、又不产生
- * pipeline → verdict → pipeline 的循环导入（本文件不 import pipeline.ts）。
- *
- * 依据：PLAN §3.3、notes/test-mode-logging.md（阈值判据方向）、
- * 02-RESEARCH.md「裁决链实现」。
+ * 步 6 来源裁决与步 7 片段评分删除。
+ * 消费逐来源答案与阈值，更新工作表和对应统计，不重排或补回内容。
+ * 使用最小结构类型，避免与 pipeline.ts 循环导入。
  */
 
 import { CJK_SEGMENT, SCRIPT_PATTERN } from '../tokenize.js';
@@ -41,11 +31,7 @@ export type VerdictSourceRow = {
   reason?: SourceDropReason;
 };
 
-/**
- * judged 行的最小形状：runJevStage 的 per_source 行（`JevPerSourceStats`）结构上
- * 满足。只读 `status` / `answers` / `snippet_scores`——failed/skipped/breaker_open
- * 的来源按"留"（SAFE-01）。
- */
+/** 裁决所需的最小输入；失败、跳过和熔断来源保守保留。 */
 export type VerdictJudgedRow = {
   status: 'answered' | 'failed' | 'skipped' | 'breaker_open';
   answers?: Record<string, number>;
@@ -53,12 +39,8 @@ export type VerdictJudgedRow = {
 };
 
 /**
- * 来源 CJK 占比：CJK 字符数除以标题加全部文本的总字符数（UTF-16 码元，与预算
- * 估算同一尺度）。CJK 判定复用 tokenize.ts 的 script 常量，不写新正则
- * （Don't Hand-Roll）；空格标点不属任何 script 段，只计进分母。
- * @returns 占比（0 到 1）；总字符数为 0 时返回 0
- * @example cjkShareOf('你好', ['ab']) → 0.5
- * @example cjkShareOf('', []) → 0
+ * CJK 字符数占标题与片段总 UTF-16 码元数的比例；空输入为 0。
+ * 复用 tokenize.ts 的字符分类，空格和标点只计入分母。
  */
 export function cjkShareOf(title: string, texts: readonly string[]): number {
   const whole = title + texts.join('');
@@ -71,7 +53,7 @@ export function cjkShareOf(title: string, texts: readonly string[]): number {
   return cjk / whole.length;
 }
 
-/** T-02-03-1 防御：概率必须是 [0,1] 内的有限数值，否则视为异常（undefined）。 */
+/** 概率必须是 [0,1] 内的有限数，否则返回 undefined。 */
 const usableProbability = (value: number | undefined): number | undefined =>
   value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
 
@@ -83,19 +65,10 @@ export const isUsableSnippetScore = (value: unknown): value is number =>
   value <= SNIPPET_CRITERIA.length - 1;
 
 /**
- * 步 6：来源级裁决链，固定顺序 off_topic → listing →
- * filler（且 p_reasoning < reasoningProtect 严格小于才丢——>= 即保护），p >=
- * 门槛 + CJK 加成即丢、命中即停，首个命中的判定是 reason；全不命中 keep。
- *
- * 只处理 verdict 为 keep 且 judged 为 answered 的来源（失败/跳过/熔断按"留"，
- * SAFE-01）。裁决必需答案即当前四题：三道丢弃题 + 论证题（历史记录含 v3 观察题
- * 与 2026-10-03 退役的 self_deprecated / stale 旧键时按额外字段忽略）。CJK 占比
- * > cjkShare（严格大于）时三道丢弃门槛各加 cjkBonus（VERDICT-04，方向保守：
- * 中文来源更难被丢；加成不抬片段 score 门槛）。
- *
- * 裁决回写 `stats.jev.per_source` 对应行的 verdict/reason；判定相关四道概率
- * 任一缺失或超出 [0,1] 时整来源防御式跳过（保守不丢）并在该行记 fail_kind
- * `'validation'` 备查（T-02-03-1——02-02 解析层是第一道闸，本层防御式兜底）。
+ * 固定顺序 off_topic → listing → filler，首个命中原因生效。
+ * 三道删除概率 >= 对应门槛时删除；filler 还要求 reasoning < reasoningProtect。
+ * CJK 占比 > cjkShare 时，只给三道来源门槛加 cjkBonus。
+ * 当前四题任一缺失或越界时保守跳过整源，并将来源行标为 validation。
  */
 export function applySourceVerdicts(
   table: VerdictSourceRow[],
@@ -136,8 +109,7 @@ export function applySourceVerdicts(
     );
     const bonus = cjkShare > thresholds.cjkShare ? thresholds.cjkBonus : 0;
 
-    // 固定顺序（PLAN §3.3）：先判先停；filler 保护挡下时该判定不成立（continue）。
-    // self_deprecated / stale 门槛已退役（2026-10-03 题库精简），答案若仍在按额外字段忽略
+    // 先判先停；论证保护仅豁免 filler。
     const gates: ReadonlyArray<readonly [number, number, SourceDropReason]> = [
       [pOffTopic, thresholds.offTopicDrop + bonus, 'off_topic'],
       [pListing, thresholds.listingDrop + bonus, 'listing'],
@@ -159,19 +131,10 @@ export function applySourceVerdicts(
 }
 
 /**
- * 步 7 前半：片段 score 删除。state 构建时的幸存片段序（runJevStage 按 kept
- * 过滤后的顺序）与 per_source.snippet_scores 按位置对齐，score < snippetMin
- * （严格小于，连续值比较——夹具实证 1.62/1.77，不是整数档位，Pitfall 3）的
- * 片段置 kept = false、reason = 'score'；等于保留。
- *
- * 等长契约（all-only）：`scores.length !== survivors.length` 时整源跳过评分删除
- * （防御——长度不匹配说明对齐依据不成立，绝不按"短数组是砍尾前缀"套用）。缺答
- * 或错型的来源在投影层就不会产出整组 `snippet_scores`（见 projectSourceAnswers），
- * 天然走这条保守路径；逐题收到的值仍供样本记录。等长时行为与逐条对齐完全一致。
- * 异常 score（[0,2] 三档范围外——负值/非有限/越界，与记录层共用
- * isUsableSnippetScore 校验，同 T-02-03-1 防御）保守保留该片段。
- * CJK 加成只抬来源级三道门槛，不抬本门槛（A4 落定：
- * 抬 SNIPPET_MIN 是更激进的方向，与保守原则相反）。
+ * 按候选位置对齐片段评分，连续分值 score < snippetMin 时删除，等于门槛保留。
+ * 评分数组与幸存片段不等长时整源跳过，不能把短数组当成有效前缀。
+ * 超出 [0,2] 或非有限的分数不用于删除，逐题收到的值仍可供样本记录。
+ * CJK 加成不提高片段门槛，提高它会使删除更激进。
  */
 export function applySnippetScores(
   table: VerdictSourceRow[],

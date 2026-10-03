@@ -1,22 +1,7 @@
 /**
- * 本地规则后候选集 dump（02-01）：对一份 Brave 夹具跑 `collectJevCandidates`
- * （本地规则层步 1–4 的幸存口径），stdout 只打印一行 JSON：
- * `{ query, intent, sources: JevCandidate[] }`。本工具保留为本地候选查看工具——
- * 不构造、不发送任何 Jev 请求。
- *
- * 历史配套说明：`dev/jev_probe.py`（v3 历史十题录制工具，已迁入 archive/ 不再维护）
- * 曾以子进程调用本脚本，只对幸存来源发请求、对幸存片段录答案——两份 fixtures/
- * *.jev.json 历史录制因此与管道步 5 发送的 state 逐源逐片段对齐（02-RESEARCH A14）。
- * probe 退役后本脚本输出仍是核对"当前规则下哪些候选会进入 Jev 共享请求"的直接
- * 手段：sources 数组即请求 state.sources 的内容，每来源 snippets 数即其片段评分题数。
- *
+ * 运行本地步骤 1–4，stdout 输出一行 { query, intent, sources }，不调用 Jev。
  * 用法：node --import tsx dev/dump_local_rules.ts fixtures/<stem>.json
- *
- * query / intent / request 取自同 stem 的 `fixtures/expected/<stem>.off.json`
- * （Phase 1 期望文件，与两份 Jev 夹具的请求参数一致）；夹具本体用三形状加载器
- * 收窄（复制自 src/filter/pipeline.fixtures.test.ts 的 loadBraveFixture，不建
- * src/testUtils/ 新文件）。dev/ 不进 tsc / prettier 门禁；相对导入带 .js 后缀
- * （NodeNext ESM 直跑约定）。
+ * 请求参数来自对应 expected 文件；候选口径与生产管道共用。
  */
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';

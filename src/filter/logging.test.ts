@@ -75,9 +75,9 @@ describe('createLogWriter', () => {
     assert.equal(records.length, 1);
 
     const record = records[0];
-    // ts 带时区偏移（D-11）：toISOString 的 UTC 形态不满足
+    // 时间戳应带本地时区偏移。
     assert.match(String(record.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
-    // FilterStats 直接序列化（D-09）：mode 等统计字段在记录顶层
+    // mode 等统计字段直接写在记录顶层。
     assert.equal(record.mode, 'off');
     assert.deepEqual(record.request, request);
     assert.deepEqual(record.sources, []);
@@ -102,7 +102,7 @@ describe('createLogWriter', () => {
 
     const record = readRecords(logDir).at(-1) as Record<string, unknown>;
     assert.equal(record.backend, 'typesafe');
-    // 缺省钉版模型（D-11：配置钉的模型 ID，DEFAULT_JEV_MODEL）
+    // 核对配置中的钉版模型。
     assert.equal(record.model_config, DEFAULT_JEV_MODEL);
     assert.deepEqual(record.model_reported, ['jev-1.13.0']);
     // 阈值快照与 THRESHOLD_SPECS 的键集逐一相等（从源头比对，不手抄清单），
@@ -156,8 +156,7 @@ describe('createLogWriter', () => {
     assert.deepEqual(record.request, { query: 'test query', intent: 'test intent' });
     const error = record.error as { stage: string; message: string };
     assert.equal(error.stage, 'brave');
-    assert.equal(error.message.length, 200); // 截断 200 字符
-    // 信封在错误记录里也带阈值快照与钉版模型（Phase 4 复现裁决的前提）
+    assert.equal(error.message.length, 200); // 错误摘要截断到 200 字符，同时保留阈值快照和模型标识。
     assert.deepEqual(
       Object.keys(record.thresholds as Record<string, number>).sort(),
       THRESHOLD_SPECS.map((spec) => spec.key).sort()
@@ -199,9 +198,7 @@ describe('createLogWriter', () => {
     const dir = join(logDir, 'b01-same-capture');
     const writer = createLogWriter(configOf('off', dir));
     const RealDate = globalThis.Date;
-    // 取时桩：第 1 次 new Date 返回 23:59:59.999，其后返回次日零点——修复前
-    // build 与 logFileName 各取一次 Date，会把前一天的 ts 写进后一天的文件
-    //（B-01 复现口径：ts=2026-09-28T23:59:59.999+08:00 落进 2026-09-29.jsonl）
+    // 时钟首读在午夜前，后续读在次日；时间戳和文件名必须使用同一次取时。
     const night = new RealDate('2026-09-28T23:59:59.999');
     const nextDay = new RealDate('2026-09-29T00:00:00.001');
     let calls = 0;
@@ -249,8 +246,7 @@ describe('createLogWriter', () => {
 
   it('never serializes snippet bodies into the record (LOG-03/D-12 red line)', async () => {
     const dir = join(logDir, 'no-body');
-    // 正文含 TAB 与引号（IN-03）：JSON.stringify 会转义它们，裸 includes 对这种
-    // 正文永远不命中（假绿）——检查必须用与记录一致的 JSON 转义形式
+    // 含 TAB 与引号的正文必须按 JSON 转义形态检查，否则直接 includes 会漏检。
     const bodyText = 'SECRET-SNIPPET-BODY\twith "quotes" and-abcdefghijklmnopqrstuvwxyz-0123456789';
     const data: BraveLlmContextResponse = {
       grounding: {

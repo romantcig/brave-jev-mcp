@@ -1,27 +1,8 @@
 /**
- * 过滤前后对比工具（TOOLS-01）：对一份 Brave 夹具跑 off / test / on 模式过滤，
- * 打印来源数、片段数、字符数的过滤前后对比与逐来源裁决表——人工抽查过滤行为的
- * 日常工具，也是"test/on 模式裁决可见"的最直接证明（04-01 单链语义：test 与 on
- * 共用同一过滤实现，Jev 裁决真实生效）。
- *
+ * 本地对比 Brave 夹具过滤前后的规模与逐来源裁决，默认 off。
  * 用法：node --import tsx dev/compare.ts <fixture-relative-path> [--mode off|test|on]
- * mode 缺省 off；其他值 stderr 一行并以退出码 1 结束。
- *
- * test / on 模式是固定回答注入（all-only 共享请求形状）：读夹具同目录的
- * <stem>.jev.json 录制，内联 replayClassifier——录制值是 v3 十题时代的历史固定回答，
- * 按候选 ID 查数值后映射到当前全局题键（`{id}__{localKey}`；旧额外题不进回答表，
- * 片段分数仅当当前候选片段数与录制一致才按位置映射，否则该源缺答保守）。合成桩
- * 不带 dispatch（管道计零实发），input_tokens=0、usage_complete=false 注明合成用量。
- * 候选集经 collectJevCandidates 与管道步 5 同源核对，录制里缺的候选 id 打一行
- * WARN（源 id 加 url）后照跑（该源按缺答保守"留"）；录制缺失或 results 为空 →
- * stderr 说明并退出码 1。全程零网络：不 import createJevClassifier，注入零 fetch。
- *
- * query / intent / request 取自 fixtures/expected/<stem>.off.json（与标注同参数，
- * dev/dump_local_rules.ts 先例；sanity/noise 子目录夹具沿目录向上找 expected/
- * 全树扫描同名 .off.json）。夹具本体用三形状加载器收窄（复制自
- * src/filter/pipeline.fixtures.test.ts 的 loadBraveFixture，不建 src/testUtils/
- * 新文件）。输出列形态沿既有对齐表先例。dev/ 不进 tsc /
- * prettier 门禁；相对导入带 .js 后缀（NodeNext ESM 直跑约定）。
+ * 请求参数来自对应 expected 文件；test/on 使用同目录历史 Jev 回答，始终零网络。
+ * 这是固定回答的规则验证，不代表模型对当前题目的真实判断。
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -157,9 +138,7 @@ const loadRecording = (): Record<string, RecordedEntry> => {
   try {
     parsed = JSON.parse(readFileSync(recPath, 'utf8'));
   } catch {
-    die(
-      `读不到录制 ${recPath}——test/on 模式需要同目录录制夹具作为固定回答的数值来源`
-    );
+    die(`读不到录制 ${recPath}——test/on 模式需要同目录录制夹具作为固定回答的数值来源`);
   }
   if (!isRecord(parsed) || !isRecord(parsed.results)) {
     die(`录制缺 results 表：${recPath}`);
@@ -171,12 +150,10 @@ const loadRecording = (): Record<string, RecordedEntry> => {
   return results;
 };
 
-/** 固定回答注入（all-only 共享请求形状，合成桩；与 pipeline.fixtures.test.ts 同契约）：
- * 一次共享请求构造一张完整 answers 表——来源级四题按候选 ID 查录制值映射到全局题键
- * `{id}__{localKey}`，旧额外题（v3 十题残留）不进回答表；片段分数仅当当前候选片段
- * 数与录制 snip 键数一致才按位置映射（身份一致），否则该源整体缺答保守，绝不按压缩
- * 位置错位套用。不带 dispatch（管道计零实发）；input_tokens=0、usage_complete=false
- * 注明合成用量。 */
+/**
+ * 按候选 ID 将历史录制投影到当前题键，片段数量不匹配时不给该来源评分。
+ * 仅注入答案，无 dispatch；计零实发，合成用量为 0 且 usage_complete=false。
+ */
 const replayClassifier =
   (results: Record<string, RecordedEntry>): ClassifyDeps['classify'] =>
   async ({ state }) => {

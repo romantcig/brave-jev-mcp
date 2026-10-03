@@ -12,10 +12,7 @@ import {
 import { createFilterStats } from '../stats.js';
 import type { FilterStats, JevThresholds } from '../types.js';
 
-// ---------------------------------------------------------------------------
-// 纯函数直测（无需网络与夹具）：五类指纹元素正反例、判据与保护边界、Brave 原序
-// 播种、跨源 5-gram 先于指纹。依据 notes/dedup-and-rewrite-policy.md（逐字权威）。
-// ---------------------------------------------------------------------------
+// 指纹、保护边界与 Brave 原序去重测试；跨源逐字重复应先于新颖度判断。
 
 const thresholds: JevThresholds = { ...DEFAULT_THRESHOLDS };
 
@@ -202,12 +199,10 @@ describe('applyNovelty', () => {
   });
 
   it('aggregates per-source fp_total as the deleted-union size and novel as its diff vs the surviving union (C-04.1)', () => {
-    // 手算（C-02 复核口径）：s0 播种占 4 指纹；s1 片段 0 三个指纹被占、n:1.14 新
-    // （novel=1）删；片段 1 独有四事实 novel=4 保留（n:2.0 随幸存片段进指纹并集）；
-    // 片段 2 的 $4.2m/193x/40% 被 s0 占、2.0 被片段 1 吸收 → novel=0 删。
-    // 删除条目并集 = 两被删片段 4+4 指纹重叠 3 → fp_total=5；novel = 并集 − 幸存
-    // 指纹并集 = {n:1.14}——若没有中途幸存片段吸收 n:2.0，novel 会是 2 个。两被删
-    // 片段的逐片段 novel（1 与 0）都不能从聚合数复原（C-02）。
+    // 手算期望：s0 提供四个参照指纹；s1 片段 0 仅 n:1.14 新增，novel=1，因此删除。
+    // 片段 1 有四个新增事实而保留，其 n:2.0 进入参照集合，使片段 2 的 novel=0。
+    // 两条被删片段的指纹并集大小为 5，最终 novel 仅 n:1.14。
+    // 逐片段的 novel=1 和 0 无法从最终聚合数复原。
     const table = [
       source(0, [snippet(0, FACTS_A)]),
       source(1, [
@@ -287,8 +282,8 @@ describe('applyNovelty', () => {
   });
 
   it('lets a failed source occupy its Brave position with the failure-keep boundary intact', () => {
-    // s0 请求失败按"留"（SAFE-01）；未判定殿后分组取消后，它按 Brave 原位先参与
-    // 去重——s1 的同事实改写被删，而 applyNovelty 绝不翻来源级 verdict
+    // 失败的 s0 保守保留并按原序参与去重，因此 s1 的同事实改写可被删除。
+    // 本步骤不改变来源级 verdict。
     const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
     const judged = judgedMap({ s0: { status: 'failed' } });
     const stats = makeStats();
@@ -341,7 +336,7 @@ describe('applyNovelty', () => {
   });
 
   it('keeps the table order and flips flags in place', () => {
-    // 管道不重排幸存者：删除只翻 kept/reason，行仍在原位（RULES-08）
+    // 删除仅改片段标记，行应保持原位。
     const table = [
       source(0, [snippet(0, FACTS_A), snippet(1, 'a brave unique snippet about 42% uptime')]),
       source(1, [snippet(0, FACTS_A_REWORD)]),

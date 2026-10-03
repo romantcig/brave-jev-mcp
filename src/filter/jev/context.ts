@@ -1,19 +1,6 @@
 /**
- * 全量共享上下文请求的构造纯逻辑（all-only 清理后的唯一请求组织，
- * ALL_ONLY_FILTER_CLEANUP_PLAN §3.1）：全量 state 与命名空间题目的构造、显式身份
- * 映射与逐来源答案投影。
- *
- * 职责边界（计划 §2.1）：本模块只做请求构造与证据映射——不改阈值、不新增过滤
- * 步骤、不碰 MCP 层；裁决链（verdict.ts）与十步管道（pipeline.ts）不在这里复制。
- * 题意仍以 questions.ts 为唯一来源：来源级四题由 `buildSourceQuestions` 按数组
- * 位置生成（命名空间转换在题库侧完成），片段评分题由 `buildSnippetScoreQuestion`
- * 按（数组位置，片段位置）生成冻结新题。旧的 32K／64K 双限额预检、预算估算与
- * 超限回退已整体退役——本模块不再有预算职责，构造结果直接交给客户端发送。
- *
- * 库不变式：无模块级可变状态、纯函数、写时复制（绝不改入参候选与题目）。
- *
- * 依据：ALL_ONLY_FILTER_CLEANUP_PLAN.md、FULL_CONTEXT_ROLLOUT_PLAN.md、
- * notes/filter-experiments/round-16-shared-context.md。
+ * 构造全量共享 state、命名空间题目与显式身份映射，并将答案投影回各来源。
+ * 题意统一来自 questions.ts，裁决由 verdict.ts 处理；本模块不修改候选。
  */
 
 import { isUsableSnippetScore } from './verdict.js';
@@ -26,42 +13,26 @@ import type {
   JevState,
 } from '../types.js';
 
-/**
- * 一次 Jev 逻辑请求的完整构造结果：全量 state、命名空间题目表与显式身份映射。
- * 请求组织只有 all 一种——一个或多个候选都用 `state.sources[]`，同一搜索的重试
- * 复用完全相同的构造结果。
- */
+/** 一次逻辑请求的 state、题目表和身份映射。 */
 export type ContextRequest = {
   state: JevState;
   questions: Record<string, JevQuestion>;
-  /** 显式身份映射（FULL_CONTEXT_ROLLOUT_PLAN §4.2），按候选 Brave 原序 */
+  /** 按候选 Brave 原序排列的显式身份映射。 */
   entries: JevRequestMappingEntry[];
 };
 
-/** 命名空间题键的连接符：`${source.id}__${localQuestionKey}`（计划 §4.1 例 s7__snip2）。 */
+/** 全局题键连接符：来源 ID 与局部题键均不含此字符序列。 */
 export const ALL_QUESTION_KEY_SEPARATOR = '__';
 
-/**
- * 全量全局题键：`s7__snip2`。来源 ID 与局部键原样拼接，不做任何转义——候选 ID
- * 是管道生成的 `s{index}`，局部键是题库固定键，都不含连接符。
- */
+/** 拼接来源 ID 与局部题键，例如 s7__snip2。 */
 export const allQuestionKey = (sourceId: string, localKey: string): string =>
   `${sourceId}${ALL_QUESTION_KEY_SEPARATOR}${localKey}`;
 
 /**
- * 构造一次全量共享上下文请求（唯一请求构造器）：把本地步 1–4 后的全部候选放进
- * 一个共享 state（Brave 原序、来源 ID 不重编号），来源级四题按数组位置生成、每
- * 片段一道冻结时间上下文评分题，建立显式映射。
- *
- * 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§5）：`retrievalTime` 是
- * 调用方已归一的检索时间（合法值才有，来自宿主发起 Brave 请求前捕获的那一时刻）；
- * 传入时 state 携带 `retrieval_time`、键序在 `sources` 之后，缺失或非法（undefined）
- * 时省略该键、不补"今天"。每来源 `brave_page_date` 键恒在（无日期 / 归并冲突为
- * null，取自候选上的统一页级日期）——日期与新题的生成不再由任何参数是否存在决定。
- *
- * 纯函数：不修改入参候选；state.sources 是候选数组的新引用（元素原样），题目全部
- * 新建。调用方保证 `candidates.length >= 1`——零候选不调用本函数、零次 Jev 请求
- * （§3.1）；单候选同样用 `sources[0]` 与新题，不走特殊模板。
+ * 将本地步骤后的非空候选按 Brave 原序放入共享 state，不重编号来源 ID。
+ * 题目按数组位置生成，映射同时保留 ID 与位置，单候选也用同一形状。
+ * retrievalTime 由调用方归一，缺失时省略，不补当前时间；页面日期未知时为 null。
+ * 新建 state 来源对象、片段数组和题目表，不改入参；调用方负责跳过零候选。
  */
 export function buildContextRequest(
   candidates: readonly JevCandidateDetailed[],
@@ -122,13 +93,9 @@ export type ProjectedSourceAnswers = {
 };
 
 /**
- * 逐来源答案投影（计划 §3.3/§4.2）：从一次逻辑请求的答案按显式映射取出该来源的
- * 四题与片段分数。缺答、错型、越界一律走现有保守语义，绝不把坏答案当 0 或删除
- * 信号，也不把缺答位之后的答案左移（scoreValidity / scoresReceived 按题位保留，
- * snippetScores 只在整组齐全时产出）。
- *
- * @param params.snippetCount 当前请求映射里该来源的片段数（实发范围即候选全长）
- * @param params.answerAt 答案查询（按局部键）
+ * 按局部题键投影来源答案，坏答案不作为删除信号。
+ * 评分有效性与收到的分数按题位保留，缺答不左移。
+ * snippetScores 仅在整组答案均为 score 类型时产出；取值有效性仍逐题检查。
  */
 export function projectSourceAnswers(params: {
   snippetCount: number;
@@ -164,11 +131,7 @@ export function projectSourceAnswers(params: {
   return result;
 }
 
-/**
- * 从实发 state 取指定来源的片段数（样本 v4 与投影共用）：按 `sources[arrayIndex]`
- * 读取。来源不存在 / 形状异常返回 undefined——调用方按"未知"处理，绝不猜。
- * src 侧主要消费方是 sample.ts（buildJevSection 算 in_state）。
- */
+/** 从 sources[arrayIndex] 读取片段数；来源不存在时返回 undefined，由调用方按未知处理。 */
 export const snippetCountOfState = (state: JevState, arrayIndex: number): number | undefined => {
   const source = state.sources[arrayIndex];
   return source === undefined ? undefined : source.snippets.length;

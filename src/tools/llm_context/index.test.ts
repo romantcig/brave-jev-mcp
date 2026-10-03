@@ -12,16 +12,13 @@ import type { JevState, JevQuestion } from '../../filter/types.js';
 import { name, resetFilterStateForTest } from './index.js';
 import { LlmContextInputSchema, RequestParamsSchema } from './schemas/input.js';
 
-// 过滤层配置自 02-FIX 批 B 起只有一个载体：JEV_FILTER_CONFIG_FILE 指向的 JSON 文件。
-// 适配行持进程级惰性单例（启动时读一次），所以每个用例前后都要清单例并隔离该变量。
+// 每个用例前后清理配置单例并隔离 JEV_FILTER_CONFIG_FILE，避免测试间共享状态。
 const FILTER_ENV_VARS = [JEV_CONFIG_FILE_ENV] as const;
 
 /** 临时配置目录：整个文件一个，测后统一清理。 */
 const configDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-test-'));
 
-// execute() 现在每请求写一条 JSONL 日志（D-16），无显式 log_dir 时默认
-// ~/.brave-jev/logs 会把测试日志写进真实 home——测试一律指进临时目录，用后即删
-// （T-03-03）。这份默认隔离配置只改 log_dir，其余全默认（mode off）。
+// 测试日志统一写临时目录，避免污染真实日志；其余配置默认 off。
 const defaultLogDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-logs-'));
 const defaultConfigPath = join(configDir, 'default-config.json');
 writeFileSync(defaultConfigPath, JSON.stringify({ log_dir: defaultLogDir }), 'utf8');
@@ -263,7 +260,7 @@ describe(`${name} (status line and JSONL log)`, () => {
 
     assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
     const content = result.content as { text: string }[];
-    // 无丢弃：content 恰一块（D-08 追加条件与 buildStatusLine 返回值同源）
+    // 无状态行时 content 只有一块。
     assert.equal(content.length, 1);
 
     // 临时 log_dir 恰一个按天文件、恰一行、可解析、含 mode 与 ts
@@ -312,7 +309,7 @@ describe(`${name} (status line and JSONL log)`, () => {
     const logDir = newLogDir();
     useFilterConfig({ mode: 'off', log_dir: logDir });
 
-    // 带 freshness 的调用：记录 request 含该键（D-10）
+    // 仅在请求带 freshness 时记录该键。
     const withFreshness = await getClient().callTool({
       name,
       arguments: {
@@ -372,11 +369,11 @@ describe(`${name} (status line and JSONL log)`, () => {
       brave: Record<string, unknown> & { est_tokens: number };
       output: { est_tokens: number };
     };
-    // 计时在适配行（D-10）：成功路径必回填且非负
+    // 成功路径的 Brave 耗时应由宿主回填且非负。
     assert.equal(Object.hasOwn(record.brave, 'latency_ms'), true);
     assert.equal(typeof record.brave.latency_ms, 'number');
     assert.ok((record.brave.latency_ms as number) >= 0);
-    // 过滤前 token 估算（TOOLS-04）：与 output.est_tokens 同一估算口径，过滤只删不增
+    // 核对过滤前后的规模估算使用相同口径。
     assert.ok(record.brave.est_tokens > 0);
     assert.ok(record.brave.est_tokens >= record.output.est_tokens);
   });
@@ -412,9 +409,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
 
   const flushWrites = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-  // Jev 回放桩：来源级题全 0（保留；退役旧键按额外字段忽略）、片段分全 2（保留）。
-  // 全量共享请求的题键是 `${来源ID}__${局部键}`——按 s0..s11 命名空间铺满，
-  // 未提问的键被投影忽略，对 ≤3 片段、≤12 来源的夹具通吃。
+  // 回答桩按来源命名空间提供保守保留的答案；未提问的键由显式映射忽略。
   const localAnswers: Record<string, unknown> = {
     has_original_reasoning: { type: 'noul', noul: 0 },
     is_template_filler: { type: 'noul', noul: 0 },
@@ -546,7 +541,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const content = result.content as { text: string }[];
     assert.equal(content.length, 2);
 
-    // 状态行末尾 sample for filter debugging - original results, filtered results, Jev decisions: <绝对路径>，指向真实存在的文件（SC3）
+    // 状态行中的样本路径应指向已保存文件。
     const statusLine = content[1].text;
     const marker =
       ' sample for filter debugging - original results, filtered results, Jev decisions: ';
@@ -691,7 +686,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           const { sample: raw } = readSingleSample(logDir);
           const sample = raw as unknown as SampleRecord;
           assert.equal(sample.ts, anchor);
-          // 配置快照的 jev 只含 model / timeout_ms / concurrency（两个开关已退役）
+          // Jev 配置快照仅包含模型、超时和并发。
           assert.deepEqual(Object.keys(sample.config_snapshot.jev).sort(), [
             'concurrency',
             'model',
@@ -728,9 +723,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     useFilterConfig({ mode: 'on', log_dir: logDirOn });
     const onResult = await getClient().callTool({ name, arguments: args });
 
-    // SC1 验收口径（04-04 R2 更新）：过滤内容与过滤统计一致，test 独有的样本定位
-    // 元信息允许存在——剥除状态行 sample 后缀之外，test 独有的纯样本状态行
-    // （`[filter] sample for filter debugging - original results, filtered results, Jev decisions: <路径>`，零删除时生成）视为与"无状态行"等价
+    // 比较过滤内容时剥除 test 的样本定位后缀；纯样本状态行视为无过滤状态行。
     const normalize = (result: unknown): { payload: unknown; statusLine: string } => {
       const content = (result as { content: { text: string }[] }).content;
       const payload = JSON.parse(content[0].text) as Record<string, unknown>;
@@ -820,8 +813,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     });
     assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
     const content = result.content as { text: string }[];
-    // 04-04 R2：零删除且原本无状态行 → 生成仅含样本定位的状态行——每次成功保存
-    // 的 test 搜索都有样本入口（v1 恰好漏掉这批最可能暴露漏网内容的搜索）
+    // 零删除时也应提供样本定位入口。
     assert.equal(content.length, 2);
     assert.match(
       content[1]?.text ?? '',
@@ -843,8 +835,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
   });
 
   it('coverage: sample write failure strips the path from both carriers and the JSONL records failed (review R2)', async () => {
-    // samples 子目录被一个文件占用：样本写入必然失败，JSONL 落账不受影响——
-    // 返回不得带成功样本路径（R2），错误可从 JSONL 的 sample.status 区分
+    // 用文件占用 samples 目录制造保存失败；日志仍应记录失败，返回不能带成功路径。
     const logDir = newLogDir();
     writeFileSync(join(logDir, 'samples'), 'occupied by a file, not a directory', 'utf8');
     useFilterConfig({ mode: 'test', log_dir: logDir });
@@ -897,8 +888,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.ok(existsSync(sampleAbsPath));
     const finalReturn = sample.final_return as { payload: unknown; status_line: string };
     assert.deepEqual(finalReturn.payload, payload);
-    // pre_filter 仍含全部来源；无候选可发 → 无派发记录，逐源 skipped 占位
-    // （04-04 R1 v2：sent 按来源带 not_dispatched_reason，不再隐身也不冒充实发）
+    // 原始样本保留全部来源；无候选时逐来源记 skipped，不伪造实发载荷。
     const preFilter = sample.pre_filter as { grounding: { generic: unknown[] } };
     assert.equal(preFilter.grounding.generic.length, 2);
     const jev = sample.jev as {
@@ -926,7 +916,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
         ['s1', false, 'skipped', undefined],
       ]
     );
-    // 零候选：零请求、不伪造请求记录（计划 §3 表格）
+    // 零候选不构造请求或记录。
     assert.deepEqual(jev.requests, []);
   });
 
@@ -1370,9 +1360,8 @@ describe(`${name} (config file lifecycle)`, () => {
   });
 
   it('ignores the removed JEV_FILTER_MODE variable entirely', async () => {
-    // 新写一份不含 mode 的配置（上一条用例已把旧文件改成 mode on），删掉 key，
-    // 旧变量设成 on：若它仍被读，on 缺 key 会打 "No Jev API key" 那一行；
-    // 走 off 则一行都不打（审查 R2）
+    // 移除新配置中的模式和密钥后，仅设置旧环境变量不能开启 Jev。
+    // 若旧变量仍被读取，会产生缺密钥告警，因此同时核对告警为空。
     const savedKey = process.env.TYPESAFE_API_KEY;
     const savedMode = process.env.JEV_FILTER_MODE;
     delete process.env.TYPESAFE_API_KEY;
@@ -1406,7 +1395,7 @@ describe(`${name} (tool_description_file from config)`, () => {
   useIsolatedFilterEnv();
 
   it('overrides the tool description with the file named in the config', async () => {
-    // register 必须从配置取描述文件路径（审查 R6）：适配行改成 undefined 这条就红
+    // 注册时应使用配置中的描述文件路径。
     const descPath = join(configDir, `desc-${Date.now()}.md`);
     writeFileSync(descPath, 'Custom description from file.', 'utf8');
     useFilterConfig({ tool_description_file: descPath });

@@ -1,74 +1,8 @@
 /**
- * stdio 冒烟脚本（TOOLS-02，D-17/D-19）：spawn 真服务器进程（dist/index.js + 预加载
- * 桩 dev/stub_fetch.mjs），用 MCP SDK Client + StdioClientTransport 走 initialize →
- * tools/list → tools/call 全程，零网络确定性地验证返回形状与状态行——切到
- * ~/.claude.json（03-04）之前的最后一道自动闸，冒烟通过是切换任务的硬前置。
- *
- * 用法：node --import tsx dev/smoke_stdio.ts [--mode off|test|on] [--live]
- *   不带 --mode 跑三模式全量（off → test → on，每模式各自 spawn 一次服务器、
- *   各自临时配置与临时 log_dir——mode 在配置文件里、服务器启动读一次）；单独
- *   --mode test 或 --mode on 时自动先跑另一个模式作逐字段对照（test==on 互证
- *   需要两份独立 spawn 的结果）。--live 是真实网络
- *   手动开关（D-18，不进自动验证，切换前跑一次确认 key 与代理通），与 --mode 互斥。
- *
- * 三模式行为断言（R-11，E 包假绿缺口的收口；期望全部来自固定发布夹具契约）：
- *   - 三模式共同：返回 content 恰两个 text 块（本夹具必有删除 → 状态行必在）；
- *     content[0] JSON 里 grounding.generic[] 的片段扁平总数独立清点（不信任
- *     日志 output.n_snippets 自报值，同时断言两者一致）；幸存来源 URL 序与逐 URL 幸存
- *     片段索引身份（位置级文本形态匹配——off/test 对照期望文件 final 节、on 对照
- *     ON_KEPT_SNIPPETS 常数，F-05）；日志 sources 裁决表与 content 逐 URL 对账；
- *     临时 log_dir 恰一条
- *     成功记录（无 error 字段、有 stats 主体），mode / model_config / request 与
- *     本次调用一致；
- *   - off：片段总数 = off 期望（59）；日志 jev 严格为 null；桩侧 Jev 请求数 0
- *     （stderr 无 [smoke-replay] 行；桩对 off 下的 Jev 请求直接拒绝——E-03 双层闸）；
- *   - test：完整 content 数组与 on 那次独立 spawn 的结果逐字段相同（同夹具同预加载
- *     桩，04-01 单链语义的端到端互证，含每个 text 块；比较前剥除状态行 sample 后缀
- *     ——CONTEXT 允许 test 多出样本定位元信息，04-02）；状态行 sample 路径指向真实
- *     存在的样本文件、样本 request_id 与该次 JSONL 记录相同、JSONL 信封
- *     sample.status 为 saved（SC3 全链）；per_source 断言（恰 12 行
- *     全部 answered、无 fail_kind、当前四题答案与 snippet_scores 对齐录制真值）与 on
- *     同口径；新记录不再产生 shadow_diff（恒 null，字段仅为读旧记录保留）；
- *   - on：片段总数 = on 期望（59，由夹具契约差集推导：59 − 删 9 + 恢复 9，净差 0
- *     ——filter-rules-5 取消播种序后 datacamp#0 与 mezha#4 随 off 归一）；
- *     逐 URL 幸存索引身份对照 ON_KEPT_SNIPPETS 常数（独立运行固化，9 删/11 恢复以
- *     身份差集互钉）；per_source 断言同 test——no_key 静默短路、空回答、
- *     validation 兜底都在这里现形（E-01/E-02 的直接防线）。
- *   - all-only 请求计数（all-only 清理）：test/on 各恰 1 次共享请求（桩侧记账行与
- *     日志 n_requests 交叉验证），off 恰 0；样本 format_version 5、requests 恰 1 条、
- *     sent 仍逐来源 12 行。
- *
- * --live（D-18，R-09 合并 E-04/IN-01，F-03/F-04）：真实网络手动开关，目标是确认
- * Brave + Jev 链路。配置解析与生产同口径（复用 src/filter/config.ts 导出的
- * parseFilterConfigObject：~ / ~/ / ~\ 展开、字面 ~foo 原样、空白与坏值回落）；
- * 读出生产配置原始 JSON 后只把 log_dir 替换为本次冒烟的独享临时目录，写成临时
- * 配置副本传给子进程（其余字段——mode、jev.model、阈值、blocklist 等——原样
- * 保留，TYPESAFE_API_KEY 仍走环境变量），轮询独享目录下全部 .jsonl 文件：目录里
- * 只有本次记录，不存在同查询的其他进程写入，也不受写入器跨零点换日期文件影响；
- * ENOENT / 无完整记录视为尚未写出继续短轮询，其他读错误明确诊断。query + intent
- * 匹配保留为辅助校验，不再是记录归属依据（独享目录本身就是身份保证）。从记录的
- * per_source 分别统计"已收到响应"与"可用来源级裁决"（F-03）：可用行要求 answered
- * 且无 fail_kind（R-04：关键答案缺失/越界时仍是 answered + fail_kind='validation'）
- * 并核 answers.is_off_topic 为有限数；mode off / no_key / 零请求 / 零可用一律失败
- * （仅 Brave 成功绝不输出"两者已发生"）；部分无效如实打出逐源降级明细（有效 N /
- * validation M / failed K，只有全部可用才算全绿）；绝不检查不存在的汇总 answered
- * 字段（record.jev.status 只有 ok/no_key/degraded/breaker_open，层级错误会把正常
- * 请求误判）。
- *
- * 断言清单（D-19 照 src/tools/llm_context/index.test.ts 既有断言抄的部分）：
- *   1. 工具声明：inputSchema.properties == 白名单九键 + intent、required ==
- *      ['query','intent']、无 outputSchema；
- *   2. 状态行：以 `[filter] ` 开头、单行、D-02 形状、与 JSON 块内
- *      output.status_line 逐字同源（D-08）、无 on 专属未判定段（D-06）；
- *   3. stderr：无 `[jev-filter] Unable to write`（日志写成功）、无 `[smoke-stub]`
- *      失败标记（桩身份校验全过、off 闸未触发）。
- *
- * 两个关键坑（RESEARCH 六问 3/4）：
- *   - SDK spawn 的 env 白名单 12 变量不含 TYPESAFE_API_KEY / JEV_FILTER_CONFIG_FILE，
- *     冒烟需要的每个变量必须显式放进 serverParams.env；
- *   - on/test 不设假 key 会走 no_key 静默短路（Pitfall 2 假绿）——off 也统一传假值。
- *
- * dev/ 不进 tsc / prettier 门禁；相对导入带 .js 后缀（NodeNext ESM 直跑约定）。
+ * 通过 MCP SDK 启动真实 stdio 服务器并检查工具声明、返回内容、日志与样本。
+ * 用法：node --import tsx dev/smoke-rollout.ts [--mode off|test|on] [--live]
+ * 默认使用 fetch 桩，零网络运行三种模式；test/on 单模式也会运行另一模式作对照。
+ * --live 与 --mode 互斥，显式使用真实网络；配置副本与日志写入独享临时目录。
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -123,16 +57,12 @@ const stubPath = join(repoRoot, 'dev', 'stub_fetch.mjs');
 const distIndexJs = join(repoRoot, 'dist', 'index.js');
 const toolName = 'brave_llm_context';
 
-// 假 key（T-03-06）：值非空即可让 on/test 走真分类器路径，桩会截住全部请求。
-// BRAVE_API_KEY 是上游 CLI 的启动硬前置（缺了直接退出），桩模式同样传假值——
-// 零网络由桩保证，不依赖 key 真实性。两个 key 都写成常量再引用——不把 key 名与
-// 引号字面量相邻，保持 key 泄漏闸 grep 形态干净。
+// 非空假密钥让 test/on 进入分类器，并满足服务器启动要求；fetch 桩保证零网络。
+// 常量单独声明，避免被密钥泄漏检查误报。
 const FAKE_JEV_KEY = 'smoke-stub';
 const FAKE_BRAVE_KEY = 'smoke-stub';
 
-// 期望文件：三件套取 off 标注（与 dev/compare.ts 同式）；final 节是
-// pipeline.fixtures.test.ts 逐条对账过的手工标注——off 的幸存 URL 序与逐 URL
-// 幸存片段数（R-11 URL 级身份的期望来源）
+// off 期望来自夹具的手工标注 final 节，与 pipeline.fixtures.test.ts 共用。
 const expected = JSON.parse(
   readFileSync(join(repoRoot, 'fixtures', 'expected', 'jev_release_default.off.json'), 'utf8')
 ) as {
@@ -146,35 +76,19 @@ const expected = JSON.parse(
   };
 };
 
-// ---------------------------------------------------------------------------
-// 固定夹具契约常数（R-11）：改动必须与 pipeline.fixtures.test.ts 同步
-// ---------------------------------------------------------------------------
+// 固定夹具契约；调整时与 pipeline.fixtures.test.ts 同步。
 
-// on 相对 off 的片段差集计数（夹具契约，与 pipeline.fixtures.test.ts 的差集真值
-// 同源）：off − on 删 9 条、on − off 恢复 9 条（逐条身份清单见 ON_KEPT_SNIPPETS
-// 注释），净差 0。filter-rules-5 取消当事方播种序后 datacamp#0 与 mezha#4 随 off
-// 归一（不再恢复），旧值恢复 11 作废；旧 shadow_diff 四字段随双链退役（04-01）
-// 不再产生，这里只保留差集计数作 on 期望推导与身份差集互钉。
+// on/off 的差集计数来自固定夹具契约，与下方片段身份集合交叉核对。
 const ON_DELTA_REMOVED = 9;
 const ON_DELTA_RESTORED = 9;
 
-// off 幸存片段总数来自期望文件 final.n_snippets；on 期望按夹具契约差集推导
-// （59 − 9 + 9 = 59，净差 0），与夹具测试同口径，不另立硬编码
+// off 总数来自期望文件；on 总数按固定差集计算。
 const OFF_N_SNIPPETS = expected.final.n_snippets;
 const ON_N_SNIPPETS = OFF_N_SNIPPETS - ON_DELTA_REMOVED + ON_DELTA_RESTORED;
 
-// on 侧逐 URL 幸存片段索引（F-05，R-11 身份验收的 on 半边；键与 off 期望文件同式，
-// "i" 或 "i.p"，幸存序）。导出方法：2026-10-04 一次性脚本 import src/filter 的
-// filterLlmContext，同 pipeline.fixtures.test.ts 口径（fixtures/jev_release_default.
-// jev.json 录制 + 夹具答案回放）跑 off 与 on 各一次——off 先对期望文件逐条核对
-// （URL 序 / 逐 URL 幸存索引 / 总数 59）通过后，才取 on 的 stats.sources 幸存键。
-// 期望不由冒烟自身的被测运行反推；夹具或过滤语义改动时必须重跑导出并与
-// pipeline.fixtures.test.ts 同步。差集身份（与 ON_DELTA_REMOVED / ON_DELTA_RESTORED
-// 的 9/9 互钉，与 fixtures.test 的 TEST_REMOVED_SNIPPET_IDS / TEST_DIFF_EXPECTED
-// 同源互证）：
-// off − on 删 9 = typesafe.ai#4/#5/#6/#7、ua.news#1/#4/#6、mezha#0/#2；
-// on − off 恢复 9 = theregister#7、explainx#1.0/#1.4、flowtivity#1/#3.0/#3.1/#3.3、
-// typesafe.ai#0/#2。
+// on 的逐 URL 幸存身份，键为 i 或 i.p，按幸存序排列。
+// 由独立夹具运行固化；导出前先核对 off 与手工标注一致，不由本次被测运行反推。
+// 修改夹具或过滤语义时，需重新核对并与 pipeline.fixtures.test.ts 同步。
 const ON_KEPT_SNIPPETS: Record<string, string[]> = {
   'https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711':
     ['0', '1', '2', '3', '4', '5', '6', '7'],
@@ -218,15 +132,8 @@ const ON_KEPT_SNIPPETS: Record<string, string[]> = {
   'https://www.therundown.ai/news/typesafe-jev-ai-decisions-software': ['3', '4'],
 };
 
-// 片段文本形态见证（F-05/R2）：返回文本 → 片段索引位置级匹配的期望。44 条原文
-// 形态无需见证（夹具原文逐字相等）；17 条按独立运行的幸存输出逐字固化：JSON-LD
-// 转换段（explainx#1 六段、flowtivity#3 五段——文本派生自 JSON 不在原文里）、样板
-// 行剥除后按行重组的 theregister#1 与 aiwiki#0（不再是原文连续片段）、剥样板后的
-// 完整尾部 heise#1 与 pasquale#2（R2 起逐字相等，通用后缀匹配已删——空串与任意
-// 截断不再假绿）、样板剥除后不再等于原文的 ua.news#1 与 mezha#1（filter-rules-13/15
-// 的本地清洗更新所致，2026-10-04 重导出；幸存索引身份与差集不变）。与
-// ON_KEPT_SNIPPETS 同一次脚本导出，覆盖 off/on 两模式的全部转换形态（转换形态与
-// 模式无关）。
+// 转换后的片段文本期望，与 ON_KEPT_SNIPPETS 同次独立运行固化。
+// 涵盖 JSON-LD 提取与样板剥离后的重组文本；其余片段直接与夹具原文逐字比较。
 const SNIPPET_WITNESS_TEXTS: Record<string, Record<string, string>> = {
   'https://www.heise.de/en/news/AI-model-Jev-to-make-machines-decide-faster-11457071.html': {
     '1': 'TypeSafe AI demonstrates how Jev could help companies using customer service routing as an example. Jev decides there how an incoming request should be processed. A simple question about order status can go to normal program code, a product question to a language model, and a complex or uncertain case to a human.',
@@ -267,19 +174,16 @@ const SNIPPET_WITNESS_TEXTS: Record<string, Record<string, string>> = {
     '3.4':
       'Q: Is Jev available to use today?\nA: Only via early access waitlist at typesafe.ai as of September 16, 2026. There is no OpenRouter or AWS Bedrock listing yet, and TypeSafe has published no architecture paper or public benchmark scores.',
   },
-  'https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch': {
-    '1':
-      '# TypeSafe unveils Jev model for software automation — TechCrunch\nLev Shevtsov 18 September 2026 21:58',
-  },
+  'https://ua.news/en/technologies/typesafe-predstaviv-model-jev-dlia-avtomatizatsiyi-pz-techcrunch':
+    {
+      '1': '# TypeSafe unveils Jev model for software automation — TechCrunch\nLev Shevtsov 18 September 2026 21:58',
+    },
   'https://mezha.net/eng/news/d559e594_typesafe_ai_unveils/': {
-    '1':
-      '# TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation\n### Russian Drones Kill Two Men in Tekstylne, Kherson Region\n\nFriday, 18 September 2026, 23:01\n\n\nA former OpenAI contributor says the next automation breakthrough may not speak back at all, but quietly choose the right action',
+    '1': '# TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation\n### Russian Drones Kill Two Men in Tekstylne, Kherson Region\n\nFriday, 18 September 2026, 23:01\n\n\nA former OpenAI contributor says the next automation breakthrough may not speak back at all, but quietly choose the right action',
   },
 };
 
-// 9 删 / 11 恢复从计数升级为身份清单（F-05）：差集只从两份常数推导（off 期望文件
-// 与 ON_KEPT_SNIPPETS，都不由被测运行产生），与 ON_DELTA_REMOVED / ON_DELTA_RESTORED
-// 互钉——任一常数漂移或两者失配，冒烟还没 spawn 服务器就当场红。
+// 差集只从固定的 off/on 身份集合推导，再与计数常量核对，避免期望自证。
 const keptIdentitySet = (kept: Record<string, (number | string)[]>): Set<string> =>
   new Set(Object.entries(kept).flatMap(([url, keys]) => keys.map((key) => `${url}#${key}`)));
 const offIdentity = keptIdentitySet(expected.final.kept_snippets);
@@ -314,8 +218,7 @@ const jevRecording = JSON.parse(
   >;
 };
 const nRecordedSources = Object.keys(jevRecording.results).length;
-// 当前四题键（all-only 唯一题库的来源级部分）：单一来源是 src 的 SOURCE_QUESTIONS，
-// 桩回放的 answers 只覆盖这四题（旧 v3 十题的其余键不进响应）
+// 来源题键统一取自 SOURCE_QUESTIONS，桩只投影对应的录制回答。
 const CURRENT_SOURCE_KEYS = Object.keys(SOURCE_QUESTIONS).sort();
 
 // 录制夹具装载自检：全 200（全 answered 契约的前提）且每源 snip 答案键连续——
@@ -337,9 +240,7 @@ const recordedSnipCounts: Record<string, number> = Object.fromEntries(
   ])
 );
 
-// LOG-03 负样本：从夹具 generic 里取一条片段正文的前 30 字符（F-06：不再排除
-// 引号/反斜杠——泄漏检查用一致 JSON 转义比较，转义形态含引号、反斜杠、TAB 都能
-// 正确命中）；只跳过恰好撞上标题/URL 的片段，保证负样本断言有意义
+// 正文泄漏检查取片段前 30 字符；跳过恰好出现在标题或 URL 中的文本，避免误报。
 const braveFixture = JSON.parse(
   readFileSync(join(repoRoot, 'fixtures', 'jev_release_default.json'), 'utf8')
 ) as {
@@ -365,18 +266,13 @@ const negativeSample = (): { head: string; body: string } => {
 const { head: snippetHead, body: snippetBody } = negativeSample();
 
 /**
- * LOG-03 泄漏检查（F-06，IN-03 在冒烟侧的落地）：记录文本是 JSON 行，片段正文若
- * 泄入必以 JSON 转义形态出现——用同一 JSON.stringify 的转义形态做一致比较。旧式
- * 未转义 includes 在前缀含 TAB/换行等控制字符时假绿（JSON 从不原样输出控制字符，
- * 字面查找永远落空），logging.test.ts 的同类修复不覆盖冒烟这条检查路径。
+ * 按 JSON.stringify 的转义形态检查日志是否含正文。
+ * 原文含 TAB 或换行时，直接 includes 原文会漏检。
  */
 const recordLeaksSnippet = (recordText: string, head: string): boolean =>
   recordText.includes(JSON.stringify(head).slice(1, -1));
 
-// 金丝雀（F-06 负例，每次冒烟自检）：夹具片段本身不含 TAB（已核），对真实正文副本
-// 注入 TAB 后按记录写入器口径序列化进伪造记录文本——转义比较必须命中，未转义的
-// 字面 includes 必然漏检（命中差异就是本检查的存在理由）；干净文本必须不命中。
-// 检查器坏了当场死，不让 LOG-03 闸空转。
+// 向正文副本注入 TAB 并序列化为伪日志，自检泄漏检查器能命中；干净日志应不命中。
 {
   const tabbedBody = `${snippetBody.slice(0, 20)}\t${snippetBody.slice(20)}`;
   const tabbedHead = tabbedBody.slice(0, 30);
@@ -398,18 +294,15 @@ const recordLeaksSnippet = (recordText: string, head: string): boolean =>
   );
 }
 
-// 原始片段表（F-05 位置级身份匹配的比对源）：URL → 夹具原文片段数组
+// 按 URL 索引夹具原始片段，供位置级身份核对。
 const rawSnippetsByUrl = new Map(
   braveFixture.response.grounding.generic.map((item) => [item.url, item.snippets ?? []])
 );
 
 /**
- * 位置级身份匹配（F-05/R2）：返回里 URL u 的某条片段文本必须与契约常数在该位置
- * 的期望**逐字相等**——见证文本（JSON-LD 段、样板行重组形态、剥样板后的完整文本）
- * 或夹具原文。没有任何通用后缀/包含匹配：JavaScript 里任意串都 endsWith('')，通用
- * 后缀兜底会让空串与任意截断假绿（R2 复核复现）；样板前缀加回（原文）也不匹配剥
- * 样板见证。同 URL 被删片段的原文各条路都不匹配——等数量替换（总数、URL 序、
- * 日志计数全不变）在这里现形。
+ * 按返回位置与固定身份核对文本，必须等于转换期望或夹具原文。
+ * 不使用通用后缀匹配：任何字符串都 endsWith 空串，会让空文本和任意截断通过。
+ * 同 URL 下等数量替换片段也必须被发现。
  */
 const snippetMatchesIdentity = (url: string, key: string, text: string): boolean => {
   const witness = SNIPPET_WITNESS_TEXTS[url]?.[key];
@@ -420,7 +313,7 @@ const snippetMatchesIdentity = (url: string, key: string, text: string): boolean
   return raw === text;
 };
 
-// 工具声明白名单：照 src/tools/llm_context/index.test.ts 的 WHITELIST 逐字抄
+// 工具输入白名单，与宿主适配测试一致。
 const WHITELIST = [
   'query',
   'country',
@@ -456,9 +349,9 @@ type SmokeLogRecord = {
   mode?: string;
   model_config?: string;
   model_reported?: string[];
-  /** 04-02 信封增量：与样本文件名三处同值 */
+  /** 日志与样本共用的请求身份。 */
   request_id?: string;
-  /** 04-02 信封增量：样本相对路径与记录状态（仅 test 模式出现） */
+  /** test 模式的样本相对路径与保存状态。 */
   sample?: { path?: string; status?: string };
   request?: { query?: string; intent?: string };
   jev?: {
@@ -472,7 +365,7 @@ type SmokeLogRecord = {
   error?: unknown;
 };
 
-/** 样本记录里冒烟要看的切片（04-02；完整契约在 src/filter/sample.ts）。 */
+/** 冒烟读取的样本字段子集，完整契约见 src/filter/sample.ts。 */
 type SmokeSample = {
   format_version?: number;
   request_id?: string;
@@ -554,9 +447,8 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ['--import', pathToFileURL(stubPath).href, distIndexJs, '--transport', 'stdio'],
-    // SDK spawn env = 默认白名单 12 变量 ∪ 这里显式给出的键——配置文件路径与假 key
-    // 都不在白名单里，缺一即假绿/读不到配置/启动即退（六问 4）；桩期望的模型与
-    // 端点同批传入，单一来源是 src 的钉版常量与端点导出（R-12）
+    // SDK 不会默认继承所有环境变量；显式传入配置路径、假密钥和桩的请求期望。
+    // 模型与端点取源码导出，避免两处常量漂移。
     env: {
       JEV_FILTER_CONFIG_FILE: configPath,
       TYPESAFE_API_KEY: FAKE_JEV_KEY,
@@ -571,10 +463,10 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
 
   const client = new Client({ name: 'smoke-stdio', version: '0.0.0' });
   try {
-    // initialize 握手由 connect 自动完成（D-19：发 initialize）
+    // connect 自动完成 initialize 握手。
     await client.connect(transport);
 
-    // --- 1. 工具声明（照 index.test.ts:115-129 抄）---
+    // 工具声明
     const { tools } = await client.listTools();
     const tool = tools.find((t) => t.name === toolName);
     assert.ok(tool, `declaration: ${toolName} is not listed`);
@@ -590,7 +482,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     );
     assert.equal(tool.outputSchema, undefined, 'declaration: outputSchema must be absent');
 
-    // --- 2. tools/call（参数从 expected 三件套构造，照 compare.ts 同式）---
+    // 按固定夹具参数调用工具。
     const result = (await client.callTool({
       name: toolName,
       arguments: {
@@ -607,8 +499,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     );
     assert.equal(result.structuredContent, undefined, 'return: structuredContent must be absent');
     const content = result.content;
-    // E-06：本夹具必有删除 → 状态行必在，恰两个 text 块（仅当前夹具期望，不是
-    // 所有生产请求都必须两块——无状态行时一块仍是合法契约）
+    // 当前夹具必有删除，因此应返回两个 text 块；普通无状态行请求可只返回一块。
     assert.equal(
       content.length,
       2,
@@ -618,7 +509,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     assert.equal(content[1]?.type, 'text', 'return: content[1] must be a text block');
     const payload = parseJsonBlock(content[0].text);
 
-    // --- 3. 真实片段计数与 URL 级身份（R-11 #5，E-02 的直接防线）---
+    // 实际片段数与来源身份
     const generic = payload.grounding?.generic;
     assert.ok(Array.isArray(generic), 'return: grounding.generic must be an array');
     const counted = generic.reduce((sum, item) => sum + (item.snippets?.length ?? 0), 0);
@@ -627,18 +518,14 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       expected.final.urls,
       'return: surviving source URLs must equal the fixture final.urls in Brave order'
     );
-    // 04-01 单链语义：test 与 on 共用 runOnChain，裁决真实生效——test 的期望与 on
-    // 同源（ON_N_SNIPPETS / ON_KEPT_SNIPPETS），off 独用期望文件
+    // test/on 使用同一组期望；off 使用本地过滤的期望文件。
     const expectedCount = runMode === 'off' ? OFF_N_SNIPPETS : ON_N_SNIPPETS;
     assert.equal(
       counted,
       expectedCount,
       `return: counted snippets must be ${expectedCount} in ${runMode} (fixture contract), got ${counted}`
     );
-    // 逐 URL 幸存片段身份（F-05，把 R-11 的计数对账升级为位置级索引身份）：三模式
-    // 各自对照自己的契约——off 对照期望文件 final.kept_snippets，test/on 对照
-    // ON_KEPT_SNIPPETS（9 删/11 恢复的身份差集已在顶部与差集常数互钉）。同 URL
-    // 等数量换成已删片段（总数、URL 序、日志计数全不变）在这里红。
+    // 逐 URL、逐位置核对幸存身份，防止等数量换成已删片段却通过总数检查。
     const expectedKept: Record<string, (number | string)[]> =
       runMode === 'off' ? expected.final.kept_snippets : ON_KEPT_SNIPPETS;
     for (const item of generic) {
@@ -662,10 +549,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
     }
     assert.equal(Object.hasOwn(payload, 'output'), false, '规模统计只写日志');
 
-    // --- 4. 状态行（D-02 形状 + D-08 同源 + D-06；04-02 sample 后缀两态）---
-    // default 夹具 off 无来源丢弃（12→12）只有片段删除（76→59）：dropped 段按
-    // D-04 条件可有可无，形状断言两态都接受；片段总数段必然在；test 模式末尾可
-    // 多出 ` sample for filter debugging - original results, filtered results, Jev decisions: <绝对路径>` 后缀（CONTEXT：样本定位元信息），off/on 绝不出现
+    // 状态行与统计同源；此夹具可只有片段删除。test 额外带样本定位后缀。
     const statusLine = content[1]?.text;
     assert.ok(
       statusLine.startsWith('[filter] '),
@@ -702,7 +586,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       '状态行只在第二个文本块返回，正文不重复携带'
     );
 
-    // --- 5. 临时 log_dir（R-11 #6：固定夹具一次成功调用恰一条成功记录）---
+    // 固定夹具的一次成功调用应恰好写一条日志。
     const files = readdirSync(tmpRoot).filter((file) => file.endsWith('.jsonl'));
     assert.equal(files.length, 1, `log: exactly one dated .jsonl expected, got ${files.length}`);
     assert.match(
@@ -711,7 +595,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       `log: file must be a local-date name — ${files[0]}`
     );
     await pollForLogLines(tmpRoot);
-    // E-06 保险：等写入链彻底安静后再数一次——"恰一条"的判定不留"先读到一半"的竞态
+    // 等待写入链安静后再数一次，避免先读到部分记录导致假通过。
     await sleep(250);
     const lines = readFileSync(join(tmpRoot, files[0]), 'utf8').split('\n').filter(Boolean);
     assert.equal(
@@ -750,7 +634,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       expected.intent,
       'log: record must belong to this call (intent)'
     );
-    // 04-02 信封增量：request_id 对三档模式一致（与样本文件名关联的锚）
+    // 三种模式均携带 request_id，test 用它关联样本。
     assert.match(
       record.request_id ?? '',
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
@@ -786,9 +670,9 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       );
     }
 
-    // --- 7. Jev 记账（R-11 #1/#2；字段层级见 notes/test-mode-logging.md）---
+    // Jev 请求记账
     if (runMode === 'off') {
-      // E-03 记账侧：off 的 jev 严格为 null（不是缺键、不是零值对象）
+      // off 的 jev 必须为 null。
       assert.equal(record.jev, null, 'log: off must record jev exactly null (zero Jev requests)');
       assert.deepEqual(record.model_reported, [], 'log: off must report no answered model');
       assert.equal(record.shadow_diff, null, 'log: off must record shadow_diff null');
@@ -822,7 +706,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       );
       for (const row of rows) {
         const id = row.src ?? '(missing)';
-        // E-01：answered 是唯一可用状态；fail_kind（含 validation 兜底）一律不许出现
+        // 夹具所有来源应完成有效裁决，不允许失败或 validation 兜底。
         assert.equal(
           row.status,
           'answered',
@@ -834,8 +718,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           jevRecording.results[id]?.url,
           `log: per_source ${id} url must match the recording entry`
         );
-        // 当前四题答案齐全：键集合等于 SOURCE_QUESTIONS（旧 v3 十题的其余键不进
-        // 桩响应；time_snip 独立时间题已退役，answers 不得再出现）
+        // 答案键集合必须等于当前来源题集合。
         const answers = row.answers;
         assert.ok(
           answers !== undefined && typeof answers === 'object',
@@ -868,11 +751,10 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
         [DEFAULT_JEV_MODEL],
         `log: ${runMode} model_reported must be the recorded model`
       );
-      // 04-01 起旧影子双链退役：新记录不再产生 shadow_diff（恒 null，字段仅为读
-      // 旧记录保留）——would 链若被意外复活，这里当场红
+      // shadow_diff 仅兼容旧记录，当前运行应为 null。
       assert.equal(record.shadow_diff, null, 'log: new records must not carry shadow_diff');
 
-      // --- 7.5 样本断言（04-02 SC3 全链，test 模式独有）---
+      // test 模式样本
       if (runMode === 'test') {
         const marker =
           ' sample for filter debugging - original results, filtered results, Jev decisions: ';
@@ -882,14 +764,13 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `sample for filter debugging - original results, filtered results, Jev decisions: test status line must carry the path — ${statusLine}`
         );
         const sampleAbsPath = statusLine.slice(markerAt + marker.length);
-        // 先写后返（SC3）：callTool 返回时样本文件必须已经真实存在——路径不存在
-        // 或文件缺失都说明写入顺序坏了
+        // callTool 返回时样本必须已存在，以检查先保存后返回的顺序。
         assert.ok(
           existsSync(sampleAbsPath),
           `sample for filter debugging - original results, filtered results, Jev decisions: the status-line path must exist at return time — ${sampleAbsPath}`
         );
         const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
-        // 全量接入：v5 按共享请求保存实发载荷；历史 v1–v4 必须按旧格式读取
+        // 按 v5 请求级记录核对实发载荷。
         assert.equal(
           sample.format_version,
           5,
@@ -940,8 +821,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           nRecordedSources,
           'sample for filter debugging - original results, filtered results, Jev decisions: pre_filter must carry the full pre-filter response'
         );
-        // 实发映射（04-04 R1 v2 捕获口径）：keep 来源恰 12（本夹具全部来源
-        // answered），片段三维全 true（一次共享请求覆盖、分数收齐、全部进入实发 state）
+        // 夹具所有 keep 来源均有有效答案，片段应已入 state、提交题目并收到有效评分。
         assert.equal(
           sample.jev?.sent?.length,
           nRecordedSources,
@@ -971,9 +851,7 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       !stderrText.includes('[smoke-stub]'),
       `stderr: the stub must accept every request identity (R-12 markers absent) — ${stderrText}`
     );
-    // 桩侧 Jev 请求数（R-11 #1 的桩侧计数 / #8 的记账对账）：off 恰 0，test/on 恰 1
-    // （all-only：全部候选进同一次共享请求）。日志 n_requests 是服务器自报，这里以
-    // 桩的独立计数交叉验证
+    // 桩独立统计请求数：off 为 0，test/on 为 1，与服务器日志交叉验证。
     const replays = [...stderrText.matchAll(/\[smoke-replay\] shared request /g)].length;
     assert.equal(
       replays,
@@ -988,16 +866,10 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// --live（D-18，R-09；F-03/F-04）：真实网络手动开关——不注入桩，key 与代理从当前
-// 进程环境透传。生产配置原始 JSON 只换 log_dir 写成临时副本给子进程（独享日志
-// 目录就是本次记录的身份保证）；轮询独享目录全部 .jsonl（跨午夜安全）；从
-// per_source 分别统计已收到响应与可用来源级裁决并如实报告降级。stderr 直通终端
-// 便于人工观察。不进自动验证，切换前跑一次。
-// ---------------------------------------------------------------------------
+// 显式 live 模式：密钥与代理从环境传入，不注入桩。
+// 配置副本只替换 log_dir；独享目录用于确定日志归属，不进入默认自动验证。
 
-/** live 透传的白名单外变量（有则传无则跳过）；TYPESAFE_API_KEY 是当前识别的 key。
- * JEV_FILTER_CONFIG_FILE 不在列——子进程一律读本次的临时配置副本（F-04）。 */
+/** live 需显式透传的环境变量；配置路径单独指向本次临时副本。 */
 const LIVE_ENV_KEYS = [
   'TYPESAFE_API_KEY',
   'BRAVE_API_KEY',
@@ -1012,10 +884,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * 读生产配置的原始 JSON（F-04 临时副本的来源）：BOM 容忍；读不到 / 坏 JSON /
- * 顶层 null → undefined 并各报一行（与生产 loadFilterConfig 的 fail-open 同因，
- * 服务器侧行为一致）。只取原始值——解析与 ~ / ~/ / ~\ 展开、字面 ~foo 原样、
- * 空白与坏值回落全部交给 parseFilterConfigObject，不复制其内部私有函数。
+ * 读取生产配置原始 JSON，容忍 BOM；缺失或格式错误时告警并返回 undefined。
+ * 值校验与路径展开交给 parseFilterConfigObject，避免复制配置解析逻辑。
  */
 const readProductionConfigRaw = (configPath: string | undefined): unknown => {
   if (configPath === undefined) return undefined;
@@ -1036,12 +906,8 @@ const readProductionConfigRaw = (configPath: string | undefined): unknown => {
 };
 
 /**
- * 读独享日志目录下全部 .jsonl 的完整成行记录（F-04）：目录由本次冒烟 mkdtemp 新建、
- * 绝对路径只进过本次子进程的环境，里面出现的记录必然来自本次调用——不存在同查询
- * 的其他进程的行，按文件全读也天然跨午夜安全（写入器零点后换日期文件，两个文件
- * 都在目录里）。目录未建（ENOENT）= 尚未写出，返回空；末尾不成行的半行留待下次
- * 轮询；完整行解析不了才跳过并提示。权限/占用等其他读错误明确诊断，不一概当没写
- * （IN-01）。
+ * 读取独享目录全部 JSONL，兼容跨午夜滚动。
+ * 目录不存在或末尾半行表示尚未写完；完整坏行和其他读取错误需明确诊断。
  */
 const readPrivateLogRecords = (logDir: string): Record<string, unknown>[] => {
   let files: string[];
@@ -1072,12 +938,7 @@ const readPrivateLogRecords = (logDir: string): Record<string, unknown>[] => {
   return records;
 };
 
-/**
- * 轮询本次调用的记录（至多 ~10 s）：独享目录本身就是记录归属的依据（F-04），
- * query + intent 匹配只是辅助校验——不再是"最后匹配行就是本次"的时序猜测（同
- * 查询的两进程互认在独享目录下不成立）。零记录 = 本次调用没有落账，旧记录或
- * 其他进程的记录都进不了这个目录（R-09）。
- */
+/** 最多轮询约 10 秒；独享目录确定记录归属，query/intent 只作辅助校验。 */
 const pollForNewRecord = async (logDir: string): Promise<SmokeLogRecord> => {
   for (let waited = 0; waited < 10000; waited += 100) {
     const matching = readPrivateLogRecords(logDir).filter(
@@ -1094,15 +955,14 @@ const pollForNewRecord = async (logDir: string): Promise<SmokeLogRecord> => {
 };
 
 const runLiveMode = async (): Promise<void> => {
-  // 默认配置位置（D-24）：存在则读它并按同口径解析，缺省则双方都走全默认
+  // 默认配置路径，与生产解析一致。
   const homeConfig = join(homedir(), '.brave-jev', 'config.json');
   const env: Record<string, string> = {};
   for (const key of LIVE_ENV_KEYS) {
     const value = process.env[key];
     if (value !== undefined && value !== '') env[key] = value;
   }
-  // 配置位置与服务器同序（loadFilterConfig 只认 JEV_FILTER_CONFIG_FILE）：显式
-  // 环境变量优先；未设则回默认位置 ~/.brave-jev/config.json（D-24，存在才读）
+  // 显式配置环境变量优先，否则使用默认配置位置。
   const envConfigPath = process.env[JEV_CONFIG_FILE_ENV]?.trim() || undefined;
   const productionConfigPath = envConfigPath ?? (existsSync(homeConfig) ? homeConfig : undefined);
   const productionRaw = readProductionConfigRaw(productionConfigPath);
@@ -1114,10 +974,7 @@ const runLiveMode = async (): Promise<void> => {
     );
   }
 
-  // 独享日志目录（F-04）：临时配置副本只把 log_dir 换成本次 mkdtemp 的私有目录，
-  // 其余字段（mode、jev.model、阈值、blocklist_file 等）原样保留——子进程的记录
-  // 全部落在这里，与生产日志目录、其他进程物理隔离。原配置缺失/坏 JSON 时副本
-  // 只含 log_dir（生产 fail-open 全默认，mode off 已在上面早退）。
+  // 配置副本只替换 log_dir，以隔离生产日志和其他进程；其余字段原样保留。
   const tmpRoot = mkdtempSync(join(tmpdir(), 'jev-smoke-live-'));
   const privateLogDir = join(tmpRoot, 'logs');
   const privateConfigPath = join(tmpRoot, 'config.json');
@@ -1161,8 +1018,7 @@ const runLiveMode = async (): Promise<void> => {
     }
 
     const record = await pollForNewRecord(privateLogDir);
-    // 辅助校验（F-04）：记录归属由独享目录保证；mode / model / query / intent 是
-    // 服务器读对配置、发对请求的交叉证据
+    // 交叉核对模式、模型与请求参数，确认子进程读到了预期配置。
     assert.equal(
       record.mode,
       configMode,
@@ -1184,8 +1040,7 @@ const runLiveMode = async (): Promise<void> => {
       'live: record must belong to this call (intent)'
     );
 
-    // R-09/E-04：裁决只认 per_source 行——record.jev.status 的合法值是
-    // ok/no_key/degraded/breaker_open，没有 answered，层级检查会把正常请求误判
+    // 裁决状态读取 per_source 行；汇总 jev.status 没有 answered 值。
     const jev = record.jev;
     assert.ok(
       jev !== null && typeof jev === 'object',
@@ -1202,11 +1057,8 @@ const runLiveMode = async (): Promise<void> => {
       'live: zero Jev requests went out — 仅 Brave 成功不能确认 Brave + Jev 链路（R-09）'
     );
 
-    // F-03：已收到响应与可用来源级裁决分开统计。可用行 = answered 且无 fail_kind
-    // （R-04：关键答案缺失/越界时生产记 answered + fail_kind='validation'），再核
-    // answers.is_off_topic 为有限数（与 applySourceVerdicts 消费的判定概率同源，
-    // 防 answers 空表误计；answered 行缺可用概率时按 validation 归桶）。只改冒烟
-    // 验收判定，不改生产 status、重试或熔断语义。
+    // 收到响应与取得有效裁决分别统计；answered 且无 fail_kind 才可能有效。
+    // 还需有限的 is_off_topic 概率，避免把空答案误计为有效裁决。
     const stateOf = (row: PerSourceRecord): 'usable' | 'validation' | 'failed' => {
       if (row.status !== 'answered') return 'failed';
       const pOffTopic = row.answers?.is_off_topic;
@@ -1227,8 +1079,7 @@ const runLiveMode = async (): Promise<void> => {
       `live: zero usable per_source rows (requests=${jev.n_requests}, received=${rows.length - failedRows.length}, validation=${validationRows.length}, failed=${failedRows.length}) — 全部无效不确认链路：${JSON.stringify(perSourceStates)}`
     );
 
-    // 独享目录恰一条记录（等写入链安静后复核）：F-04 身份保证的实证——出现第二行
-    // 说明目录被外部写入或一次调用落了多账
+    // 写入链安静后核对独享目录恰好一条记录。
     await sleep(250);
     const settled = readPrivateLogRecords(privateLogDir);
     assert.equal(
@@ -1237,8 +1088,7 @@ const runLiveMode = async (): Promise<void> => {
       `live: the private log dir must hold exactly one record for this call, got ${settled.length}`
     );
 
-    // 如实报告（F-03）：部分无效打出逐源降级明细（有效 N / validation M / failed K），
-    // 只有全部可用才算全绿
+    // 逐源报告有效、validation 和 failed 数量，仅全部有效时通过。
     const summary =
       `mode=${record.mode} requests=${jev.n_requests} ` +
       `usable=${usableRows.length} validation=${validationRows.length} failed=${failedRows.length}`;
@@ -1272,8 +1122,7 @@ try {
     const runs = new Map<SmokeMode, ModeResult>();
     const modes: SmokeMode[] = modeFilter ? [modeFilter] : [...MODES];
     for (const m of modes) {
-      // 单独 --mode test / --mode on：先静默跑另一个模式作对照——test==on 逐字段
-      // 断言需要两份独立 spawn 的结果（同夹具同预加载桩，dev/compare.ts 先例）
+      // test/on 单模式也启动另一个模式，以比较两份独立进程的结果。
       if (modeFilter !== undefined && m === 'test' && !runs.has('on')) {
         runs.set('on', await runStubbedMode('on'));
       }
@@ -1284,10 +1133,7 @@ try {
       runs.set(m, run);
       console.log(`smoke ${m}: all assertions passed`);
     }
-    // T-04-01-2 双载体互证：test 与 on 的完整 content 数组逐字段相同（同夹具同
-    // 预加载桩，两模式各自独立 spawn）——含每个 text 块，不是只比第一个 JSON 块。
-    // 04-02 修订：比较前剥除 test 的 sample 后缀（CONTEXT 允许 test 多出样本定位
-    // 元信息；只截断状态行，正文没有样本后缀，两侧同函数处理）
+    // 比较完整 content 数组，仅剥除 test 状态行的样本定位后缀，正文仍逐字核对。
     const testRun = runs.get('test');
     const onRun = runs.get('on');
     if (testRun !== undefined && onRun !== undefined) {

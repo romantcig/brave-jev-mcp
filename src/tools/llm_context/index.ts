@@ -74,10 +74,8 @@ export const description = `
     Source age, when available, is included with that item; it is not a verified publication date.
 `.trim();
 
-// 进程级配置惰性单例（EMBED-05）：第一次需要时解析 `JEV_FILTER_CONFIG_FILE`，之后
-// 复用——启动时读一次，改配置要重启 MCP。惰性而不是模块求值时读，因为模块求值
-// 早于 dotenv：入口 `src/config.ts` 先 import 工具模块（求值链包含本文件），之后
-// 才执行 `dotenv.config()`——模块求值时读 .env 里的变量会读到空。
+// 配置延迟到首次使用时读取并复用。工具模块先于 dotenv 求值，
+// 在模块顶层读环境会漏掉 .env 中的值；改配置后需重启 MCP。
 let filterConfig: FilterConfig | undefined;
 
 const configFor = (): FilterConfig => {
@@ -85,12 +83,8 @@ const configFor = (): FilterConfig => {
   return filterConfig;
 };
 
-// 进程级 Jev 分类器惰性单例（A13）：熔断计数与并发闸住 createJevClassifier 闭包，
-// 跨请求复用——库自身无模块级可变状态（stats.ts 不变式）。mode 为 off 时不创建、
-// 不读 key；mode 非 off 且 key 缺失时按等价 off 处理（EMBED-05：不传 deps，管道记
-// no_key 零请求），实例只在 key 可用时创建。缺 key 的 stderr 告警只发一次（WR-02）：
-// 缺 key 是进程级持续配置状态，逐请求重复告警是噪音；每次请求仍照常落 no_key 日志、
-// on 模式的未判定提示照常存在——降噪不是掩盖。
+// 跨请求共享分类器的并发与熔断状态，off 或缺密钥时不创建实例。
+// 缺密钥只告警一次；各次搜索仍记录 no_key，并提示未完成 Jev 检查。
 let jevClassifier: ClassifyDeps | undefined;
 let noKeyWarned = false;
 
@@ -109,15 +103,10 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
   return { classify: jevClassifier.classify };
 };
 
-// 进程级 JSONL 日志写入器惰性单例（D-16 三档模式都写）：串行链与目录自愈住在
-// createLogWriter 闭包里（库无模块级可变状态），适配行只持引用。log_dir、钉版
-// 模型与阈值都取自 config（启动时读一次），改配置要重启 MCP——与 config 单例同
-// 生命周期。
+// 三种模式共用进程级日志写入器，生命周期与配置一致。
 let logWriter: LogWriter | undefined;
 
-// 进程级样本写入器惰性单例（04-02，test 模式独有）：off / on 完全不创建、不分配
-// 路径、不写样本。与 logWriter 同生命周期——路径分配（allocatePath）在请求内
-// 完成，进程级状态（程序版本号）住 createSampleWriter 闭包。
+// 样本写入器仅 test 创建；每次请求单独分配路径，版本等只读状态留在闭包。
 let sampleWriter: SampleWriter | undefined;
 
 const sampleWriterFor = (config: FilterConfig): SampleWriter | undefined => {
@@ -146,40 +135,31 @@ export const execute = async (params: QueryParams) => {
   const config = configFor();
   const braveParams = applyOverfetch(parsedParams, config);
 
-  // 逐请求 JSONL 日志（D-16 三档模式都写，错误请求也落账）：写入失败 fail-open，
-  // 绝不影响搜索返回（D-14）。
+  // 三种模式均记录 JSONL，错误请求也落账；日志失败不影响搜索。
   const writer = (logWriter ??= createLogWriter(config));
 
-  // 样本写入器（04-02，test 模式独有）：off / on 不创建单例、不分配路径、不捕获。
+  // 仅 test 模式准备样本写入器。
   const samples = sampleWriterFor(config);
-  // 每请求唯一 request_id：样本记录、JSONL 信封、（test 模式的）状态行路径
-  // 与样本文件名基于同一 request_id 关联（SC3）。
+  // 样本、日志和状态行路径使用同一请求身份关联。
   const requestId = randomUUID();
-  // 先分配路径（PRD 写入顺序第一步）；allocatePath 捕获的锚点 Date 同时锚定样本
-  // ts 与目录日期（B-01）。
+  // 先分配路径，同一个 Date 锚定样本时间戳与目录日期。
   const samplePath: AllocatedSamplePath | undefined = samples?.allocatePath(requestId);
 
-  // 检索时间捕获：发起 Brave 请求前取一次——test 模式复用样本锚点 Date（样本 ts
-  // 与 retrieval_time 同源，回放可复现），其他模式同位置取一次；`localIsoWithOffset`
-  // 口径得到带时区 ISO 字符串。管道归一后进入 Jev state（`retrieval_time`）；同一
-  // 搜索的 Jev 请求与重试共用同一值。只进过滤内部上下文，不进公开 MCP schema、
-  // 不混入 Brave 查询参数。
+  // 在 Brave 请求前捕获检索时间；test 复用样本锚点，确保两处同源。
+  // 只传给过滤库，同次 Jev 请求与重试共用，不进入 Brave 参数。
   const retrievalTime = localIsoWithOffset(
     samplePath !== undefined ? samplePath.capturedAt : new Date()
   );
 
-  // Brave 请求计时（D-10）：计时点在适配行——API.issueRequest 前后，差值回填进
-  // stats.brave.latency_ms；Brave 报错时不回填（无 stats，走错误记录）。
+  // 在 Brave 请求前后计时；失败路径无过滤统计，转入错误记录。
   const braveStartedAt = Date.now();
   let response: unknown;
   try {
     response = await API.issueRequest<'llmContext'>('llmContext', braveParams, parsedHeaders);
   } catch (requestError) {
     const message = requestError instanceof Error ? requestError.message : String(requestError);
-    // 错误路径样本（04-02）：test 模式存请求与失败信息，final_return 显式标缺失——
-    // 绝不当零来源成功。写入失败 fail-open（stderr 一行），不影响原样上抛。
-    // 04-04 R3：接收保存状态——错误 JSONL 与成功记录同样写样本指针（saved/failed
-    // 如实区分），同一 request_id 关联；保存失败不覆盖原始搜索错误语义。
+    // 错误样本显式标记结果缺失；保存状态写入同 request_id 的错误日志。
+    // 保存失败不能覆盖原始搜索错误。
     let sample: LogSamplePointer | undefined;
     if (samples !== undefined && samplePath !== undefined) {
       const outcome = samples.saveError({
@@ -207,12 +187,10 @@ export const execute = async (params: QueryParams) => {
     throw requestError;
   }
   const braveLatencyMs = Date.now() - braveStartedAt;
-  // 捕获点（SC2）：JSON 解析之后、schema 校验之前对响应做 structuredClone 快照——
-  // 此后无人改写 response，克隆只为所有权隔离；off / on 不捕获（undefined）。
+  // test 在 schema 校验前深拷贝响应，保存独立的原始快照。
   const preFilter: unknown = samples !== undefined ? structuredClone(response) : undefined;
   const { success, data, error } = LlmContextSearchApiResponseSchema.safeParse(response);
-  // 成功时接住统计对象：状态行第二块与 JSONL 日志都从它出（LOG-01/LOG-02）；
-  // 失败（zod 校验失败，stage 'schema'）无 stats。
+  // 状态行和 JSONL 共用成功统计；schema 失败时无统计对象。
   let filtered: FilterResult | undefined;
   let payload: unknown;
   if (success) {
@@ -223,13 +201,9 @@ export const execute = async (params: QueryParams) => {
       jevDepsFor(config)
     );
     filtered.stats.brave.latency_ms = braveLatencyMs;
-    // test 模式状态行末尾追加 sample 后缀（SC3；04-04 R2 扩展）：零删除且原本无
-    // 状态行时，saved 口径生成仅含 `[filter] sample for filter debugging - original results, filtered results, Jev decisions: <路径>` 的状态行——每次成功
-    // 保存的 test 搜索都有样本定位入口。乐观构造（与 04-02 同法：先按 saved 口径
-    // 设好、写入失败再剥回）——样本里存的 final_return.status_line 必须与实际返回
-    // 逐字一致，而实际返回取决于写入结果，只能先按成功口径构造。第二块与日志均从
-    // stats.output.status_line 出，正文 JSON 不再重复输出状态行。
-    // 展示路径使用正斜杠，避免文本渲染将 Windows 反斜杠当作转义符。
+    // 先按保存成功构造状态行，再将同一值写入样本，确保样本与实际返回一致。
+    // 零删除也提供样本入口；写入失败时移除该后缀或纯样本状态行。
+    // 展示路径使用正斜杠，避免 Windows 反斜杠被当作转义符。
     const displaySamplePath = samplePath?.absolute.replaceAll('\\', '/');
     const sampleSuffix =
       displaySamplePath !== undefined
@@ -249,8 +223,7 @@ export const execute = async (params: QueryParams) => {
     // 展示层合并重复元数据，规模统计只进日志；状态行单独返回一次。
     // 样本仍保存实际发出的精简载荷，过滤输入与 stats 均不改动。
     payload = compactResponse(withAdjustments(filtered.result, raised));
-    // 先写后返（SC3）：样本写成功才带着样本路径返回；写失败剥回原状照常返回
-    // 搜索内容、stderr 一行、JSONL 记 failed——绝不返回仿佛文件已存在的路径。
+    // 保存完成后返回；失败时移除样本路径并记录 failed，搜索内容仍正常返回。
     if (samples !== undefined && samplePath !== undefined) {
       const outcome = samples.save({
         requestId,
@@ -261,7 +234,7 @@ export const execute = async (params: QueryParams) => {
         intent: params.intent,
         preFilter,
         stats: filtered.stats,
-        // 04-04 R1：实发派发记录原样交给样本层——样本 Jev 段只信它
+        // 样本使用客户端捕获的派发记录，避免重建输入与实发内容不一致。
         jevDispatch: filtered.jev_dispatch,
         // 请求级记录原样交入——实发载荷每请求一份（全量共享请求，一次搜索零或一条）
         jevRequests: filtered.jev_requests,
@@ -269,8 +242,7 @@ export const execute = async (params: QueryParams) => {
         statusLine: filtered.stats.output.status_line ?? null,
       });
       if (outcome.status === 'failed') {
-        // 剥回：有状态行剥掉 sample 后缀；原本无状态行（saved 口径生成的样本行）
-        // 删键——返回内容不含 sample 路径（04-04 R2：写入失败不得返回成功路径）
+        // 写入失败后移除样本后缀；原本无状态行时删除该键。
         if (hadLine) {
           filtered.stats.output.status_line = baseLine;
         } else {
@@ -289,9 +261,7 @@ export const execute = async (params: QueryParams) => {
   } else {
     payload = z.treeifyError(error);
     const message = error instanceof Error ? error.message : String(error);
-    // 错误路径样本（04-02）：schema 校验失败保留可用原始响应（safeParse 前快照）
-    // 与失败阶段；final_return 显式标缺失，不当零来源成功。04-04 R3：接收保存
-    // 状态写进错误 JSONL——saved / failed 如实区分，同一 request_id 关联。
+    // schema 失败时保留校验前响应快照，显式标记结果缺失，并把实际保存状态写入错误日志。
     let sample: LogSamplePointer | undefined;
     if (samples !== undefined && samplePath !== undefined) {
       const outcome = samples.saveError({
@@ -318,8 +288,7 @@ export const execute = async (params: QueryParams) => {
 
   logRaisedToStderr(raised);
 
-  // 状态行作为第二个 text 块追加在末尾（D-08）：追加条件与 buildStatusLine 返回值
-  // 同源——直接读 stats.output.status_line（步 10 写入点），绝不自创条件。
+  // 状态行直接取 stats.output.status_line，存在时追加为第二个 text 块。
   const statusLine = filtered?.stats.output.status_line;
   return {
     content: [

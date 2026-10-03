@@ -1,14 +1,4 @@
-/**
- * 来源级裁决链与片段 score 删除（VERDICT-01/02/04 + T-02-03-1）。
- *
- * 工作表按 verdict.ts 的最小行类型构造（pipeline 的 WorkSource 结构上满足，
- * 照 budget.test.ts 先例）；judged 行即 `JevPerSourceStats`（runJevStage 的
- * per_source 行，status/answers/snippet_scores 参与判定），judged Map 与
- * per_source 行共享同一对象引用——回写记账可断言。
- *
- * 依据：PLAN §3.3 固定顺序、notes/test-mode-logging.md 阈值判据方向、
- * 02-03-PLAN.md behavior 块。
- */
+/** 来源与片段裁决测试。工作表使用最小结构类型，judged 与统计行共享引用以检查回写。 */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -147,10 +137,7 @@ describe('isUsableSnippetScore', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// applySourceVerdicts：固定顺序三道丢弃门槛（含等号）、命中即停、
-// 退役题与历史旧键只记不丢、CJK 加成、异常概率防御
-// ---------------------------------------------------------------------------
+// 来源门槛顺序、保护、CJK 加成与无效概率；额外历史键不参与裁决。
 
 describe('applySourceVerdicts', () => {
   it('drops at exactly the off_topic threshold (p >= threshold) and keeps just below', () => {
@@ -211,10 +198,7 @@ describe('applySourceVerdicts', () => {
   });
 
   it('ignores legacy and retired answers no matter how high they answer (historical replay defense)', () => {
-    // 2026-10-01 六题精简后 worth_keeping / is_attributed_rewrite / paywalled 不再
-    // 提问，2026-10-03 再精简后 self_deprecated / stale 亦退役——旧十题录制回放时
-    // judged.answers 可能仍带旧键高概率，裁决链只读四键，绝不因额外旧键丢弃来源
-    // （旧键原样保留在传入的 answers 对象里）
+    // 历史回答可带额外旧键；即使其概率很高，也不能触发当前四题之外的删除。
     const { table, row, stats } = singleSource({
       is_attributed_rewrite: 0.99,
       paywalled: 0.99,

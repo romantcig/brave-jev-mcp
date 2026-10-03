@@ -18,11 +18,7 @@ import {
 } from './prefilter.js';
 import { shingles, tokenize } from './tokenize.js';
 
-/**
- * 以下真实片段从入库夹具逐字抄录（01-04 的夹具加载器是 pipeline.fixtures.test.ts
- * 的私有助手，本文件拿不到；照 src/tools/local/formatOpeningHours.test.ts 的
- * Captured 注释形态内联）。断言的是"这段真实文本经预筛谓词处理后的结局"。
- */
+/** 从入库夹具逐字取出的片段，用于直接验证预筛谓词。 */
 
 /** Captured from fixtures/jev_release_default.json 来源 1（heise）片段 1：以样板行开头、剥后应保留正文的最小真实证据。 */
 const HEISE_SNIPPET_1 =
@@ -63,7 +59,7 @@ describe('normalizeLine', () => {
 
 describe('matchesPrefix', () => {
   it('normalizes both sides, so a prefix carrying its own ## marker still matches', () => {
-    // 前缀表条目原文含 `##`；只归一化行会让它永远不命中（01-03-PLAN 行级剥离的坑）
+    // 前缀表本身含 Markdown 标记，因此匹配两侧都必须归一化。
     assert.equal(
       matchesPrefix('## Frequently Asked Questions (FAQ)', ['## Frequently Asked Questions']),
       true
@@ -79,8 +75,7 @@ describe('matchesPrefix', () => {
   });
 
   it('does not match long body lines that merely begin with a table entry', () => {
-    // 裸 startsWith 会把正常句子开头当样板删整行：Share/分享/广告/On this page/Sponsored
-    // 都常出现在正文句首（审查问题 2 的六条真实反例）
+    // Share、分享、广告等词可出现在正文句首，不能无条件 startsWith 删除。
     assert.equal(
       matchesPrefix('Shares of Nvidia fell 5% on Tuesday after weaker guidance.', ['Share']),
       false
@@ -231,9 +226,8 @@ describe('isNearDuplicate', () => {
   });
 
   it('keeps a candidate that is a superset of the survivor', () => {
-    // 审查问题 4：原 containment（交/min）口径下，后出现的超集（导语 + 扩展段）包含度
-    // 恒为 1，信息更全的后一条被删。口径改为"候选自身被幸存者覆盖的比例"后，超集候选
-    // 保留（14 个 shingle 的导语 + 20 个新 shingle → 覆盖率 14/34 ≈ 0.41）
+    // 超集候选含更多信息，不应使用交集除以较小集合判断重复。
+    // 本例覆盖率为 14/34，新增内容应保留。
     const lead = sh('lead', MIN_SHINGLES + 6);
     const longer = new Set([...sh('lead', MIN_SHINGLES + 6), ...sh('extra', 20)]);
 
@@ -261,17 +255,8 @@ describe('isNearDuplicate', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 第二十轮（2026-10-01 四类漏网）：标题重复行、引用块
-//
-// 以下合成片段按 2026-10-01 真实搜索样本（仓库外落盘）的漏网形态**改写**而成，
-// 形状保真、正文不入库。GPT-6 审核 F2 修正后：标题行只在同片段出现 ≥2 次才剥
-// （保留首次，唯一命中可能是面包屑后的正文 H1 或代码区域里的同名命令），署名残差
-// 必须带署名/分隔记号；引用块复审 R1 收紧为"间隔号分段后除首段外全是 ≤20 码元的
-// 无标点来源标签 + 条目 ≥2 整块统一"，摘要条目（含无句号与中文）整块保留；复审
-// R2 后标题与引用共用代码区域识别（围栏字符/长度/闭栏规则 + 缩进代码）。乱码碎词
-// 原型经审核证实误删真实代码与品牌名短句（F1），整条撤下未接入。
-// ---------------------------------------------------------------------------
+// 标题与引用的合成边界用例，保留真实样本形态，正文经过改写。
+// 覆盖重复次数、署名边界、完整引用小节及代码区域保护。
 
 describe('stripBoilerplateLines — title-repeat lines (第二十轮)', () => {
   const NEWS_TITLE = 'Cloudflare to launch public certificate authority with quantum-safe tech';
@@ -324,7 +309,7 @@ describe('stripBoilerplateLines — title-repeat lines (第二十轮)', () => {
   });
 
   it('keeps a snippet whose only title line is the first non-empty line (H1 lead)', () => {
-    // 正常页面片段以自己的 H1 开头是 2026-10 语料 114 个片段的形态，绝不碰
+    // 正文以自己的 H1 开头不等于重复，单次命中应保留。
     const snippet = [
       '# Reddit API Shut Down in 2026: What Still Works',
       'Reddit killed unauthenticated requests in May 2026 — here is what still works now.',
@@ -491,9 +476,7 @@ describe('stripBoilerplateLines — title-repeat lines (第二十轮)', () => {
 
 describe('stripBoilerplateLines — reference blocks (第二十轮)', () => {
   it('strips a heading plus its signature items and lets the orphan heading die downstream', () => {
-    // my-ssl 形态：列表符 + 间隔号 + Accessed 月 年 的纯书目条目整块剥掉，
-    // 剩下的孤立小节标题本地不再兜底（短无实词规则已随 filter-rules-13 退役），
-    // 交由 Jev 评分判定
+    // 纯书目列表删除后，孤立小节标题留给 Jev 评分。
     const snippet = [
       '## Next steps',
       '### Sources & References',
@@ -528,8 +511,7 @@ describe('stripBoilerplateLines — reference blocks (第二十轮)', () => {
   });
 
   it('keeps summaries without an English period and Chinese summaries (复审 R1)', () => {
-    // 复审反例：去掉英文句号、换成中文句读，信息量不变——句读判据之外的
-    // 分段结构判据（长文本落在中间段）必须同样拦住
+    // 改变句读不改变信息量，中间分段含正文时同样应阻止引用块删除。
     const periodless = [
       '### Sources & References',
       '- Cloudflare · The acquisition transfers an existing trust anchor; it does not automatically enable post-quantum browser certificates · Accessed September 2026',

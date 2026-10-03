@@ -1,18 +1,6 @@
 /**
- * 步 7 后半：跨来源 5-gram 逐字去重与片段级事实指纹增量新颖度（VERDICT-03）。
- *
- * 只依赖 tokenize.ts / prefilter.ts 的度量导出与最小行类型，不 import pipeline.ts
- * （budget.ts 先例：最小行类型结构上满足管道工作表，杜绝循环导入）。按 Brave 原序
- * 遍历只翻 `kept` / `reason` 标记，不 sort、不 filter 出新数组（RULES-08）——
- * 幸存者保持 Brave 原序由调用方重建输出保证。
- *
- * 播种序即 Brave 原序（filter-rules-5，2026-10-01）：v3 曾按 is_primary 概率降序
- * 播种，两轮五题删除实验的七个场景消融均未显示该排序的独立输出收益，随当事方题
- * 退出请求一并取消——去重谁先参与与最终输出排列都按原始来源索引。
- *
- * 依据：notes/dedup-and-rewrite-policy.md（元素定义、算法、播种顺序、论证段保护——
- * 逐字权威）、02-RESEARCH.md「片段级：score 删除与指纹新颖度」、用户已定决策 5
- * （跨源 5-gram 通道：指纹之前、播种序一致、独立计数 cross_source_dup_removed）。
+ * 步 7 后半：按 Brave 原序执行跨来源 5-gram 去重与事实指纹新颖度判断。
+ * 只更新片段标记，不重排；最小行类型避免与 pipeline.ts 循环导入。
  */
 
 import { isNearDuplicate, SHINGLE_N } from '../prefilter.js';
@@ -62,10 +50,8 @@ export type JevSideDeletionFlags = {
 };
 
 /**
- * novelty 删除的上报载荷（R-06）：判定当时的逐片段数值——调用方拿它做逐片段
- * 记账（旧影子双链退役后管道本体不再传回调，参数保留给需要判定时数值的调用方）；
- * snippet 是表行引用，pipeline 的 WorkSnippet 结构上满足
- * （可读 part / mergedFrom 拼配对身份）。
+ * 新颖度删除回调的载荷，保留判定当时的逐片段数值与表行引用。
+ * 调用方可用 part / mergedFrom 构造原始片段身份。
  */
 export type NoveltyDeletionInfo = {
   sourceIndex: number;
@@ -81,10 +67,7 @@ export type NoveltyDeletionInfo = {
  */
 const NUMBER_PATTERN = /\$?\d+(?:[.,]\d+)*(?:k|m|b|%|x)?/gi;
 
-/**
- * 日期指纹（d:）：ISO 串与英文月份日期（缩写或全称，"September 25, 2026"）。
- * 线性扫描、无嵌套量词（ReDoS 安全，T-02-04-2）。
- */
+/** 日期指纹：ISO 串与英文月份日期；采用无嵌套量词的线性扫描。 */
 const DATE_PATTERN =
   /\d{4}-\d{2}-\d{2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?/gi;
 
@@ -152,17 +135,9 @@ const PROPER_NOUN_STOPWORDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 从片段文本提取事实指纹（五类元素，全部 toLowerCase 归一）：
- * n: 数字（含货币前后缀与 k/M/B/%/x 量词）、d: 日期串（ISO 与英文月份）、
- * c: 代码标识符（反引号内容与点分形态）、q: ≥ 6 词的引号原文、
- * p: 连续大写词组（滤常见功能词）。
- *
- * 指纹只进计数与比对（键 = 'n:'/'d:'/'c:'/'q:'/'p:' 前缀 + 归一原文）；进日志的
- * 是指纹串本身——LOG-03/D-10 允许的记录面（只存 URL、标题、指纹与概率），
- * 片段正文绝不进日志。
- * @returns 指纹集合；空串返回空集
- * @example extractFingerprints('raised $4.2M at 193x speed') 含 'n:$4.2m' 与 'n:193x'
- * @example extractFingerprints('the launch was smooth') 为空集
+ * 提取五类事实指纹并转小写：数字 n、日期 d、代码 c、引文 q、专名 p。
+ * 引文至少六词，专名剔除常见功能词；空文本返回空集。
+ * 日志仅记录带类别前缀的指纹，不记录完整片段正文。
  */
 export function extractFingerprints(text: string): Set<string> {
   const fp = new Set<string>();
@@ -189,26 +164,12 @@ export function extractFingerprints(text: string): Set<string> {
 }
 
 /**
- * 步 7 后半：按 Brave 原序遍历 keep 来源的幸存片段（score 删除后的 kept 片段）。
- *
- * 每片段的判定顺序固定：
- * 1. **跨来源 5-gram 逐字 dup 先行**（通稿转载、页内标题导语重抽）——片段的
- *    shingles 与"已幸存 shingle 并集"按 isNearDuplicate 同一口径比较（步 3 与步 7
- *    同一度量，否则"先于指纹"失去可比性），命中 → kept=false、reason 'dup'、
- *    cross_source_dup_removed 加一；论证段保护**不豁免**——逐字转载不是原创论证
- *    （用户已定决策 5 / 计划 flagged）；
- * 2. 未命中再做**指纹新颖度**判定：novel = fp(片段) − 幸存指纹并集，
- *    `fp.size >= minFacts 且 novel.size < noveltyMin` 才删（事实太少不判，交给
- *    片段级评分；NOVELTY_MIN 含 2——novel=2 保留）、reason 'novelty'、
- *    novelty_removed 加一；`reasoning >= reasoningProtect` 的来源免于此判（论证段
- *    也含公司名等专名指纹，会被误当重复）；
- * 3. 幸存片段的 shingles 与指纹并入并集（被删片段不并入）。
- *
- * 管道不重排幸存者：只翻 kept/reason 标记，输出仍按 Brave 原序重建（RULES-08）。
- * shingle 只进比对、绝不外流；指纹进比对之外，新颖度删除的指纹明细按 D-10 记进
- * `stats.local.novelty`（LOG-03 允许的记录面——只存 URL、标题、指纹与概率）。
- * @returns 逐源 Jev 侧删除标记表（novelty / crossSourceDup 两个布尔），供步 8
- *   rewrite/empty 归因——只在发生过对应删除时含该来源
+ * 按 Brave 原序遍历 score 删除后的幸存片段，判定顺序固定：
+ * 1. 先与幸存 shingle 并集比较逐字重复，论证保护不豁免转载。
+ * 2. 再比较事实指纹；fp.size >= minFacts 且 novel.size < noveltyMin 才删。
+ *    reasoning >= reasoningProtect 时免于新颖度删除，避免将共享专名误作重复论证。
+ * 3. 仅幸存片段加入 shingle 与指纹参照集合。
+ * 返回发生过 novelty / crossSourceDup 删除的来源标记，供步 8 区分 rewrite 与 empty。
  */
 export function applyNovelty(
   table: NoveltySourceRow[],
@@ -221,11 +182,9 @@ export function applyNovelty(
   const shingleUnion = new Set<string>();
   const fingerprintUnion = new Set<string>();
 
-  // D-10 明细（A3 聚合口径）：只为发生过指纹新颖度删除的来源记条目；fp_total =
-  // 该来源被删片段指纹的并集大小；novel = 条目并集减去幸存指纹并集（在每次删除
-  // 时重算——增量语义"对指纹并集而言首次出现 novel"，删除后 union 只增不减，
-  // 最后一次删除后的条目即最终态）。证据在被删片段的指纹里，幸存片段聚合会把
-  // 证据丢掉；cross_source_dup 删除不建条目（明细只指新颖度指纹通道）。
+  // 仅为新颖度删除建立明细：fp_total 是该来源被删片段的指纹并集大小。
+  // novel 在每次删除时相对当时幸存指纹并集重算，最后一次删除的值作为结果。
+  // 跨源逐字去重不写此明细。
   const noveltyDetail = new Map<number, Set<string>>();
   let noveltyDetails: NoveltySourceDetail[] = [];
   const recordNoveltyDetail = (index: number, fingerprints: ReadonlySet<string>): void => {
@@ -291,7 +250,7 @@ export function applyNovelty(
           stats.local.novelty_removed += 1;
           mark(index, 'novelty');
           recordNoveltyDetail(index, fingerprints);
-          // 判定当时的逐片段数值只在此时可得（事后无法从聚合复原，C-02）
+          // 逐片段判定数值只在此时可得，事后无法从来源聚合复原。
           onNoveltyDeletion?.({
             sourceIndex: index,
             snippet,
@@ -307,9 +266,7 @@ export function applyNovelty(
       for (const fingerprint of fingerprints) fingerprintUnion.add(fingerprint);
     }
   }
-  // 明细写回（替换式，绝不 mutate 载体浅拷贝共享的 zeroLocal.novelty 空数组）；
-  // 条目按首次命中删除的顺序排列——即 Brave 原序；统计投影与输出同序，不为此重排
-  // 数据（C-03）
+  // 替换明细数组以隔离共享引用；条目按首次删除顺序排列。
   if (noveltyDetails.length > 0) {
     stats.local.novelty = noveltyDetails;
   }

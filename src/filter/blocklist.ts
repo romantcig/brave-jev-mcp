@@ -1,16 +1,6 @@
 /**
- * 结构性农场黑名单：模板字符串常量 + 解析器。
- *
- * 整站规则只收"结构上就是农场"的站（GitHub issue 镜像、SO 镜像、纯聚合站）；混合平台
- * （note.com、Medium、Substack 之类）**永不入列**——判据是页面粒度，不是域名
- * （PLAN §5）；个人配置可用完整 URL 限定页面或栏目。初始表为空
- * （RESEARCH A14）：入库夹具里没有结构农场，正例靠注入
- * 测试；测试模式期间由 EXT-03 的候选脚本提示、老大手工加入。主机条目匹配自身与全部子域，URL 条目仅限指定页面或栏目。
- *
- * 数据表必须是 `.ts` 常量：`tsc` 不拷贝非 `.ts` 资产进 `dist/`；模板字符串满足
- * "文件一行一个 host、`#` 注释"的形式。仓库外黑名单文件的路径由配置文件的
- * `blocklist_file` 给出（EMBED-05；02-FIX 批 B 起环境变量只剩 key 与配置路径两个）。
- * 依据：notes/local-rules-design.md §5、01-RESEARCH.md「规则 4（步 4）」。
+ * 结构性农场黑名单与解析器。整站条目只用于结构性农场，混合平台应限定页面或栏目。
+ * 内置数据使用 TS 常量随构建发布，外部列表由配置的 blocklist_file 指定。
  */
 
 /**
@@ -26,10 +16,8 @@ export const DEFAULT_BLOCKLIST_TEXT = `
 `;
 
 /**
- * 解析黑名单文本：按行 split，跳过 `#` 注释行与空行，条目去首尾空白、小写、
- * 去 `www.` 前缀后收进 Set。无效行静默丢弃（形态照 rebinding.ts 的 toNormalizedSet）。
- * @returns 规范 host 的集合（新对象）
- * @example parseBlocklist('# c\nWWW.Farm.EXAMPLE\n\n') → Set {'farm.example'}
+ * 解析每行 host 或 HTTP(S) 页面/栏目 URL；跳过空行、注释及不支持的 URL。
+ * 主机转小写并去 www.；URL 路径保留大小写和末尾斜杠的范围含义。
  */
 export function parseBlocklist(text: string): Set<string> {
   const entries = new Set<string>();

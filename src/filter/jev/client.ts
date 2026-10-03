@@ -1,21 +1,7 @@
 /**
- * Jev 直连客户端：纯函数部分（JEV-02：请求构造与响应解析）+ 传输兜底
- * （`createJevClassifier`：超时、进程级并发闸；重试与熔断由 02-05 后续任务填）。
- *
- * 解析对响应做白名单收窄（isRecord + 逐字段 typeof，不 spread 解析结果，
- * V5/T-02-02-1）：未知键忽略、形状不对返回判别联合而非抛错——Jev API 响应跨
- * 信任边界入库，畸形/恶意形状绝不进库内类型。
- *
- * 库不变式：无模块级可变状态（stats.ts 注释）——熔断计数、并发闸等进程级状态
- * 全部住 `createJevClassifier` 返回的闭包里，实例由适配行惰性单例持有（A13）。
- *
- * 响应形状以两份重录夹具实证为准（02-RESEARCH「真实响应形状」）：
- * `{ model: "jev-1.13.0", answers: {...}, usage: { input_tokens, output_tokens } }`；
- * noul 答案 `{ type: 'noul', noul }`（无 confidence 字段），score 答案
- * `{ type: 'score', score, confidence, legend, probabilities }`（后三者不进库内类型）。
- *
- * 依据：notes/jev-api.md、02-RESEARCH.md「Jev 客户端设计」「兜底机制」、
- * src/utils.ts 判别联合先例、src/protocols/rebinding.ts 工厂闭包先例。
+ * Jev 请求构造、响应解析与直连传输。
+ * 响应按字段白名单收窄，坏答案逐题隔离；失败以判别联合返回。
+ * 并发闸、重试与熔断状态保存在分类器闭包中，由宿主共享实例。
  */
 
 import type {
@@ -29,18 +15,14 @@ import type {
 } from '../types.js';
 import type { FilterConfig } from '../types.js';
 
-/** 发给 Jev 的请求体（与 notes/jev-api.md 的 `{"model","state","questions"}` 同形）。 */
+/** 发给 Jev 的请求体。 */
 export type JevRequest = {
   model: string;
   state: JevState;
   questions: Record<string, JevQuestion>;
 };
 
-/**
- * 解析结果：ok 分支带实际模型版本 ID 与 input_tokens（JEV-02 契约——答案必须能
- * 对账模型与用量）；失败分支 `kind: 'http'`（非 200，带状态码）或 `'shape'`
- * （200 但形状不对）。绝不抛裸错误。
- */
+/** 成功解析携带模型版本、答案与 input_tokens；失败区分 HTTP 状态和响应形状。 */
 export type ParsedJevResponse =
   | { ok: true; model: string; answers: Record<string, JevAnswer>; input_tokens: number }
   | { ok: false; kind: 'http' | 'shape'; status?: number };
@@ -48,11 +30,7 @@ export type ParsedJevResponse =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/**
- * 构造请求体：state 与题目表原样携带（写时复制，不改入参），模型版本由调用方钉住
- * （生产传 `DEFAULT_JEV_MODEL`，绝不使用 latest 别名——JEV-06）。
- * @example buildRequest(state, questions, 'jev-1.13.0') → { model: 'jev-1.13.0', state, questions }
- */
+/** 原样携带 state 与题目表，不修改入参；模型版本由调用方钉住。 */
 export function buildRequest(
   state: JevState,
   questions: Record<string, JevQuestion>,
@@ -62,21 +40,9 @@ export function buildRequest(
 }
 
 /**
- * 收窄 Jev 响应：只认实证形状，白名单外一律忽略或判 'shape'。
- *
- * - 非 200 → `{ ok: false, kind: 'http', status }`（422 超限也在此，重试与否由传输层裁决）。
- * - bodyText 非 JSON、顶层缺 model / answers、usage 缺有限数值 input_tokens
- *   → `{ ok: false, kind: 'shape' }`（JEV-02：input_tokens 是必须带回的契约字段）。
- * - 答案逐键收窄（逐题隔离，all-only 唯一语义）：`type: 'noul'` 缺数值 `noul`、
- *   `type: 'score'` 缺数值 `score` → 只忽略该题，不拖垮同一响应里其他来源的有效答案，
- *   由来源级校验防御。顶层协议错误（形状、缺字段）仍整体失败。其余键（未知 type、
- *   非对象值）白名单外，忽略不进结果。
- *
- * @param status HTTP 状态码
- * @param bodyText 响应原文
- * @example parseJevResponse(200, '{"model":"jev-1.13.0",...}') → { ok: true, model, answers, input_tokens }
- * @example parseJevResponse(422, '...') → { ok: false, kind: 'http', status: 422 }
- * @example parseJevResponse(200, 'not json') → { ok: false, kind: 'shape' }
+ * 非 200 返回 http 失败；JSON、顶层字段或 input_tokens 不合法返回 shape 失败。
+ * 答案逐键收窄：忽略未知类型或缺少对应数值的题目，保留其他有效答案。
+ * 单题取值范围由裁决层进一步校验，重试策略由传输层处理。
  */
 export function parseJevResponse(status: number, bodyText: string): ParsedJevResponse {
   if (status !== 200) return { ok: false, kind: 'http', status };
@@ -123,14 +89,12 @@ const responseInputTokens = (bodyText: string): number | undefined => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// 传输兜底（02-05）：仅 TypeSafe 直连单后端（JEV-01）。
-// ---------------------------------------------------------------------------
+// 传输与失败处理
 
-/** Jev 直连端点（notes/jev-api.md 实录）；后端集合只有 typesafe，无第二端点。 */
+/** TypeSafe Jev 直连端点。 */
 export const JEVI_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
-/** 重试总尝试次数（SAFE-03；每次尝试各自持有超时信号）。 */
+/** 含首次请求在内的最大尝试次数。 */
 export const RETRY_ATTEMPTS = 3;
 
 /** 首次重试前的退避毫秒数。 */
@@ -139,41 +103,32 @@ export const RETRY_BACKOFF_BASE_MS = 500;
 /** 退避倍率：500 → 1000 …（与封顶、随机抖动一同构成 `backoffDelayMs`）。 */
 export const RETRY_BACKOFF_MULTIPLIER = 2;
 
-/**
- * 单次退避封顶毫秒数（PLAN 第 5 节"兜底"行：500 × 2^(n-1) 封顶 5s，再随机减最多
- * 25%）。
- */
+/** 单次普通退避的上限毫秒数，随后再施加随机抖动。 */
 export const RETRY_BACKOFF_CAP_MS = 5000;
 
 /**
- * Retry-After 要求等待超过该上限就放弃该源按"留"（PLAN 第 5 节"兜底"行：搜索在
- * 同步等 Jev，官方 SDK 最多照办 60 s 的等待会卡住整次搜索）。与退避封顶是两条
- * 独立决策，数值当前相同但分开声明（审查 R9），调其中一个不连带另一个。
+ * Retry-After 超过此等待上限时停止重试，避免阻塞整次搜索。
+ * 它与普通退避上限独立，调整其中一个不影响另一个。
  */
 export const RETRY_AFTER_MAX_MS = 5000;
 
-/** 退避的随机抖动上限比例：`(1 - 0.25 × random)`（PLAN 第 5 节"兜底"行）。 */
+/** 退避的随机抖动比例上限。 */
 export const RETRY_JITTER_RATIO = 0.25;
 
-/** 连续瞬态失败达到该次数即开熔断（SAFE-02 / A7）。 */
+/** 连续瞬态失败达到该次数时开启熔断。 */
 export const BREAKER_THRESHOLD = 3;
 
-/** 熔断开启时长毫秒数（SAFE-02：60s；到期直接闭合不做半开探测）。 */
+/** 熔断开启时长（毫秒）；到期直接闭合，不做半开探测。 */
 export const BREAKER_OPEN_MS = 60000;
 
-/** 计入熔断连续计数的失败 kind：瞬态传输类。auth / validation 是确定性请求
- * 问题，不计入（避免配置错误伪装成熔断——本计划 flagged 微决策）。 */
+/** 仅瞬态传输失败计入熔断，避免将认证或请求参数错误当作服务不可用。 */
 const TRANSIENT_FAILURE_KINDS: ReadonlySet<ClassifyFailKind> = new Set([
   'timeout',
   'rate_limited',
   'network',
 ]);
 
-/**
- * key 环境变量：只认官方 SDK（typesafe-sdk-js / typesafe-sdk-python）同名的
- * `TYPESAFE_API_KEY`（老大 2026-09-27 定）。key 只从 env 参数读进闭包内存，
- * 绝不落盘、绝不进错误面（T-02-05-1）。
- */
+/** 密钥只从 env 读取到闭包内存，不落盘，也不主动拼入错误详情。 */
 const KEY_ENV_NAME = 'TYPESAFE_API_KEY';
 
 /** 读 key 原值；未设或全空白返回空串（调用方已用 hasJevKey 预检）。 */
@@ -182,14 +137,7 @@ const readKey = (env: Record<string, string | undefined>): string => {
   return typeof value === 'string' && value.trim() !== '' ? value : '';
 };
 
-/**
- * 判定环境里是否配置了 Jev key（存在且非空白）。
- * 适配行用它实现 no_key 语义（EMBED-05）：缺失且 mode 非 off → 不创建实例、
- * stderr 一行、管道记 no_key 零请求（等价 off）。
- * @example hasJevKey({}) === false
- * @example hasJevKey({ TYPESAFE_API_KEY: 'k' }) === true
- * @example hasJevKey({ TYPESAFE_API_KEY: '  ' }) === false
- */
+/** 密钥存在且非空白时返回 true；宿主据此决定是否创建分类器。 */
 export function hasJevKey(env: Record<string, string | undefined>): boolean {
   return readKey(env) !== '';
 }
@@ -198,9 +146,8 @@ export function hasJevKey(env: Record<string, string | undefined>): boolean {
 const ABORT_ERROR_NAMES: ReadonlySet<string> = new Set(['AbortError', 'TimeoutError']);
 
 /**
- * 第 attempt 次尝试失败后的退避毫秒数：`min(500 × 2^(attempt-1), 5000)`，再乘
- * `(1 - 0.25 × random)`（PLAN 第 5 节"兜底"行：封顶 5s、随机减最多 25%）。
- * `random` 由 hooks 注入，测试用固定值做精确断言。
+ * 第 attempt 次失败后的退避：min(500 × 2^(attempt-1), 5000) × (1 - 0.25 × random)。
+ * 测试可注入固定随机数。
  */
 const backoffDelayMs = (attempt: number, random: () => number): number => {
   const capped = Math.min(
@@ -240,7 +187,7 @@ export const parseRetryAfterMs = (response: Response, now: () => number): number
   return delta >= 0 ? delta : undefined;
 };
 
-/** HTTP 失败的 detail：只含状态码与 body 前 200 字符摘要（T-02-05-1）。 */
+/** HTTP 失败详情仅保留状态码与正文前 200 字符。 */
 const httpFailure = (
   kind: ClassifyFailKind,
   status: number,
@@ -253,7 +200,7 @@ const httpFailure = (
 
 /** 测试注入的时钟、睡眠与随机数（缺省用全局实现）。 */
 export type JevClassifierHooks = {
-  /** 单调时钟：熔断窗口计时与 Retry-After 日期换算用；缺省 `Date.now`。 */
+  /** 当前时间戳：用于熔断窗口与 Retry-After 日期换算；缺省 Date.now。 */
   now?: () => number;
   /** 退避睡眠；缺省 `setTimeout`。测试注入立即 resolve 以做下限断言。 */
   sleep?: (ms: number) => Promise<void>;
@@ -262,54 +209,10 @@ export type JevClassifierHooks = {
 };
 
 /**
- * 创建 Jev 分类器：工厂闭包形态（照 src/protocols/rebinding.ts 先例）——进程级
- * 状态（并发信号量、熔断计数）全部住闭包，库无模块级可变状态。每个实例独立：
- * 测试每用例新建实例互不污染。
- *
- * 并发闸（JEV-04，Responsibility Map 划定层级）：上限 `config.jev.concurrency`
- * （默认 12），一波全发、超出排队等待，**跨管道调用生效**——管道只做全候选并发
- * 派发，不建双闸。名额在 classify 全程持有（重试不加闸、不重复取名额）；释放时
- * 直接把名额交给队首等待者（**交接**，不先减后加），否则新调用会插队使在途数
- * 超过上限。
- *
- * 熔断（SAFE-02）：**进闸之前与出闸之后各查一次**——熔断打开时已在队列里的请求
- * 醒来后照样会发，故出闸后复查，命中则释放名额并返回 `breaker_open`（零 fetch、
- * 不计 n_requests，与短路同口径）。
- *
- * 超时（SAFE-01）：每次尝试各自套 `AbortSignal.timeout(config.jev.timeoutMs)`，
- * 不手写 Promise.race。
- *
- * 重试（SAFE-03，2026-09-27 定）：
- * - **超时（含读正文阶段）不重试**，立即 `timeout` 失败；fetch 的其他异常重试
- *   （`network`）。
- * - HTTP：408 重试（`timeout`）、429/529 重试（`rate_limited`）、其余 5xx 重试
- *   （`network`）；401/403 不重试（`auth`）、422 与其他 4xx 不重试（`validation`）、
- *   200 但形状坏不重试（`validation`）。
- * - 总尝试次数 `RETRY_ATTEMPTS`(3)；退避 `min(500×2^(n-1), 5000)` 再随机减最多
- *   25%（`hooks.random`）。可重试响应上的 **Retry-After** 优先：解析值 ≤ 5s 就用它
- *   代替本次退避；> 5s 则不再重试、立即按该状态的 kind 失败（计入熔断）。
- * - 计入熔断的 kind 只有瞬态类（timeout / rate_limited / network）。
- *
- * 请求体（all-only，§3.1）：完整载荷只构造一次，重试原样复用——同一搜索的重试
- * 复用完全相同的 body、检索时间和题目，属于同一逻辑请求。32K／64K 预检、估算与
- * 超限阶梯已整体退役；输入限额交给 Jev 服务的 HTTP 拒绝（413／422 按 validation
- * 处理）与既有保守保留语义兜底。
- *
- * http_attempts（计划 §3.3）：所有返回点带真实 HTTP 尝试次数——重试循环内是当前
- * attempt，熔断短路与注入桩可不带或为 0；管道按未知处理。
- *
- * 实发派发捕获（04-04 R1）：请求体定形后（fetch 调用前）捕获实发
- * state 与题目集合，随所有从重试循环返回的 outcome（answered 或已派发后失败）
- * 以 `dispatch` 交回——样本记录的"实发内容"只信这里，绝不重建。未派发的短路
- * （breaker_open，进闸前后）不带 dispatch——请求从未离开进程。
- *
- * 失败一律返回 failed 联合不抛（SAFE-01：单来源失败按"留"）。detail 只含状态码与
- * body 前 200 字符摘要，绝不拼接鉴权头或 key 值（T-02-05-1）。
- *
- * @param config `FilterConfig['jev']`（model / timeoutMs / concurrency）
- * @param env key 来源（生产传 `process.env`；测试传显式对象）
- * @param hooks 可选时钟 / 睡眠 / 随机数注入（测试用）
- * @returns `{ classify }`——管道经 `FilterDeps.classify` 注入
+ * 创建可跨搜索共享的分类器；并发闸和熔断计数按实例隔离。
+ * 一次 classify 在排队后持有一个名额直到结束，重试不重复取名额。
+ * 请求体只构造一次；失败返回 failed，由管道保守保留相关来源。
+ * env 提供密钥，hooks 可注入时钟、睡眠和随机数供测试使用。
  */
 export function createJevClassifier(
   config: FilterConfig['jev'],
@@ -323,7 +226,7 @@ export function createJevClassifier(
   const now = hooks?.now ?? Date.now;
   const random = hooks?.random ?? Math.random;
 
-  // 进程级并发闸（JEV-04）：active < concurrency 直接进，否则排队等唤醒。
+  // 名额不足时排队；同一实例的所有搜索共用此闸。
   let active = 0;
   const waiters: Array<() => void> = [];
   const acquire = async (): Promise<void> => {
@@ -333,7 +236,7 @@ export function createJevClassifier(
     }
     await new Promise<void>((resolve) => waiters.push(resolve));
   };
-  /** 名额交接：有等待者时把名额直接交给队首（计数不变），没有才减计数。 */
+  /** 有等待者时直接交接名额，不先减计数，避免新请求插队突破并发上限。 */
   const release = (): void => {
     const next = waiters.shift();
     if (next !== undefined) {
@@ -343,14 +246,11 @@ export function createJevClassifier(
     active -= 1;
   };
 
-  // 熔断状态（SAFE-02）：连续瞬态失败计数跨请求累计；任一 answered 清零；
-  // 连续达 BREAKER_THRESHOLD → openUntil = now + BREAKER_OPEN_MS；到期直接闭合
-  // 不做半开探测。同波在途请求无取消逻辑（无 AbortController 广播）。
+  // 连续瞬态失败跨请求累计，成功响应清零；熔断不会取消已在途的请求。
   let consecutiveFailures = 0;
   let openUntil = 0;
 
-  /** 瞬态失败记账：只有 timeout / rate_limited / network 计入熔断连续计数——
-   * auth / validation 是确定性请求问题，计入会让配置错误伪装成熔断。 */
+  /** 只统计瞬态失败，认证或请求参数错误不计入熔断。 */
   const recordFailure = (kind: ClassifyFailKind): void => {
     if (!TRANSIENT_FAILURE_KINDS.has(kind)) return;
     consecutiveFailures += 1;
@@ -359,8 +259,7 @@ export function createJevClassifier(
     }
   };
 
-  /** 熔断窗口检查：open 期返回短路结果；到期则闭合、计数清零并返回 undefined。
-   * 短路零 fetch——http_attempts 恒 0（FULL_CONTEXT_ROLLOUT_PLAN §6.1）。 */
+  /** 熔断期内返回零 HTTP 尝试的短路结果；到期闭合并清零计数。 */
   const breakerShortCircuit = (): ClassifyOutcome | undefined => {
     if (openUntil === 0) return undefined;
     if (now() < openUntil) {
@@ -401,13 +300,11 @@ export function createJevClassifier(
       const afterQueue = breakerShortCircuit();
       if (afterQueue !== undefined) return afterQueue;
 
-      // 请求体只构造一次（§3.1）：完整载荷原样发送，同一搜索的重试复用完全相同的
-      // body、检索时间和题目
+      // 请求体只构造一次，重试复用相同的正文、检索时间和题目。
       const body = JSON.stringify(buildRequest(state, questions, model));
 
-      // 实发派发捕获（04-04 R1）：请求体已定形、即将派发——从这里到本闭包的所有
-      // 返回点都属"请求已派发"（fetch 已调用；每次重试复用同一 body，实发内容
-      // 不变）。样本层据此如实记录，绝不重跑本地规则重建。
+      // 捕获即将派发的载荷，供样本记录使用；不在保存时重建候选。
+      // 重试循环的结果附带此载荷，前面的熔断短路不带。
       const dispatch: JevDispatchPayload = { state, questions };
       let knownInputTokens = 0;
       let attemptsWithUsage = 0;
@@ -433,7 +330,7 @@ export function createJevClassifier(
         return { kind: 'validation', retryable: false };
       };
 
-      // 重试循环（SAFE-03）：每次尝试独立超时信号；超时不重试
+      // 每次尝试独立计时；AbortSignal 超时不重试，HTTP 408 按状态策略重试。
       for (let attempt = 1; ; attempt += 1) {
         let response: Response;
         try {
@@ -456,7 +353,7 @@ export function createJevClassifier(
           continue;
         }
 
-        // 读正文也纳入重试与熔断口径：此处断连/超时原先会裸抛，绕过两者
+        // 读取正文也可能断连或超时，按与 fetch 相同的重试和熔断策略处理。
         let bodyText: string;
         try {
           bodyText = await response.text();
@@ -477,10 +374,10 @@ export function createJevClassifier(
           knownInputTokens += inputTokens;
           attemptsWithUsage += 1;
         }
-        // 全量响应按题隔离坏值（all-only 唯一解析语义）
+
         const parsed = parseJevResponse(status, bodyText);
         if (parsed.ok) {
-          // 任一成功清零连续失败计数（SAFE-02）
+          // 成功响应清零连续失败计数。
           consecutiveFailures = 0;
           return withDispatch(
             {
@@ -493,7 +390,7 @@ export function createJevClassifier(
           );
         }
 
-        // 200 但形状坏：确定性，不重试（重试必然再坏）
+        // 响应顶层形状错误按 validation 返回，不重试。
         if (parsed.kind === 'shape')
           return withDispatch(httpFailure('validation', status, bodyText), attempt);
 

@@ -34,7 +34,7 @@ const FAQ = JSON.stringify({
 /** 仿 explainx 来源片段 2 的面包屑：`name` 与 `item` 都是笔记元数据表的原条目。 */
 const BREADCRUMB = JSON.stringify({ name: 'Blog', item: 'https://www.explainx.ai/blog' });
 
-/** 仿 fixtures/sanity/sample3 的 QAPage：`suggestedAnswer[].text` 是正文（Assumptions A8）。 */
+/** 按 QAPage 夹具构造的正文答案，suggestedAnswer[].text 应被提取。 */
 const QA_PAGE = JSON.stringify({
   name: 'How do I generate types?',
   dateCreated: '2023-02-24T19:28:00Z',

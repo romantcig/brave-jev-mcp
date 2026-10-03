@@ -1,26 +1,17 @@
 /**
- * 过滤层的结构类型。
- *
- * 这里是纯库对外的全部类型：库不引任何宿主模块，Brave 响应按结构重新声明，
- * zod 推导出的 `data` 结构兼容即可直接传入。字段命名规则：镜像 Brave 线上字段
- * 与要进 JSONL 日志的计数键用 snake_case，库内部自己的字段用 camelCase。
- *
- * 依据：PLAN.md §3.2、notes/test-mode-logging.md、01-RESEARCH.md「统计对象」一节。
+ * 过滤库的结构类型，不依赖宿主或 MCP 类型。
+ * Brave 字段与日志键使用 snake_case，库内部字段使用 camelCase。
  */
 
 /**
- * 三档模式（04-CONTEXT 模式与兼容节）：off 只跑本地规则、不调 Jev；test 本地规则
- * 与 Jev 共同过滤——与 on 共用同一过滤实现、裁决真实生效；on 是正式档。
- * 旧配置值 `shadow` 在解析层（config.ts）作为别名映射为 `test`，不进本类型。
+ * off 只跑本地规则；test/on 共用实际 Jev 过滤链，test 额外保存样本。
+ * 配置解析将旧 shadow 值映射为 test。
  */
 export type FilterMode = 'off' | 'test' | 'on';
 
 /**
- * 过滤调用的内部上下文：`params` + `intent` + 可选检索时间。`retrievalTime` 由
- * 宿主在发起 Brave 请求前捕获一次（带时区 ISO 字符串，`localIsoWithOffset` 口径），
- * 经内部形状传入——不进公开 MCP schema、不混入发给 Brave 的查询参数；同一搜索的
- * Jev 请求与 HTTP 重试必须共用同一个值。字段未提供或值非法时，管道省略 state 的
- * 时间字段（temporal.ts 的归一口径）；纯库与回放绝不读当前时间补值。
+ * 过滤调用上下文。retrievalTime 由宿主在 Brave 请求前捕获，同次搜索和重试共用。
+ * 它不进入公开 MCP 参数或 Brave 查询；非法或缺失时省略，不取当前时间补值。
  */
 export type FilterCallContext = {
   params: FilterRequest;
@@ -29,12 +20,7 @@ export type FilterCallContext = {
   retrievalTime?: string;
 };
 
-/**
- * 适配行从 `RequestParamsSchema.parse` 结果里传进来的查询参数。
- * 只声明库关心的字段；调用方对象带多余字段也能赋值。`intent` 不在这里——
- * 它不属于 Brave 查询参数（不能转发给 Brave），由 `filterLlmContext` 的
- * 第二个实参（`FilterCallContext`）单独携带。
- */
+/** 库关心的 Brave 查询参数；intent 独立携带，不能转发给 Brave。 */
 export type FilterRequest = {
   query: string;
   /** 模型要的来源上限；缺省按 Brave 默认 20 */
@@ -49,9 +35,8 @@ export type FilterRequest = {
 };
 
 /**
- * 单个 JSON 配置文件解析出的配置（EMBED-05；字段与校验见 config.ts）。
- * `blocklist` 是黑名单文本解析出的规范 host 或页面/栏目 URL 集合；`logDir` 是 JSONL 日志目录
- * （Phase 3 消费，本批只解析）；`toolDescriptionFile` 是工具描述的仓库外覆盖文件。
+ * 单一配置文件的解析结果，校验规则见 config.ts。
+ * blocklist 包含规范 host 或页面/栏目 URL，toolDescriptionFile 指向仓库外描述覆盖文件。
  */
 export type FilterConfig = {
   mode: FilterMode;
@@ -59,10 +44,9 @@ export type FilterConfig = {
   overfetchFactor: number;
   /** 步 4 的结构性农场黑名单；条目命中自身与全部子域（内置表与配置文件的并集） */
   blocklist: ReadonlySet<string>;
-  /** 九项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05） */
+  /** 生效的 Jev 阈值；坏值逐项回落 DEFAULT_THRESHOLDS。 */
   thresholds: JevThresholds;
-  /** Jev 客户端配置：钉版模型、超时纯兜底、进程级并发闸初值（02-05 消费）。
-   * 请求组织固定为全量共享上下文（all），时间上下文字段常开——均无配置键。 */
+  /** Jev 模型、单次尝试超时与实例并发上限；请求组织和时间上下文没有开关。 */
   jev: {
     model: string;
     timeoutMs: number;
@@ -74,21 +58,14 @@ export type FilterConfig = {
   toolDescriptionFile?: string;
 };
 
-/** Phase 2 注入 Jev 客户端的位置；`classify` 缺省时 on/test 记 no_key 零值对象（SAFE-01 前置）。 */
+/** 分类器注入点；缺省时 test/on 记 no_key 并使用本地链。 */
 export type FilterDeps = {
   classify?: ClassifyDeps['classify'];
 };
 
 /**
- * Jev 候选集里的一条：本地规则层（步 1–4）后幸存的来源与其幸存片段。
- * `id` 用探测约定 `s{braveIndex}`（与 `.jev.json` 回放夹具的 `results` 键同源）；
- * `snippets` 是幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段），顺序即表序。
- * 重录 dump 与管道步 5 共用同一口径（02-01）。
- *
- * `brave_page_date`（时间上下文，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：该候选
- * 的统一页级日期——从原 Brave 元数据 `age` 选出的合法绝对日期字串；步 2 归并候选
- * 的多个贡献原来源日期不同或部分未知时为 null。键恒在（冻结请求同形），进入 Jev
- * 的每个候选都带。
+ * 本地步骤 1–4 后的候选来源，ID 保留 s{Brave 原始索引}，片段取当前幸存文本。
+ * brave_page_date 始终存在；归并来源日期冲突或部分未知时为 null。
  */
 export type JevCandidate = {
   id: string;
@@ -100,17 +77,14 @@ export type JevCandidate = {
 };
 
 /**
- * 片段配对身份（04-02 样本映射用）：`{merged_from}:{index}` 前缀可省（无并入来源），
- * JSON-LD 多段加 `.{part}`——与统计表 SnippetStats 的 index/part/merged_from 同源。
- * （原住 pipeline.ts，全量上下文映射也要消费，移入类型家避免循环导入。）
+ * 片段配对身份：可选 merged_from 前缀、原始 index 和可选 JSON-LD part。
+ * 与统计表的同名字段对应。
  */
 export type JevCandidateSnippetIdentity = { key: string; text: string };
 
 /**
- * 候选集的带身份形状（04-02）：JevCandidate 口径 + 片段配对身份。全量请求构造
- * （jev/context.ts）用它保留片段身份映射。`bravePageDate` 是库内部 camelCase 的
- * 统一页级日期（与 JevCandidate 的 `brave_page_date` state 字段同值，命名规则见
- * 文件头）——由管道从原 Brave 元数据选出并在归并冲突时置 null（temporal.ts）。
+ * 带片段身份的候选，用于构造请求映射。
+ * bravePageDate 是内部字段，对应 state 中的 brave_page_date。
  */
 export type JevCandidateDetailed = {
   id: string;
@@ -121,9 +95,7 @@ export type JevCandidateDetailed = {
   bravePageDate: string | null;
 };
 
-// ---------------------------------------------------------------------------
-// Jev 契约类型（02-02）：全部住类型家，防循环导入——jev/ 与 pipeline 都从这里取。
-// ---------------------------------------------------------------------------
+// Jev 契约类型由客户端、上下文构造器与管道共用。
 
 /** 单道题：noul 是来源级是/否判定，score 是片段级三档打分（criteria 是三档 legend）。 */
 export type JevQuestion = {
@@ -133,20 +105,9 @@ export type JevQuestion = {
 };
 
 /**
- * 请求 state：官方"context rot"规则——只放问题需要的东西，不放元数据、不放被删
- * 片段。一次搜索的全部候选共享同一个全量 state（FULL_CONTEXT_ROLLOUT_PLAN §4.1）：
- * 零候选不构造请求；一个或多个候选时完整候选数组进 `sources`，一次搜索最多组织
- * 一次 Jev 逻辑请求。
- *
- * `sources` 按候选 Brave 原序排列，来源 ID 继续用 `s{braveIndex}` 不重编号——
- * `sources[i]` 的 i 是当前数组位置，**不等于来源 ID 的数字**（前面来源被删不重排）。
- * 元素形状与 `JevCandidate` 同构（id / url / title / 幸存片段文本），不放原始响应、
- * 被预筛删除的段落或其他字段。
- *
- * 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：每个来源带
- * `brave_page_date`（string | null，键恒在，与冻结请求一致）、state 顶层带
- * `retrieval_time`（宿主捕获的合法值才有；缺失或非法时省略——纯库与回放不读
- * 当前时间补值）；片段 score 题用冻结的时间上下文新题（§5）。
+ * 共享请求上下文：sources 按 Brave 原序放入全部候选，不包含预筛删除的内容。
+ * sources[i] 的 i 是数组位置，不是来源 ID 中的原始索引。
+ * 每来源带 brave_page_date；合法检索时间放在顶层 retrieval_time，否则省略。
  */
 export type JevState = {
   query: string;
@@ -156,13 +117,10 @@ export type JevState = {
   retrieval_time?: string;
 };
 
-/**
- * 答案的库内统一形状：noul 读 0–1 概率，score 读连续分值（夹具实证 1.62/1.77，
- * 不是整数档位）。noul 没有 confidence 字段，绝不读（Pitfall 3）。
- */
+/** 库内答案：noul 为概率，score 为连续分值；noul 不含 confidence。 */
 export type JevAnswer = { kind: 'noul'; probability: number } | { kind: 'score'; score: number };
 
-/** ClassifyOutcome 失败分支的 kind 全集；重试白名单与熔断语义由 02-05 的传输层裁决。 */
+/** 失败分类；具体重试与熔断策略由客户端处理。 */
 export type ClassifyFailKind =
   | 'timeout'
   | 'rate_limited'
@@ -171,11 +129,7 @@ export type ClassifyFailKind =
   | 'network'
   | 'breaker_open';
 
-/**
- * 实发派发载荷（04-04 R1）：捕获于请求派发（fetch 调用）处的请求体内容——真实
- * 发送的 state 与题目集合，绝不重跑本地规则重建。每次重试复用同一请求体，载荷
- * 全程不变；写时复制，消费方不得改写。
- */
+/** 客户端在 fetch 调用处捕获的请求载荷，同次重试复用；消费方不得改写。 */
 export type JevDispatchPayload = {
   /** 实发 state（请求派发处的真实发送内容） */
   state: JevState;
@@ -184,12 +138,9 @@ export type JevDispatchPayload = {
 };
 
 /**
- * classify 的返回：answered 带实际模型版本 ID 与 input_tokens（JEV-02），
- * failed 一律 union 不抛（单来源失败按"留"，SAFE-01）。
- *
- * `dispatch`（04-04 R1）：请求已派发（fetch 已调用）时携带实发载荷——含已派发
- * 但失败的请求（HTTP 4xx/5xx、超时、网络错误都算"已派发"，输入证据必须保留）；
- * 未派发的短路（breaker_open）不带。术语口径：派发 ≠ 服务端已收到。
+ * 分类器返回成功答案或 failed 联合。
+ * fetch 已调用时携带 dispatch，包含已派发后失败的请求；熔断短路不带。
+ * 派发不保证服务端收到或处理。
  */
 export type ClassifyOutcome = (
   | {
@@ -197,19 +148,16 @@ export type ClassifyOutcome = (
       model: string;
       answers: Record<string, JevAnswer>;
       input_tokens: number;
-      /** 实发派发载荷（04-04 R1，见类型注释） */
+      /** 实发载荷，语义见 JevDispatchPayload。 */
       dispatch?: JevDispatchPayload;
-      /**
-       * 真实 HTTP 尝试次数（含重试；生产客户端必带）。注入桩可不带——管道按
-       * "未知"处理，绝不伪称为零或一（FULL_CONTEXT_ROLLOUT_PLAN §6.1）。
-       */
+      /** 真实 HTTP 尝试次数，含重试；注入桩省略时按未知处理。 */
       http_attempts?: number;
     }
   | {
       status: 'failed';
       kind: ClassifyFailKind;
       detail?: string;
-      /** 实发派发载荷（04-04 R1）：已派发但失败的请求保留输入证据 */
+      /** 已派发但失败时仍保留输入证据。 */
       dispatch?: JevDispatchPayload;
       /** 真实 HTTP 尝试次数；未派发的短路（breaker_open）为 0 */
       http_attempts?: number;
@@ -223,7 +171,7 @@ export type ClassifyOutcome = (
   http_status?: number;
 };
 
-/** 传输依赖：管道经 `FilterDeps.classify` 注入；实现持有超时/重试/熔断/并发闸（02-05 的 createJevClassifier）。 */
+/** 注入的传输实现负责超时、重试、熔断与并发闸。 */
 export type ClassifyDeps = {
   classify(req: {
     state: JevState;
@@ -247,33 +195,25 @@ export type JevThresholds = {
 /** per_source 失败种类；熔断短路另用 status `'breaker_open'` 表达，不重复计。 */
 export type JevFailKind = Exclude<ClassifyFailKind, 'breaker_open'>;
 
-/**
- * 统计表里单个来源的 Jev 记账；只存索引、概率、分数、计数与标记，绝不含片段正文
- * （LOG-03）——类型检查即证明。
- */
+/** 逐来源 Jev 统计，只含身份、概率、分数、计数与标记，不含正文。 */
 export type JevPerSourceStats = {
   /** 探测约定 id：`s{braveIndex}`（与回放夹具 `results` 键同源） */
   src: string;
   url: string;
   status: 'answered' | 'failed' | 'skipped' | 'breaker_open';
-  /** status `'failed'` 时的失败种类；`'answered'` 行也可带 `'validation'`——
-   *  回答已收到但关键答案缺失/越界，来源防御式保留（T-02-03-1；A-04 状态行口径） */
+  /** 失败种类；answered 也可能带 validation，表示收到响应但来源裁决无效。 */
   fail_kind?: JevFailKind;
-  /** 来源级答案的 noul 概率，键随当次题库（当前四题；历史记录含 v3 十题与
-   *  2026-10-03 退役的 self_deprecated / stale 旧键，按额外字段读取） */
+  /** 来源题概率，键随当次题库；读取历史记录时允许额外旧键。 */
   answers?: Record<string, number>;
   /** 片段 score，snip0..snipN 顺序，与 state 片段序对齐 */
   snippet_scores?: number[];
-  /** 来源级裁决（02-03 落地；test 与 on 同一记账形状） */
+  /** 来源级裁决。 */
   verdict?: 'keep' | 'drop';
   reason?: SourceDropReason;
   model?: string;
   input_tokens?: number;
   latency_ms?: number;
-  /**
-   * 该来源判断所属逻辑请求的 ID（FULL_CONTEXT_ROLLOUT_PLAN §6.1：投影后的每来源行
-   * 引用请求 ID）。all 模式下 N 行引用同一请求；no_key / 未派发无请求时省略。
-   */
+  /** 所属逻辑请求 ID；共享请求覆盖的来源引用同一值，未构造请求时省略。 */
   request_id?: string;
 };
 
@@ -290,13 +230,10 @@ export type JevRequestMappingEntry = {
 };
 
 /**
- * 一次 Jev 逻辑请求的完整事实（FULL_CONTEXT_ROLLOUT_PLAN §6.1）。带正文
- * （state / questions / answers / mapping），住 `FilterResult.jev_requests` 供样本
- * 落盘——**绝不进 FilterStats / JSONL**（LOG-03 红线，同 jev_dispatch 先例）。
- * 状态维度互相独立：`dispatched`（fetch 已调用）、`answered`（收到可解析响应）、
- * `usage_complete`（input_tokens 真实取得）分别表达；已派发但失败的请求保留实发
- * state / questions 作输入证据。`input_tokens` 保留各次响应的已知小计，全部未知
- * 才为 null；usage_complete 表示所有 HTTP 尝试都取得了用量。
+ * 请求级完整记录，仅供样本保存，不进入 FilterStats 或 JSONL。
+ * dispatched、answered、usage_complete 是独立事实；已派发失败仍保留载荷。
+ * input_tokens 是各次响应的已知小计，全部未知才为 null；
+ * usage_complete 表示所有 HTTP 尝试均取得用量。
  */
 export type JevRequestRecord = {
   /** 本次搜索内唯一请求 ID（`j1`、`j2` …按派发顺序分配） */
@@ -331,19 +268,17 @@ export type JevRequestRecord = {
   mapping: JevRequestMappingEntry[];
 };
 
-/** JevStats.requests 的摘要行：JevRequestRecord 去掉正文（state/questions/answers/
- * mapping/model）——JSONL 只放身份与计数，不放正文（LOG-03）。 */
+/** JevStats.requests 的无正文摘要，仅保留请求身份与计数。 */
 export type JevRequestSummary = Omit<
   JevRequestRecord,
   'state' | 'questions' | 'answers' | 'mapping' | 'model'
 >;
 
-/** Jev 阶段的汇总记账（Phase 3 状态行与 JSONL 日志的共同来源）。 */
+/** 状态行与 JSONL 共用的 Jev 汇总统计。 */
 export type JevStats = {
   /**
-   * 实际至少派发一次的逻辑分类请求数（FULL_CONTEXT_ROLLOUT_PLAN §6.1）：answered
-   * 或已派发后失败各计一；无候选、熔断短路不虚记。
-   * N 来源一次全量请求记 1，不冒充 N 次 HTTP。
+   * 至少派发一次的逻辑请求数；多个来源共享一次请求只计 1。
+   * 零候选、熔断短路或无派发证据的回答不计请求。
    */
   n_requests: number;
   input_tokens: number;
@@ -353,14 +288,13 @@ export type JevStats = {
   per_source: JevPerSourceStats[];
   /** 全部请求的真实 HTTP 尝试总数（含重试；与 n_requests 分开记） */
   n_http_attempts: number;
-  /** 请求级摘要（无正文，LOG-03 允许的身份与计数面），按派发顺序排列 */
+  /** 按请求顺序排列的无正文摘要。 */
   requests: JevRequestSummary[];
 };
 
 /**
- * 旧影子模式的 would 层记账（02-03 落地）。历史日志读取兼容：旧 shadow 记录按旧
- * 影子语义（返回 off、计算 would）读，新记录不再产生——`FilterStats.shadow_diff`
- * 恒为 null，字段仅为读旧记录保留（04-CONTEXT：勿机械改名继续维护旧影子行为）。
+ * 仅用于读取旧 shadow 日志：当时返回 off 结果并计算 would 差异。
+ * 当前记录的 shadow_diff 恒为 null。
  */
 export type ShadowDiff = {
   would_drop: string[];
@@ -370,12 +304,9 @@ export type ShadowDiff = {
 };
 
 /**
- * 链侧删除动作的证据（C-02/F-02 口径：能定位来源、片段、阶段与原因，新颖度差异
- * 带判定当时的逐片段数值）。只存身份、原因与计数，绝不存片段正文（LOG-03）。
- * 历史日志读取兼容：旧 shadow 记录按旧影子语义读——`chain: 'would'`（on 链拷贝）
- * 解释 `would_drop` / `would_remove_snippets`；`chain: 'actual'`（shadow 的 off
- * 正本链）解释 `would_restore` / `would_restore_snippets`。新记录不再产生本类型
- * 的条目（旧影子双链已退役），类型仅为读旧记录保留。
+ * 旧 shadow 日志的删除证据，仅含身份、原因与计数。
+ * would 链解释 would_drop / would_remove_snippets；actual 链是当时的 off 正本，
+ * 解释 would_restore / would_restore_snippets。当前运行不产生这些条目。
  */
 export type WouldActionEvidence = {
   /** 证据所属链：would = on 链拷贝；actual = shadow 的 off 正本链 */
@@ -392,20 +323,14 @@ export type WouldActionEvidence = {
   /** 原因词：来源级 SourceDropReason 或片段级 SnippetRemovalReason，键原样不变形 */
   reason: string;
   /**
-   * 仅 novelty 删除带：判定当时的逐片段指纹总数与 novel 数——与信封 thresholds
-   * 快照的 min_facts / novelty_min 对照即得"该删不该删"；来源级聚合数（local.
-   * novelty）不能代回逐片段条件（C-02）。跨源 dup / score / 来源级动作不带
+   * 仅 novelty 删除携带判定当时的逐片段数值，用于与阈值快照核对。
+   * 来源级聚合不能代入逐片段条件。
    */
   fp_count?: number;
   novel_count?: number;
 };
 
-/**
- * 来源被整体丢弃的原因。前五个 Phase 1 可产生，其余 Phase 2。
- * `self_deprecated` / `stale` 已退役（2026-10-03 题库精简删除其门槛题，filter-rules-11），
- * 新运行不再产生；历史样本 / JSONL 中有真实 drop 记录，类型与回显仍需消费旧记录形状
- * （`ShadowDiff` / `WouldActionEvidence` 同先例），成员仅为读历史记录保留。
- */
+/** 整源删除原因；self_deprecated / stale 仅为读取旧记录保留，当前不产生。 */
 export type SourceDropReason =
   | 'feed'
   | 'blocklist'
@@ -419,13 +344,7 @@ export type SourceDropReason =
   | 'filler'
   | 'rewrite';
 
-/**
- * 单个片段被移除的原因。前六个 Phase 1 可产生，其余 Phase 2。
- * `time_mismatch` 已退役（2026-10-03 片段级时间题机制整体移除，filter-rules-12），
- * 新运行不再产生；历史样本 / JSONL 中有真实移除记录，类型与回显仍需消费旧记录
- * 形状（`SourceDropReason` 的 self_deprecated / stale 同先例），成员仅为读历史
- * 记录保留。
- */
+/** 片段删除原因；time_mismatch 仅为读取旧记录保留，当前不产生。 */
 export type SnippetRemovalReason =
   | 'jsonld_meta'
   | 'nav'
@@ -482,9 +401,8 @@ export type LocalStats = {
   snippets_prefiltered: number;
   dup_removed: number;
   /**
-   * 步 3 付费墙截断后仍保留片段的截断动作数（D-05/IN-06 口径）：记的是步 3 的
-   * **动作**，含后来整源被丢的来源里的截断；状态行 removed 段与 sources 投影记的
-   * 是**最终幸存**来源的片段删除——两个指标分母不同、含义不同，不互相换算。
+   * 步 3 截断后仍保留片段的动作数，包含后来整源删除的情况。
+   * 状态行片段删除数只统计最终幸存来源，两者不能互相换算。
    */
   paywall_truncated: number;
   feed_hits: number;
@@ -492,29 +410,20 @@ export type LocalStats = {
   empty_dropped: number;
   budget_dropped_sources: number;
   budget_trimmed_snippets: number;
-  /** 步 7 后半被事实指纹新颖度删除的片段数（02-04） */
+  /** 因事实指纹新颖度删除的片段数。 */
   novelty_removed: number;
-  /** 步 7 后半被跨来源 5-gram 逐字重复删除的片段数（02-04；用户已定决策 5 的独立计数） */
+  /** 因跨来源 5-gram 重复删除的片段数。 */
   cross_source_dup_removed: number;
-  /**
-   * 步 3 GitHub 平台界面文字清洗的动作总数（filter-rules-9；删行与剥按钮后缀
-   * 各计一条，整片清空片段的动作也计入——明细在逐片段 SnippetStats.github_cleanup，
-   * 两处口径一致可对账）。
-   */
+  /** GitHub 清洗动作总数，包含清空片段的动作；与逐片段 github_cleanup 明细对应。 */
   github_cleanup_actions: number;
   /**
-   * 步 7 后半的新颖度指纹明细（D-10）：只为发生过指纹新颖度删除的来源记条目，
-   * `fp_total` 是该来源被删片段指纹的并集大小，`novel` 是其中对幸存指纹并集而言
-   * 首次出现 novel 的指纹串——测试模式审核"这个来源为什么被删"的证据。只存指纹串
-   * 本身，绝不存片段正文（LOG-03 允许的记录面：URL、标题、指纹与概率）。
+   * 新颖度删除的逐来源指纹明细，不含完整正文。
+   * fp_total 为被删片段指纹的并集大小，novel 相对判定时的幸存指纹并集计算。
    */
   novelty: NoveltySourceDetail[];
 };
 
-/**
- * 新颖度明细的一个来源条目（D-10 笔记草案形状）。`src` 取探测约定 `s{index}`；
- * 跨来源 dup 删除不建条目——明细只指新颖度指纹通道。
- */
+/** 发生过新颖度删除的来源明细；跨来源逐字重复不建立此条目。 */
 export type NoveltySourceDetail = {
   src: string;
   fp_total: number;
@@ -535,9 +444,8 @@ export type GitHubCleanupRule =
   | 'about_echo';
 
 /**
- * GitHub 平台界面清洗的单条动作（filter-rules-9）：只记规则与行号，绝不记正文
- * （LOG-03）——内容凭行号回 pre_filter 原文对齐（行号相对进入清洗时的片段文本，
- * 即步 3 付费墙截断之后）。
+ * GitHub 清洗动作，仅记录规则与进入清洗时的片段行号，不含正文。
+ * 行号对应步 3 付费墙截断后的文本。
  */
 export type GitHubCleanupAction = {
   rule: GitHubCleanupRule;
@@ -553,7 +461,7 @@ export type GitHubCleanupResult = {
   actions: GitHubCleanupAction[];
 };
 
-/** 统计表里单个片段的裁决；只有索引、标记与字符数，不含正文（LOG-03）。 */
+/** 逐片段裁决统计，仅含身份、标记与字符数。 */
 export type SnippetStats = {
   index: number;
   /** JSON-LD 转出的多段用 part 区分，同一 index 下 0..k */
@@ -564,9 +472,8 @@ export type SnippetStats = {
   /** 步 2 从同页来源并入的片段：原来源的 Brave 索引；此时 `index` 是它在原来源里的片段索引 */
   merged_from?: number;
   /**
-   * 步 3 GitHub 平台界面清洗的动作明细（filter-rules-9；test/on 生效、off 不应用）。
-   * 可选键向后兼容：旧记录无此键，新记录对旧读取方是未知键（样本 format_version
-   * 不因此递增）。整片清空（reason 'boilerplate'）与局部剥离都带。
+   * test/on 的 GitHub 清洗明细；整片清空或局部剥离均可带此键。
+   * 可选字段，读取旧记录时允许缺失。
    */
   github_cleanup?: GitHubCleanupAction[];
   chars: number;
@@ -585,9 +492,8 @@ export type SourceStats = {
 };
 
 /**
- * 统计对象：Phase 3 的状态行与 JSONL 日志的共同来源，直接序列化即可。
- * `jev`：off 模式保持 null（A16），on/test 由步 5 填充；`shadow_diff` 恒为 null——
- * 旧影子双链退役后新记录不再产生，字段仅为读旧记录保留。
+ * 状态行与 JSONL 共用的统计对象。off 的 jev 为 null，test/on 由步 5 填充。
+ * shadow_diff 仅兼容旧记录，当前恒为 null。
  */
 export type FilterStats = {
   mode: FilterMode;
@@ -598,19 +504,18 @@ export type FilterStats = {
     max_tokens: number;
     per_url_tokens?: number;
     overfetch_factor: number;
-    /** Brave freshness 参数（pd/pw/pm/py）；请求未带时省略键（D-10 条件 spread） */
+    /** Brave freshness 参数；请求未带时省略。 */
     freshness?: string;
-    /** Brave context_threshold_mode；请求未带时省略键（D-10 条件 spread） */
+    /** Brave context_threshold_mode；请求未带时省略。 */
     context_threshold_mode?: string;
   };
   brave: {
     n_sources: number;
     n_snippets: number;
     chars: number;
-    /** Brave 请求耗时（毫秒）；适配行在 API.issueRequest 前后计时后回填（D-10） */
+    /** 宿主测得的 Brave 请求耗时，单位毫秒。 */
     latency_ms?: number;
-    /** 过滤前全部片段文本的 token 估算（Math.ceil）；与 output.est_tokens 同一
-     * estimateTokens 同一口径——只算片段文本（D-10/TOOLS-04） */
+    /** 全部原始片段逐段估算后合计取整，与输出规模使用相同口径。 */
     est_tokens: number;
   };
   local: LocalStats;
@@ -623,16 +528,9 @@ export type FilterStats = {
     est_tokens: number;
     status_line?: string;
   };
-  /**
-   * 旧影子差异记账：新记录恒为 null（旧影子双链已退役），字段仅为读旧记录保留——
-   * 旧 shadow 记录按旧影子语义（返回 off、计算 would）读，不重解释。
-   */
+  /** 旧影子差异，读取语义见 ShadowDiff；当前恒为 null。 */
   shadow_diff: ShadowDiff | null;
-  /**
-   * 链侧删除动作的逐条证据（R-06/C-02、F-02 返修）：旧影子双链的 would 链与正本
-   * off 链的删除动作都在这里，chain 字段区分。新记录不再产生本字段（键省略）；
-   * 旧记录按旧影子语义读，审核脚本对缺键的更旧记录按"证据不足"读。
-   */
+  /** 旧影子链删除证据，当前省略此键；旧记录缺键表示证据不足。 */
   shadow_evidence?: WouldActionEvidence[];
 };
 
@@ -641,28 +539,20 @@ export type FilterResult = {
   result: FilteredResponse;
   stats: FilterStats;
   /**
-   * Jev 实发派发来源级记录（04-04 R1）：每 keep 来源一条，按表序（Brave 原序）排列
-   * ——样本层如实落盘的唯一来源级证据，样本写入时**绝不**重跑本地规则重建候选。
-   * off / no_key 模式为空表。
+   * 每个 keep 来源的派发证据，按 Brave 原序排列；off / no_key 为空表。
+   * 样本直接使用它，不重新运行本地规则构造。
    */
   jev_dispatch: JevDispatchRecord[];
   /**
-   * Jev 请求级记录（四题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §6.1）：每逻辑请求
-   * 一条、按派发顺序，带实发 state / questions / answers / 映射正文（一次搜索
-   * 零条或一条）。样本的载荷只信这里；**绝不进 FilterStats / JSONL**
-   * （LOG-03 红线）。off / no_key 为空表。
+   * 一次搜索零条或一条带载荷的逻辑请求记录，供样本保存。
+   * 不进入 FilterStats 或 JSONL；off / no_key 为空表。
    */
   jev_requests: JevRequestRecord[];
 };
 
 /**
- * Jev 实发派发的来源级记录（04-04 R1 引入；全量上下文接入后瘦身为**纯来源级
- * 证据**）：一次逻辑请求覆盖哪些来源、每个来源的片段身份与逐题有效性。实发
- * state / questions / answers 全量载荷在 `FilterResult.jev_requests` 每请求存一份
- * （§6.1：不在每个来源下重复整份载荷），来源行经 `request_id` 关联。状态维度互相
- * 独立——`dispatched`（请求已派发）、`answered`（收到可解析响应）与逐片段评分
- * 有效性分别表达，skipped / breaker_open 不再混作同一种"未发送"。已派发但失败的
- * 请求保留请求级实发载荷作输入证据。
+ * 来源与共享请求的对应关系、片段身份及评分状态，通过 request_id 关联完整载荷。
+ * 派发、响应和逐片段有效性分别记录；无内容可发与熔断未发分别标记。
  */
 export type JevDispatchRecord = {
   /** 探测约定 id：`s{braveIndex}`（与 per_source.src 同源） */
@@ -674,26 +564,18 @@ export type JevDispatchRecord = {
    * 未派发的请求（熔断短路等），此时按 not_dispatched_reason 解释
    */
   request_id?: string;
-  /**
-   * 该来源在所属请求 state 里的位置：`state.sources` 数组下标。映射消费方不得把
-   * 它与 src 的数字混用（§9 审查项）
-   */
+  /** 来源在 state.sources 中的数组位置，不能与 src 中的原始索引混用。 */
   array_index?: number;
   /**
    * 请求是否已派发（fetch 已调用；不保证服务端已收到或已处理——重试、断连、
    * 非零退出都可能发生）。breaker_open / skipped 一律 false。
    */
   dispatched: boolean;
-  /**
-   * 是否收到可解析响应（HTTP 200 且 answers 形状校验通过）——不含"来源裁决有效"
-   * 之义，后者见 source_verdict_valid（二次复审 R1 余项拆分）
-   */
+  /** 是否收到可解析响应；来源裁决是否有效另见 source_verdict_valid。 */
   answered: boolean;
   /**
-   * 逐片段评分有效性，按实发片段范围 snip0..snip{n-1} 对齐：该题实际收到且通过
-   * 校验的评分（有限数且在三档评分范围 [0,2] 内，与裁决层共用校验）。缺失 / 错误类型 /
-   * 负分 / 非有限一律 false——绝不从候选数或提交题数推断（二次复审 R1 余项）。
-   * null = 未派发或未收到可解析响应
+   * 逐题评分有效性：有限数且在 [0,2] 内为 true，不从题数推断。
+   * 按片段题位对齐；未派发或未收到可解析响应时为 null。
    */
   snippet_score_validity: boolean[] | null;
   /** 按题位保留实际收到的有限评分（含越界值供复查）；缺答/错误类型/非有限为 null。

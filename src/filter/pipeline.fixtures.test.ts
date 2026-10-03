@@ -1,17 +1,6 @@
 /**
- * 夹具驱动的逐条断言：十份 fixtures/expected/ 下的 .off.json 手工标注期望，
- * 对 `off` 模式管道做规则级与整卷两级对账（RULES-09）。
- * （注释里不写 `**` 开头的 glob——块注释会被 `*` 与 `/` 相邻构成的终止符截断。）
- *
- * 期望文件是按 notes/labeling-rubric.md 的问法**手工标注**的产物，不是运行输出
- * 的抄录；实现与标注不一致时，按尺子判规则错还是标注漏，两侧改到一致。
- *
- * 夹具三种形状的加载器按 01-RESEARCH.md「三种夹具形状」落地：wrapped（`response`
- * 键）、bare（`grounding.generic` 数组）、noise（`generic` 单对象 + `source` 单数）。
- * 加载器放在本文件内，不另建 `src/testUtils/`——保证 `src/` 除三处上游改动外
- * 只有 `src/filter/` 的新增文件（成功标准 1 / A21）。
- *
- * 依据：01-04-PLAN Task 2、01-RESEARCH.md「夹具与期望文件策略」、A19/A20。
+ * 十份手工标注夹具的 off 管道回归，核对逐步规则与最终输出。
+ * 期望独立于本次运行输出；加载器兼容 wrapped、bare 与 noise 三种夹具形状。
  */
 
 import assert from 'node:assert/strict';
@@ -74,11 +63,11 @@ type RuleAnnotations = {
   dedup: { url: string; snippet: number | string }[];
   feed_blocklist: { url: string; action: 'feed' | 'blocklist' }[];
   paywall: PrefilterAnnotation[];
-  /** 步 8 空来源规则：'empty' 为本地原因清空，'rewrite' 为新颖度/跨源 dup 删光（02-04）。 */
+  /** 步 8 归因：empty 表示空来源，rewrite 表示包含新颖度或跨源重复删除。 */
   empty_source: { url: string; action: 'empty' | 'rewrite' }[];
-  /** 步 7 后半被事实指纹新颖度删除的片段（02-04）。 */
+  /** 新颖度删除的片段。 */
   novelty: { url: string; snippet: number | string }[];
-  /** 步 7 后半被跨来源 5-gram 逐字重复删除的片段（02-04；片段 reason 同 'dup' 键）。 */
+  /** 跨来源逐字重复删除的片段，reason 同为 dup。 */
   cross_source_dup: { url: string; snippet: number | string }[];
   budget: { dropped_sources: number; trimmed_snippets: number };
 };
@@ -173,8 +162,7 @@ describe('expected fixture inventory', () => {
 
 for (const rel of listExpectedFiles()) {
   const parsed = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8')) as ExpectedFixture;
-  // 02-04 起新增 novelty / cross_source_dup 两节；过渡期期望文件缺节按空数组兼容
-  // （两组循环零跳过零失败），Task 3 重标注后逐条生效
+  // 允许旧期望省略新颖度和跨源去重小节，缺失时按空数组读取。
   const expected: ExpectedFixture = {
     ...parsed,
     rules: {
@@ -184,8 +172,7 @@ for (const rel of listExpectedFiles()) {
     },
   };
   const data = loadBraveFixture(expected.fixture);
-  // filterLlmContext 自 02-02 起异步：在模块顶层 await 一次结果，describe 闭包共享
-  // （node:test 等模块求值完成后才开跑，顶层 await 不影响收集）
+  // 模块求值时取得一次异步管道结果，供 describe 中的断言共享。
   const { result, stats } = await filterLlmContext(
     data,
     { params: { query: expected.query, ...expected.request }, intent: expected.intent },
@@ -223,10 +210,7 @@ for (const rel of listExpectedFiles()) {
           rows.forEach((row, part) => {
             assert.equal(row.part, part, 'converted parts must run 0..k in order');
           });
-          // 步 1 只负责转换；个别段被步 3 再删由该节的 nav 标注单独断言（sample3 4.3/4.4），
-          // 被步 7 新颖度/跨源 dup 再删由 novelty / cross_source_dup 两节单独断言（02-04）。
-          // 转换内容对原始夹具文本直调同一 splitJsonFragment 验证——不依赖幸存，
-          // 步 1 的验证力不因步 7 的删除而减弱。
+          // 直接对原片段核对 JSON-LD 转换；后续删除另行断言，避免转换测试依赖最终幸存。
           const rawItem = loadBraveFixture(expected.fixture).grounding.generic.find(
             (entry) => entry.url === item.url
           );
@@ -272,8 +256,7 @@ for (const rel of listExpectedFiles()) {
           assert.equal(row.kept, false);
           assert.equal(row.reason, 'boilerplate');
         } else {
-          // dup / paywall_* 有自己的节（dedup、paywall）；标注放错节时必须当场报错，
-          // 不能静默通过（审查测试缺口 14）
+          // 重复与付费墙动作有独立标注节，放错节时必须失败。
           assert.fail(`unexpected prefilter action: ${item.action}`);
         }
       });
@@ -318,7 +301,7 @@ for (const rel of listExpectedFiles()) {
       it(`step8 · ${hostOf(item.url)} ${item.action}`, () => {
         const source = sourceStats(item.url);
         assert.equal(source.verdict, 'drop');
-        // 'empty' = 本地原因清空；'rewrite' = 新颖度/跨源 dup 删光（02-04 归因）
+        // 区分空来源与包含新颖度或跨源重复删除的 rewrite。
         assert.equal(source.reason, item.action);
       });
     }
@@ -393,8 +376,7 @@ for (const rel of listExpectedFiles()) {
     });
 
     it('local counters match (novelty details asserted separately)', () => {
-      // D-10 起零值与实际值都带 novelty 明细数组：计数断言剔除该键逐条比对，
-      // 明细的形状与覆盖由下一条用例独立锁定（期望文件不写指纹列表——零指纹污染）
+      // 计数与 novelty 明细分开核对；期望文件不写指纹清单，明细形状由下一用例验证。
       const expectedLocal: Record<string, unknown> = {
         ...zeroLocal,
         ...expected.final.local,
@@ -414,9 +396,8 @@ for (const rel of listExpectedFiles()) {
       const actualSrcs = stats.local.novelty.map((entry) => entry.src).sort();
       assert.deepEqual(actualSrcs, expectedSrcs, 'novelty detail sources');
 
-      // A3 语义：novelty_removed > 0 时条目存在、fp_total >= 1（纯重复来源触发
-      // 删除但对指纹并集零新贡献时 novel 为空数组是合法形态，不对 novel 设下限）；
-      // novelty_removed === 0 时明细为空数组
+      // 发生新颖度删除时必须有明细；novel 可为空，表示相对参照集合没有新增指纹。
+      // 没有新颖度删除时明细应为空。
       if (stats.local.novelty_removed > 0) {
         assert.ok(stats.local.novelty.length > 0, 'novelty details must exist');
         for (const entry of stats.local.novelty) {
@@ -430,9 +411,7 @@ for (const rel of listExpectedFiles()) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// 裁剪正例：真实夹具加小预算（A2-a）。
-// ---------------------------------------------------------------------------
+// 真实夹具的小预算裁剪。
 
 describe('budget trimming on a real fixture', () => {
   const data = loadBraveFixture('jev_release_default.json');
@@ -441,10 +420,7 @@ describe('budget trimming on a real fixture', () => {
   const braveUrls = data.grounding.generic.map((item) => item.url);
 
   it('keeps the first five sources in Brave order and trims from the tail', async () => {
-    // 步 9 只在超量倍数 > 1 时执行（倍数 1 时 Brave 已按请求上限返回，估算裁剪只会
-    // 误砍——审查问题 6）；这里用 2x 超量抓取后按模型原始请求（5 源 / 2400 token）裁回。
-    // 预算从 Phase 1 的 3000 降到 2400：02-04 起步 7 新颖度先清掉低新颖度片段，
-    // 首 5 源幸存内容 ≈2670 token，3000 不再触发裁剪（2400 落在第 5 源区间内）。
+    // 设置 2 倍抓取使步 9 生效；2400 token 预算低于本地过滤后的内容，确保触发裁剪。
     const { result, stats } = await filterLlmContext(
       data,
       { params: { query, maximum_number_of_urls: 5, maximum_number_of_tokens: 2400 }, intent },
@@ -489,11 +465,7 @@ describe('budget trimming on a real fixture', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// off 模式不做"空来源"误判：步 8 的 empty 计数必须为 0。02-04 起新颖度/跨源 dup
-// 可以把转述稿整源清空（步 8 记 'rewrite'，设计意图非回归）——输出来源数按
-// rewrite 差额对账。
-// ---------------------------------------------------------------------------
+// 核对 empty 与 rewrite 的独立计数，避免将转述删除误记为空来源。
 
 describe('no fixture is dropped as empty', () => {
   for (const fixture of ['jev_release_default.json', 'jev_release_strict.json']) {
@@ -516,15 +488,8 @@ describe('no fixture is dropped as empty', () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// test 模式端到端（04-01 单链语义）：test 与 on 共用 runOnChain——同输入同回放桩下
-// 两模式 result / stats.local / stats.sources 逐字段 deepEqual（本计划尚无样本元
-// 信息层，应为全等）；裁决真实生效以 test 相对 off 的差异推导钉死（旧 shadow
-// "只算不丢"行为退役，Jev 裁决不生效时差集为 0，断言有判别力）。
-// 范围备忘：现有两份录制夹具的 would_drop 均为空——全仓没有整源 Jev drop 的录制，
-// 这里不写"整源 drop 被删"的空真断言；将来需要时必须先新增录制夹具（范围变更，
-// 显式提出后再做，不得执行期即兴）。
-// ---------------------------------------------------------------------------
+// 同输入和固定回答下，test/on 的过滤结果与统计应相等，并与 off 有预期差异。
+// 现有两份录制没有整源 Jev drop，不用空集合断言声称覆盖了该行为。
 
 const isRecordValue = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -536,19 +501,11 @@ const loadRecording = (rel: string): Record<string, { http: number; response: un
   return parsed.results as Record<string, { http: number; response: unknown }>;
 };
 
-/** 回放注入（任务 E 固定回答契约，合成桩）：
- *  - 一次共享请求（state.sources[] + 命名空间题表）构造一张完整 answers 表返回，
- *    classify 恰被调用一次；
- *  - 来源级四道当前题按候选 ID 查录制条目，录制 noul 值映射到全局题键
- *    `{id}__{localKey}`（如 s0 的 is_off_topic → s0__is_off_topic）；旧额外题
- *    （v3 十题残留的 worth_keeping 等）不参与裁决，不进回答表；
- *  - 片段分数按位置映射到当前候选片段——实测两份夹具每源的当前片段数与录制
- *    snip 键数逐一相等（位置映射即身份映射）；若未来本地规则变化导致片段数
- *    不一致，该源片段分数整体不给（缺答保守），绝不按压缩位置错位套用旧分数。
- *    旧分数用于当前时间上下文评分题是合成桩：只验证管道的等长应用与裁决行为，
- *    不代表模型对新题的真实回答；
- *  - 纯回答注入不带 dispatch（计划 §3.3）：管道计零实发；input_tokens 为 0 且
- *    usage_complete=false，注明合成用量。 */
+/**
+ * 固定回答桩：按候选 ID 和当前题键投影历史录制，不代表新题的真实回答。
+ * 片段数与录制不一致时整源不给评分，避免按压缩位置错配。
+ * 不带 dispatch，计零实发；合成 input_tokens 为 0，usage_complete 为 false。
+ */
 const replayClassifier =
   (results: Record<string, { http: number; response: unknown }>): ClassifyDeps['classify'] =>
   async ({ state, questions }) => {
@@ -596,7 +553,7 @@ const loadExpectedHeader = (
   };
 };
 
-/** 由两次运行的 stats.sources 独立推导 test 相对 off 的差异（不复制实现；身份口径与退役前的双链 diffShadow 一致）。 */
+/** 由两次结果的来源统计推导 test 相对 off 的身份差集。 */
 const deriveTestDiff = (
   offSources: SourceStats[],
   testSources: SourceStats[]
@@ -671,11 +628,8 @@ const deriveRemovedSnippetIds = (
 };
 
 /**
- * test 相对 off 的差集真值常数（filter-rules-5，2026-10-01 六题精简 + 取消当事方
- * 播种序后重标定）：test 的去重播种与 off 同为 Brave 原序，差异只剩 Jev 来源级
- * 裁决、片段评分与论证保护通道。旧值（排序取消前）default restore 11、strict
- * restore ['s11'] remove 5——被救回的 datacamp #0、mezha #4、therundown 整源及
- * 多删的 register/pasquale 段都靠 is_primary 抢先播种，随排序取消与 off 归一。
+ * test 相对 off 的固定差集期望。两者按相同 Brave 原序去重，
+ * 差异来自 Jev 来源裁决、片段评分和论证保护。
  */
 const TEST_DIFF_EXPECTED: Record<
   string,

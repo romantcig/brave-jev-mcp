@@ -1,9 +1,6 @@
 /**
- * 过滤层对宿主的唯一公共面（barrel）。
- *
- * 触点 1（`src/tools/llm_context/index.ts`）只从这一条路径导入。库内部模块之间
- * 直接引具体文件，不经过本文件，避免循环依赖。仓库其余地方没有 barrel，
- * 这里是有意的例外：它就是"库"的边界。
+ * 过滤库供宿主使用的公共导出。
+ * 库内部直接导入具体模块，避免通过此入口形成循环依赖。
  */
 
 export { applyOverfetch, BRAVE_MAX_TOKENS, BRAVE_MAX_URLS } from './budget.js';

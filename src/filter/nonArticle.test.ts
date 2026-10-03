@@ -87,15 +87,14 @@ describe('isFeedUrl', () => {
   });
 
   it('does not judge substring look-alikes as feeds', () => {
-    // 子串匹配会误杀这三类（RESEARCH Pitfall 8），token 匹配不得命中
+    // URL 子串含 feed 词不等于 feed 页面，三类反例均应保留。
     assert.equal(isFeedUrl('https://example.com/feedback-form'), false);
     assert.equal(isFeedUrl('https://example.com/newsfeed-article'), false);
     assert.equal(isFeedUrl('https://example.com/grassroots'), false);
   });
 
   it('judges only the last path segment, never hostname tokens or hyphen/underscore compounds', () => {
-    // 审查问题 5：/[/.-_]/ 的 .-_ 是字符区间（含数字、大写字母，独独不含连字符），
-    // 导致 /blog-feed 漏判、feed_parser / atom_tools / 主机名 rss.com 误判
+    // feed_parser 等包名和 rss.com 主机名不应被 feed 规则误删；只检查限定的 URL 部位。
     assert.equal(isFeedUrl('https://example.com/blog-feed'), false);
     assert.equal(isFeedUrl('https://example.com/rss2json-guide'), false);
     assert.equal(isFeedUrl('https://github.com/someone/feed_parser'), false);

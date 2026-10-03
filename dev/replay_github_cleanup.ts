@@ -1,26 +1,8 @@
 /**
- * GitHub 单片段界面清洗回放（固定历史日期范围）。
- *
- * 用仓库内当前 cleanGitHubBoilerplate 重放三天现场样本，分别报告原始
- * 返回（pre_filter）与历史最终返回（final_return.payload）的变化。
- *
- * 口径（审查 R3 返修）：三套分母严格分开——
- * - 全体来源：所有站点的来源出现次数、片段数与字符总数（清洗在非 GitHub 恒无动作）；
- * - GitHub 仓库：repoKeyOf 非 null（github.com / www.github.com 的 owner/repo 两段
- *   及以上页面）的来源次数、去重仓库数、片段数、字符数与全部规则命中——去重、
- *   次数、片段与字符的分母同一范围；
- * - GitHub Topics：单列来源数，不进仓库分母（repoKeyOf 对 topics 返回 null）。
- *
- * 样本分组（审查 R3 补充）：2026-09-30 与 2026-10-01 的样本与计划实验依据同批
- * （基线组 45 份）；2026-10-02 较计划基线多出若干份（当日全量组），两轮报告变化不能
- * 直接归因于规则——两组分开统计，manifest 固定每份样本的 sha256 供跨轮对齐。
- *
- * 产物（汇总 / 逐项 diff / 残留清单 / 样本 manifest）全部写显式指定的输出目录，
- * 本脚本不落任何样本内容进仓库。只是本地文本清洗回放——没有重跑 Jev，
- * 不能据此推断清洗后模型裁决的变化。此脚本没有构造页内幸存参照，
- * 不测试 About 回声规则；该规则需通过管道或带前序参照的回放验证。
- *
- * 运行：npx tsx dev/replay_github_cleanup.ts <输出目录>（输出目录必填，不写死路径）
+ * 对固定日期的本地样本重放 GitHub 单片段清洗，输出汇总、差异、残留和 manifest。
+ * 用法：npx tsx dev/replay_github_cleanup.ts <仓库外输出目录>
+ * 原始响应与历史最终响应分别统计；不重跑 Jev，不能推断模型裁决变化。
+ * 未提供页内前序参照，因此不覆盖 About 回声规则。
  */
 
 import { createHash } from 'node:crypto';
@@ -38,7 +20,7 @@ if (!OUT_DIR) {
 }
 const SAMPLE_BASE = 'C:/Users/romantcig/.brave-jev/logs/samples';
 const DAYS = ['2026-09-30', '2026-10-01', '2026-10-02'] as const;
-/** 与计划实验依据同批的日期（基线组）；其余日期为增量组，单独统计。 */
+/** 基线组日期；其他日期单独分组，避免把样本集变化误当作规则效果。 */
 const BASELINE_DAYS: ReadonlySet<string> = new Set(['2026-09-30', '2026-10-01']);
 
 type SampleSource = { url?: unknown; snippets?: unknown };
@@ -233,7 +215,7 @@ const replaySource = (
 
 const main = (): void => {
   mkdirSync(OUT_DIR, { recursive: true });
-  /** 每组 × 每阶段一套统计：baseline = 9-30 + 10-01（与计划实验同批），oct02 = 10-02 全部。 */
+  /** 每组、每阶段独立统计：baseline 为 9-30 与 10-01，oct02 为 10-02。 */
   const groups = {
     baseline: {
       pre: newStageStats(),

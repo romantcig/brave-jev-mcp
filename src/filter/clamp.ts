@@ -1,13 +1,6 @@
 /**
- * 工具面数值参数下限钳位：低于下限的抬到下限并回传调整清单。
- *
- * 住在过滤层纯库里（EMBED-06：对上游只动三处，execute() 只留适配行，原写在
- * schemas/input.ts 里的三段实现是审查问题 7）；不 import 任何 MCP / zod 类型。
- * 上限越界、非整数、NaN、Infinity 仍由 RequestParamsSchema 的 `.min()` / `.int()`
- * 在 SDK 校验层拒绝，本模块只负责"低于下限不报错、抬到下限"。
- *
- * 依据：PLAN.md §5「参数钳位」、decisions-log 2026-09-24（钳位设计）、
- * 2026-09-25 审查（挪位）。
+ * 将数值参数抬到下限，并返回调整清单；不依赖 MCP 或 zod 类型。
+ * 其余数值合法性由宿主 schema 校验。
  */
 
 import type { FilteredResponse } from './types.js';

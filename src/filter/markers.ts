@@ -1,12 +1,6 @@
 /**
- * 付费墙标记与样板行前缀常量表。
- *
- * 数据表必须是 `.ts` 常量：`tsc` 不拷贝非 `.ts` 资产进 `dist/`（STRUCTURE.md）。
- * 匹配语义见使用方：付费墙标记行首匹配后截断片段（步 3 内最先做），样板前缀
- * 行级剥离（两侧同法归一化后再比）。**老大有新写法随时补**，改动只落在本文件。
- *
- * 依据：notes/non-article-pages.md「标记列表初值」、notes/local-rules-design.md §3、
- * 01-RESEARCH.md「规则 7」「规则 3」。
+ * 付费墙标记与样板行前缀，使用 TS 常量随构建发布。
+ * 付费墙按归一后的整行匹配并截断；样板行前缀的精确匹配规则见 matchesPrefix。
  */
 
 /** 英文付费墙标记；行首匹配（忽略大小写），命中处截断片段。可增补。 */
@@ -53,7 +47,7 @@ export const BOILERPLATE_PREFIXES: readonly string[] = [
   'On this page',
   'Related articles',
   'Read next',
-  // 媒体页内嵌的付费情报服务推广（GlobalData 系媒体网络通用 CTA 块，2026-10 样本）
+  // 媒体页内嵌的付费情报服务推广标记。
   'Go deeper with GlobalData',
   'Access deeper industry intelligence',
   // 中文条目

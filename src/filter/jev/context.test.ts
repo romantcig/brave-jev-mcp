@@ -1,9 +1,4 @@
-/**
- * 全量共享上下文请求构造纯逻辑单测：全量 state 与命名空间题目构造（数组位置与
- * 来源 ID 解耦、引用转换与第十六轮口径逐字一致）、时间上下文字段、单候选唯一
- * 行为、显式映射与逐来源答案投影（缺答不左移、坏值不当 0）。旧的 32K／64K 双
- * 限额预检与局部题表已退役——断言直接落在构造出的最终请求上。
- */
+/** 共享请求与答案投影测试：来源 ID 和数组位置分离，缺答不左移，坏值不当作零分。 */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -152,10 +147,7 @@ describe('buildContextRequest: state / questions / mapping', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§5）：日期与新题恒在，
-// 检索时间只在显式传入时携带——生成不再由任何参数是否存在决定。
-// ---------------------------------------------------------------------------
+// 页面日期与评分题始终构造；检索时间仅在显式传入合法值时携带。
 
 describe('buildContextRequest: time context', () => {
   it('always carries brave_page_date per source and adds retrieval_time after sources when supplied', () => {

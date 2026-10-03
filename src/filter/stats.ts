@@ -1,12 +1,4 @@
-/**
- * 统计对象的构造。
- *
- * `createFilterStats` 是工厂：每次调用新建对象，库不持有任何模块级可变状态，
- * 同一进程里交替使用不同配置的调用互不污染（EMBED-01/concurrency）。
- * 统计表只存索引、标记与字符数，绝不放片段正文（LOG-03）。
- *
- * 依据：01-RESEARCH.md「统计对象」一节。
- */
+/** 每次调用新建统计对象，隔离请求间状态；统计不存片段正文。 */
 
 import { canonicalizeUrl } from './url.js';
 import { estimateTokens } from './tokens.js';
@@ -50,9 +42,8 @@ const genericItems = (
   Array.isArray(data?.grounding?.generic) ? data.grounding.generic : [];
 
 /**
- * on/test 模式未注入 classify 时的 Jev 统计零值（no_key）：零请求、零记账、
- * per_source 空表——SAFE-01 语义前置（"未判定"与"判了但失败"从一开始就分开记）。
- * 每次调用新建对象，库不持模块级可变状态。
+ * 缺少 classify 时的 no_key 统计：零请求、空来源表，区别于已请求但失败。
+ * 每次调用返回独立对象。
  */
 export function createNoKeyJevStats(): JevStats {
   return {
@@ -80,14 +71,8 @@ const metaOf = (
 };
 
 /**
- * 新建一份统计对象：记录 Brave 原始规模，并按 Brave 序为每个来源与片段建一行
- * （全部先标为保留，管道各步再翻标记）。`canonical_url` 是步 2 的归并键，只进统计，
- * 输出永远用原始 URL。
- * @param mode 本次调用的模式
- * @param request 已归一化的请求摘要（上限缺省已填 Brave 默认值）
- * @param data Brave 原始响应
- * @returns 新对象；`jev` 为 null、`shadow_diff` 恒为 null（旧影子双链退役后新记录
- * 不再产生，字段仅为读旧记录保留），`output` 全 0，由管道末尾填实
+ * 按 Brave 原序建立来源和片段统计，初始均为保留；canonical_url 只作归并键。
+ * 输出规模初始为 0，由管道结束时填入；jev 与兼容字段 shadow_diff 初始为 null。
  */
 export function createFilterStats(
   mode: FilterMode,
@@ -98,9 +83,7 @@ export function createFilterStats(
 
   let braveSnippets = 0;
   let braveChars = 0;
-  // 过滤前 token 估算（D-10/TOOLS-04）：对全部片段文本求和后 Math.ceil——与
-  // summarizeOutput 的 output.est_tokens 同一 estimateTokens 同一口径（只算片段
-  // 文本），绝不复制实现（tokens.ts 头注释明文）。
+  // 原始规模与输出规模共用 estimateTokens，先累加全部片段再向上取整。
   let braveTokenSum = 0;
 
   const sources: SourceStats[] = items.map((item, index) => {

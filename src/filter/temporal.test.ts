@@ -1,9 +1,4 @@
-/**
- * 时间上下文纯数据帮助函数单测（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§7.2）：
- * 页面日期选择（绝对 ISO 优先、纯日期次选、相对时间不倒推）、归并冲突消解
- * （相同保留、不同或部分未知置 null）、检索时间归一（非法一律省略，绝不读系统时间）。
- * 合法输入与冻结请求保持一致；非法输入额外拒绝，不把格式前缀当成日期证据。
- */
+/** 页面日期选择、归并冲突与检索时间测试；合法值原样保留，非法或缺失值不补当前时间。 */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';

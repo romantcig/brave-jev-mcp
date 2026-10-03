@@ -1,17 +1,9 @@
 /**
- * 管道步 1：JSON-LD 片段分流。
- *
- * Brave 会把页面里的 schema.org 结构化数据原样当片段返回。能抽出正文（文章正文、
- * FAQ 问答、HowTo 步骤、问答页答案）就换成正文段；全是元数据就整片删；拿不准
- * （有表外键但抽不出正文，如表格 / 代码块 JSON）就原样保留。
- *
- * 安全约束：判定只用 `JSON.parse`，键访问一律 `Object.hasOwn` + 固定键名，
- * 解析结果不 spread、不写回任何对象（`__proto__` 键只当普通键参与判断）。
- *
- * 依据：notes/local-rules-design.md §1、01-RESEARCH.md「规则 1（步 1）」与 Assumptions A8。
+ * 步 1 JSON-LD 分流：能抽正文就拆成正文段，只有元数据就删除，无法确定则原样保留。
+ * 仅用 JSON.parse 和自有固定键读取，不展开或写回解析对象。
  */
 
-/** 纯元数据键：笔记 §1 的删除键，加夹具实测补充的键（A8）。可增补。 */
+/** 可判为纯元数据的键集合。 */
 export const METADATA_KEYS: ReadonlySet<string> = new Set([
   'author',
   'publisher',
@@ -36,7 +28,7 @@ export const METADATA_KEYS: ReadonlySet<string> = new Set([
   'mainEntityOfPage',
   'breadcrumb',
   'itemListElement',
-  // A8：夹具里实际出现、笔记未列的元数据键
+
   'dateCreated',
   'answerCount',
   'duration',
@@ -84,14 +76,7 @@ const isTitleHeadline = (value: unknown, sourceTitle: string): boolean =>
   typeof value === 'string' &&
   normalizeTitleForCompare(value) === normalizeTitleForCompare(sourceTitle);
 
-/**
- * 判定片段是不是 JSON：`trim()` 后首字符是 `{` 或 `[`，且 `JSON.parse` 成功、结果是
- * 对象或数组。
- * @returns 解析结果；空串、普通文本、畸形 JSON、标量 JSON 一律 `null`
- * @example parseJsonFragment(' {"a": 1} ') → { a: 1 }
- * @example parseJsonFragment('42') → null
- * @example parseJsonFragment('{not json') → null
- */
+/** 仅尝试解析以 { 或 [ 开头的对象和数组；普通文本、标量及解析失败返回 null。 */
 export function parseJsonFragment(text: string): unknown | null {
   const trimmed = text.trim();
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
@@ -175,15 +160,8 @@ const isMetadataOnly = (node: unknown, sourceTitle: string): boolean => {
 };
 
 /**
- * 步 1 对单个片段的分流裁决。
- * - `not_json`：不是 JSON（含解析失败、标量、空白），当普通文本，不计任何 JSON-LD 计数
- * - `converted`：抽出 ≥ 1 段正文，整片换成这些段
- * - `dropped_meta`：抽不出正文且键全在元数据表里，整片删
- * - `kept_raw`：抽不出正文但有表外键，原样保留（保守）
- * @param text 片段原文
- * @param sourceTitle 来源标题，用于判断 `headline` 是否只是重复标题
- * @example splitJsonFragment('{"name": "Blog", "item": "https://x/blog"}', 'T') → { action: 'dropped_meta' }
- * @example splitJsonFragment('{"rows": [[1, 2]]}', 'T') → { action: 'kept_raw' }
+ * 按片段分流：非 JSON 当普通文本；可提取正文时替换；只有元数据时删除；
+ * 有未知键但提不出正文时原样保留。
  */
 export function splitJsonFragment(text: string, sourceTitle: string): JsonFragmentVerdict {
   const parsed = parseJsonFragment(text);

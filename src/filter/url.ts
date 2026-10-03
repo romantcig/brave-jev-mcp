@@ -1,12 +1,6 @@
 /**
- * 管道步 2：URL 规范化与同页来源归并。
- *
- * 规范 URL **只当合并键**：输出的 `generic[].url` 与 `sources` 键永远是 Brave 原串，
- * 模型引用的链接不被改写。规范化只做笔记列出的几类：小写 host、去 `www.` / `amp.`
- * 前缀、`http`→`https`（键里不带 scheme）、去 fragment、去尾斜杠、去 AMP 标记、
- * 去跟踪参数、其余查询参数按键排序；path 大小写、`index.html`、内容参数一律不动。
- *
- * 依据：notes/local-rules-design.md §2、01-RESEARCH.md「规则 2（步 2）」。
+ * 步 2 URL 规范化与同页归并。规范键只用于匹配和统计，输出链接保留 Brave 原串。
+ * 忽略 scheme、主机前缀、fragment、AMP 与跟踪参数；保留路径大小写和内容参数。
  */
 
 import type { SourceDropReason } from './types.js';
@@ -132,15 +126,7 @@ const mergeKey = (raw: string): string | null => {
   return `${host}${port}${canonicalPath(url.pathname)}${query === '' ? '' : `?${query}`}`;
 };
 
-/**
- * 规范化 URL，只作合并键与统计表的 `canonical_url`，不写回输出。
- * @returns 不带 scheme 的 `host[:port]path[?query]`；解析失败或非 http(s) 时返回原串
- * @example canonicalizeUrl('HTTPS://WWW.Example.com:443/a/b/?utm_source=t&id=5#x') === 'example.com/a/b?id=5'
- * @example canonicalizeUrl('https://amp.x.com/amp/post.amp?amp=1') === 'x.com/post'
- * @example canonicalizeUrl('https://example.com/a/') === 'example.com/a'
- * @example canonicalizeUrl('https://example.com:8080/a') === 'example.com:8080/a'
- * @example canonicalizeUrl('not a url') === 'not a url'
- */
+/** 返回不带 scheme 的 host[:port]path[?query] 合并键；解析失败或非 HTTP(S) 时返回原串。 */
 export function canonicalizeUrl(raw: string): string {
   return mergeKey(raw) ?? raw;
 }

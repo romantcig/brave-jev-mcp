@@ -124,8 +124,7 @@ describe('filterLlmContext', () => {
       const { result, stats } = await filterLlmContext(data, request, { ...offConfig, mode });
 
       assert.equal(stats.mode, mode);
-      // off 模式 Jev 整段跳过（stats.jev 保持 null，A16）；on/test 未注入 classify
-      // 时记 no_key 零值对象且零请求（SAFE-01 语义前置）
+      // off 不进入 Jev；test/on 未注入 classify 时记 no_key 和零请求。
       if (mode === 'off') {
         assert.equal(stats.jev, null);
       } else {
@@ -206,9 +205,7 @@ describe('filterLlmContext', () => {
 
     const { result, stats } = await filterLlmContext(data, request, offConfig);
 
-    // 短且无实词预筛已退役（第二十四轮消融实证误伤真实内容）：首行样板剥离后
-    // 余行保留在原位，质量判断交 Jev 评分（off 模式下随输出返回）；幸存片段保持
-    // Brave 原序
+    // 样板首行删除后，短片段仍按原序保留，质量交给 Jev 评分。
     assert.deepEqual(
       stats.sources[1].snippets.map((snippet) => [snippet.index, snippet.kept, snippet.reason]),
       [
@@ -394,8 +391,7 @@ describe('filterLlmContext', () => {
       n_sources: 2,
       n_snippets: 3,
       chars: data.grounding.generic.flatMap((item) => item.snippets).join('').length,
-      // 过滤前 token 估算（D-10）：期望侧用同一 estimateTokens 逐段求和后 Math.ceil——
-      // 绝不复制公式，也不 join 后整体估算（跨段边界会拼出假 token 段）
+      // 逐段估算再合计取整，不能先 join；拼接边界可能改变分词。
       est_tokens: Math.ceil(
         data.grounding.generic
           .flatMap((item) => item.snippets)
@@ -432,8 +428,7 @@ describe('filterLlmContext', () => {
   it('records context_threshold_mode in stats.request only when the request carries it', async () => {
     const data = payload();
 
-    // MCP 工具声明层不含 context_threshold_mode（SDK 会 strip 未知键），该参数
-    // 只能经 filterLlmContext 直调注入——条件 spread 语义在管道层锁定（D-10）
+    // context_threshold_mode 不在 MCP 工具声明中，只通过纯库直调用例验证记录行为。
     const withMode = await filterLlmContext(
       data,
       {
@@ -515,8 +510,7 @@ describe('filterLlmContext', () => {
   });
 
   it('uses the all-default config when config is omitted, ignoring filter env vars', async () => {
-    // 02-FIX 批 B：环境变量只剩 Jev key 与 JEV_FILTER_CONFIG_FILE 两个，库不再读
-    // 任何 JEV_FILTER_* 开关；省略 config 就是全默认（mode off）
+    // 省略 config 时纯库使用默认配置，不读取环境中的过滤开关。
     const savedMode = process.env.JEV_FILTER_MODE;
     const savedFile = process.env.JEV_FILTER_CONFIG_FILE;
     process.env.JEV_FILTER_MODE = 'on';
@@ -533,8 +527,7 @@ describe('filterLlmContext', () => {
   });
 
   it('marks paywall_empty rows as truncated=true with kept=false', async () => {
-    // 审查测试缺口 13：截断后为空的片段此前不写 truncated，夹具测试的
-    // paywall_empty 分支一旦被走到就会挂在 undefined 断言上
+    // 截断至空的片段也必须记录 truncated，便于样本追溯动作。
     const data = payload();
     data.grounding.generic[1].snippets = ['Subscribe to continue reading'];
 
@@ -559,8 +552,7 @@ describe('filterLlmContext', () => {
     };
 
     it('skips the trim when the overfetch factor is 1 (Brave already honored the cap)', async () => {
-      // 倍数为 1 时 Brave 已按请求上限执行输出、过滤层只删不加；估算公式为 Jev 32k
-      // 保护标定、对普通文本偏高（审查问题 6），再按估算裁只会砍掉 Brave 给的完整内容
+      // 倍数为 1 时不再按本地估算裁剪，避免截掉 Brave 已按请求上限返回的内容。
       const { result, stats } = await filterLlmContext(payload(), tightRequest, offConfig);
 
       assert.equal(stats.local.budget_trimmed_snippets, 0);
@@ -712,10 +704,7 @@ describe('trimSourceMeta', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// on 模式裁决端到端（02-03）：回放夹具驱动 + 合成 classify，步 6/7 前半接线、
-// 步 8 score 删光归 'empty'、幸存者 Brave 原序不变式
-// ---------------------------------------------------------------------------
+// on 模式裁决的管道接线、score 删空归因与 Brave 原序。
 
 describe('on-mode verdicts end to end (replay fixture)', () => {
   const fixtureRoot = fileURLToPath(new URL('../../fixtures/', import.meta.url));
@@ -732,7 +721,7 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
     return parsed as BraveLlmContextResponse;
   };
 
-  /** 期望文件头三件套：query / intent / request 与录制口径一致（02-01 守卫镜像）。 */
+  /** 期望的 query / intent / request 与录制保持一致。 */
   const loadExpectedHeader = (
     rel: string
   ): { query: string; intent: string; request: Omit<FilterRequest, 'query'> } => {
@@ -865,7 +854,7 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
       classify: replay,
     });
 
-    // 被来源级丢弃的来源不在输出；过滤后为空返回空不补回（VERDICT-06）
+    // 整源丢弃应反映在输出中；删空后不补回。
     assert.deepEqual(result.grounding.generic, []);
     assert.deepEqual(result.sources, {});
     // stats.sources 保持 Brave 原序（只翻标记不重排）且 reason 正确
@@ -888,8 +877,7 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
   });
 
   it('marks a source whose snippets are all score-removed as empty in step 8', async () => {
-    // 步 8 归因口径（notes/dedup-and-rewrite-policy.md）：仅 score/本地原因删光 →
-    // 'empty'；novelty/跨源 dup 删光记 'rewrite' 的分支属 02-04
+    // 只有 score 或本地删除时归为 empty；新颖度和跨源重复由其他用例检查。
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -906,7 +894,7 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
     const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
       const answers: Record<string, JevAnswer> = {};
       for (const key of Object.keys(questions)) {
-        // 退役旧键（self_deprecated / stale）不提问——按额外字段忽略的负空间由 T04 锁定
+        // 额外历史答案不参与投影和当前裁决。
         answers[key] = key.includes('snip')
           ? { kind: 'score', score: 0.1 }
           : { kind: 'noul', probability: 0 };
@@ -928,13 +916,8 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 三模式语义矩阵（02-03 Task 2，04-01 迁移到 test 语义）：同一内联夹具 ×
-// off/test/on，test/on 注入同一合成 classify——off 直通、test 与 on 共用同一条链且
-// 裁决真实生效（04-CONTEXT：不维护两套易漂移的实现）。注意：本例人造片段的
-// 数字/日期等事实指纹少于 minFacts，步 7 的指纹新颖度不触发——新颖度按播种序的
-// 模式差异由 novelty 组与 pipeline.fixtures.test.ts 的 test 相对 off 差集断言锁住。
-// ---------------------------------------------------------------------------
+// 同一合成夹具验证三模式：test/on 真实应用裁决，off 仅用本地规则。
+// 此夹具事实指纹少于 minFacts，不触发新颖度；该行为由独立用例与录制差集覆盖。
 
 describe('three-mode semantic matrix (off / test / on)', () => {
   // 四来源覆盖矩阵四角：s0 来源级 keep 且 score 全过（三模式输出同）；s1 来源级
@@ -1048,8 +1031,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     // Jev 照常调用（一次全量共享请求）并记账
     assert.equal(counter.calls, 1);
     assert.equal(testRun.stats.jev?.n_requests, 1);
-    // 裁决真实生效（04-01 单链语义，旧 shadow"只算不丢"行为退役）：s1 来源级
-    // off_topic 丢弃、s3 片段被 score 删光后步 8 清空、s2 两条低分片段删除
+    // 核对来源级 off_topic、低分片段删除与 score 删空后的来源删除。
     assert.deepEqual(
       testRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
       [
@@ -1089,7 +1071,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     );
 
     assert.ok(counter.calls > 0);
-    // 同输入、同回放桩：test 与 on 共用同一链，输出与统计投影逐字段一致（04-CONTEXT）
+    // 同输入与回答下，test/on 输出及统计应逐字段一致。
     assert.deepEqual(testRun.result, onRun.result);
     assert.deepEqual(testRun.stats.sources, onRun.stats.sources);
     assert.deepEqual(testRun.stats.local, onRun.stats.local);
@@ -1172,7 +1154,7 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
     );
 
     assert.equal(stats.jev?.status, 'degraded');
-    // 已派发失败计一次逻辑请求；HTTP 尝试如实累加（计划 §3.3）
+    // 派发后失败仍计一次逻辑请求，HTTP 尝试含重试。
     assert.equal(stats.jev?.n_requests, 1);
     assert.equal(stats.jev?.n_http_attempts, 3);
     assert.equal(stats.jev?.requests.length, 1);
@@ -1191,7 +1173,7 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
     );
 
     assert.equal(stats.jev?.status, 'breaker_open');
-    // breaker_open 短路不计请求（02-02 记账口径）
+    // 熔断短路不计请求。
     assert.equal(stats.jev?.n_requests, 0);
   });
 
@@ -1208,7 +1190,7 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
     // 超量抓取的内容不原样放行：熔断期只跑本地规则，输出与同参数 off 模式
     // deepEqual（步 9 trimToBudget 照常裁回）
     assert.deepEqual(onRun.result, offRun.result);
-    // 失败来源全部按留（SAFE-01）
+    // 失败来源应保守保留。
     assert.deepEqual(
       onRun.result.grounding.generic.map((item) => item.url),
       ['https://search.brave.com/', 'https://example.com/post']
@@ -1218,10 +1200,7 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 步 7 后半新颖度与跨源 dup（02-04）：off 删重 + rewrite 归因、三模式播种序、
-// 跨源逐字 dup 独立计数。
-// ---------------------------------------------------------------------------
+// 新颖度、跨源逐字去重与 rewrite 归因。
 
 describe('novelty and cross-source dup (02-04)', () => {
   // s0 原文（四数字事实 + p:brave），s1 同四事实改写（词序不同 → 无共享 5-gram，
@@ -1414,17 +1393,13 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
   });
 });
 
-// ---------------------------------------------------------------------------
-// 四题全量上下文请求组织（FULL_CONTEXT_ROLLOUT_PLAN §8.1 T02–T09/T11）：注入式
-// classify 驱动 all 分支的编排、映射、回退与记账。桩是辨识事实驱动——按收到的
-// state.sources 数组位置从脚本取答案、按 `${id}__${local}` 命名空间写回，映射
-// 任何一处错位（数组下标 / 来源 ID / 片段身份）都会让断言红。
-// ---------------------------------------------------------------------------
+// 共享请求的编排、映射与记账；按数组位置构造答案并写回来源命名空间。
+// 数组下标、来源 ID 或片段身份错位时应被断言发现。
 
 describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANUP_PLAN T02-T09/T11)', () => {
   const allConfig: FilterConfig = { ...offConfig, mode: 'on' };
 
-  /** 保守 keep 答案（四题 + 退役两题旧键，全部离删除阈值很远）。 */
+  /** 保守保留的四题答案，额外旧键用于兼容检查。 */
   const SIX_KEEP: Record<string, JevAnswer> = {
     has_original_reasoning: { kind: 'noul', probability: 0.9 },
     is_template_filler: { kind: 'noul', probability: 0.1 },
@@ -1629,8 +1604,7 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
 
   it('keeps gapped IDs and Brave order when an earlier source is locally dropped (T03)', async () => {
     const seen: AllSeen[] = [];
-    // s0 的片段是纯空白 → 步 3 空片段删除清空来源、来源出局（短无实词预筛已随
-    // filter-rules-13 退役，空片段删除保留），候选从 s1 开始——数组位置 0 ≠ ID 数字 1
+    // s0 的空白片段被删除，首个候选为 s1：数组位置 0 与来源 ID 数字 1 不同。
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -1690,10 +1664,7 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
   });
 
   it('ignores extra answers for questions that were never asked (T04)', async () => {
-    // 桩塞回未提问的答案：退役来源题旧键（stale / self_deprecated，filter-rules-11
-    // 退役）与退役片段时间题键（time_snip，filter-rules-12 退役），全部给高概率——
-    // 若被消费，来源级会触发删除、时间键会进 answers。映射里没有这些题，投影必须
-    // 一概不消费：一条用例守住两轮退役机制的负空间。
+    // 向桩加入高概率的未提问旧答案；显式映射必须忽略它们，不能触发删除或进入当前答案。
     const { result, stats } = await filterLlmContext(payload(), request, allConfig, {
       classify: allClassify(
         {
@@ -1799,7 +1770,7 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
         ['s1', 'failed', 'network'],
       ]
     );
-    // 失败来源全部按留（SAFE-01）
+    // 失败来源应保守保留。
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
       ['https://search.brave.com/', 'https://example.com/post']
@@ -1853,7 +1824,7 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     assert.equal(record?.input_tokens, 100);
     assert.equal(record?.http_attempts, 2);
     assert.equal(record?.usage_complete, true);
-    // 全量来源行不复制请求级 token/耗时——经 request_id 关联（计划 §6.1）
+    // 请求用量与耗时通过 request_id 关联，不能逐来源重复累计。
     for (const row of stats.jev?.per_source ?? []) {
       assert.equal(row.input_tokens, undefined);
       assert.equal(row.latency_ms, undefined);

@@ -1,11 +1,6 @@
 /**
- * 非文章页与来源级规则：步 4 feed / 黑名单、步 8 空来源 / 一句话来源、付费墙截断。
- *
- * 全部是无副作用纯函数：不读 `process.env`、不写文件、不改入参，同一输入重复
- * 调用返回深相等结果，可安全并发（RULES-04/concurrency）。坏 URL 一律按"判不出
- * → 不判"处理，方向保守（T-01-03-02）。
- *
- * 依据：notes/non-article-pages.md「处理」表、01-RESEARCH.md「规则 4」「规则 7」「规则 8」。
+ * 非文章规则：feed / 黑名单、空来源 / 一句话来源、付费墙截断。
+ * 纯函数，不修改输入；无法解析 URL 时保守不判。
  */
 
 import { normalizeLine, stripTrailingPunctuation } from './prefilter.js';
@@ -18,19 +13,9 @@ export const FEED_SEGMENT_NAMES: ReadonlySet<string> = new Set(['feed', 'feeds',
 export const FEED_PATH_SUFFIXES: readonly string[] = ['.xml', '.rss', '.atom'];
 
 /**
- * feed URL 判定，四条路按序：`feeds.` 前缀 → 路径末段后缀 → 路径末段恰为 feed 词 →
- * `feed` 查询参数。**只看路径末段，不对主机名和整条路径做任意 token 切分**——原实现
- * 按 `/[/.-_]/` 切 token，而字符类里 `.-_` 是区间（含数字、大写字母，独独不含连字符），
- * 连带 feed_parser / rss2json-guide / 主机名 rss.com 全被误判成 feed，`/blog-feed` 反而
- * 漏判（审查问题 5）；按包名/仓库名检索的开发者页面（npmjs、github）不得因此被删。
- * 解析失败一律不判（保守留）。
- * @returns 判定为 feed 时为真
- * @example isFeedUrl('https://feeds.example.com/rss.xml') === true
- * @example isFeedUrl('https://example.com/x?feed=rss2') === true
- * @example isFeedUrl('https://example.com/blog-feed') === false
- * @example isFeedUrl('https://github.com/rbren/rss-parser') === false
- * @example isFeedUrl('https://example.com/grassroots') === false
- * @example isFeedUrl('not a url') === false
+ * 依次检查 feeds. 主机前缀、路径末段后缀、末段 feed 词和 feed 查询参数。
+ * 不对主机名或整条路径任意分词，避免将 rss-parser 等项目名误判为 feed。
+ * 解析失败返回 false。
  */
 export function isFeedUrl(raw: string): boolean {
   let url: URL;
@@ -53,13 +38,8 @@ export function isFeedUrl(raw: string): boolean {
 }
 
 /**
- * 黑名单匹配：在**规范 host**（小写、去 `www.`，由调用方归一化）上比对——主机条目
- * 命中其自身与任意子域（结构性农场常按语言分子域，Assumption A13）。
- * 完整 URL 条目仅命中精确主机和路径；末尾斜杠限定栏目，其他路径精确匹配。
- * @returns 命中整站规则或指定页面/栏目时为真
- * @example isBlocklisted('farm.example', new Set(['farm.example'])) === true
- * @example isBlocklisted('sub.farm.example', new Set(['farm.example'])) === true
- * @example isBlocklisted('notfarm.example', new Set(['farm.example'])) === false
+ * 主机规则匹配规范 host 及其子域；URL 规则要求精确主机。
+ * URL 路径末尾斜杠表示栏目范围，否则精确匹配路径。
  */
 export function isBlocklisted(
   canonicalHost: string,
@@ -99,24 +79,14 @@ type SurvivingSnippet = {
   text: string;
 };
 
-/**
- * 空来源判定：幸存片段数为 0。来源在 `sources` 元数据里缺条目不影响本判定，
- * 全程不抛异常（RULES-05/empty）。
- * @returns 幸存片段为空数组时为真
- * @example isEmptySource([]) === true
- */
+/** 仅按幸存片段数判空，不依赖 sources 元数据。 */
 export function isEmptySource(survivingSnippets: readonly SurvivingSnippet[]): boolean {
   return survivingSnippets.length === 0;
 }
 
 /**
- * 一句话来源判定：恰好一条幸存片段、长度 < maxLength、且与 **query 实词集**（不含
- * intent——步 3 已用并集过滤过，用并集本条永不生效，Assumption A17）无交集。
- * `queryTerms` 为空集时恒为假（保守留）。
- * @returns 判定为"一句话来源"时为真（调用方按 `empty` 丢来源）
- * @example isOneLiner([{ text: 'the current version' }], contentTerms('foo bar')) === true
- * @example isOneLiner([{ text: 'foo explained' }], contentTerms('foo bar')) === false
- * @example isOneLiner([{ text: 'a' }, { text: 'b' }], contentTerms('foo')) === false
+ * 恰好一条片段、长度 < maxLength 且不含 query 实词时判为一句话来源。
+ * 本规则只使用 query；intent 的匹配由 Jev 评分处理。queryTerms 为空时保守保留。
  */
 export function isOneLiner(
   survivingSnippets: readonly SurvivingSnippet[],
@@ -137,14 +107,9 @@ export function isOneLiner(
 }
 
 /**
- * 付费墙截断：按行扫描，找**整行等于**某标记的行（normalizeLine 归一化、忽略大小写、
- * 末尾标点剥掉后比较）。裸 startsWith 会把以 "Premium content" 开头的正文行当标记，
- * 截掉其后全部内容（审查问题 3）；句中出现（例如一篇讨论付费墙的文章）同样不命中。
- * 只做片段级，不据此判整页。
- * @returns `truncated` 为真时 `text` 是截断后文本（可能为空串，调用方按 `paywall_empty` 删）
- * @example truncateAtPaywall('Para.\nSubscribe to continue reading\nx', markers) → { text: 'Para.', truncated: true }
- * @example truncateAtPaywall('Para.\nPremium content pays the bills.\nx', markers) → { text: 'Para.\nPremium content pays the bills.\nx', truncated: false }
- * @example truncateAtPaywall('No marker here', markers) → { text: 'No marker here', truncated: false }
+ * 按归一后的整行匹配付费墙标记，截断该行及其后内容。
+ * 不能用 startsWith，否则 “Premium content pays the bills.” 等正文会误触发。
+ * 只处理当前片段；截断后可为空，由调用方记为 paywall_empty。
  */
 export function truncateAtPaywall(
   text: string,

@@ -164,7 +164,7 @@ describe('buildStatusLine', () => {
   });
 
   it('attaches the status line for paywall truncation alone (A-05.1 / D-04)', () => {
-    // 只有付费墙截断、无来源丢弃与片段删除：独立验证 D-04 的一个触发条件
+    // 独立验证只有付费墙截断时也会生成状态行。
     const stats = statsOf('off', {
       sources: [{ url: 'https://a.example/', snippets: ['one', 'two'] }],
     });
@@ -309,8 +309,7 @@ describe('buildStatusLine', () => {
     dropSource(offStats, 0, 'empty');
     assert.equal(buildStatusLine(offStats), '[filter] dropped 1 of 3 sources: 1 empty');
 
-    // test：与 on 同口径（mode !== 'off'，04-CONTEXT）——缺行算未判定，
-    // 不假装完成 Jev 检查
+    // test/on 都把缺少来源判断的情况提示为未完成 Jev 检查。
     const testStats = statsOf('test');
     withJev(testStats, [{ src: 's0', status: 'answered' }]);
     assert.equal(buildStatusLine(testStats), '[filter] 2 sources not checked by Jev (kept)');
@@ -344,8 +343,7 @@ describe('buildStatusLine', () => {
       withJev(stats, []);
       return buildStatusLine(stats) ?? '';
     };
-    // test 状态行与 on 同规则（04-CONTEXT，旧 D-07"shadow 与 off 逐字相同"退役）：
-    // 同原因计数、同片段删除计数、同未判定段口径
+    // test/on 的删除计数与未完成 Jev 检查提示应一致。
     assert.equal(build('test'), build('on'));
     // off 绝不带未判定段——同载体下与 test/on 的差异恰在该段
     assert.notEqual(build('off'), build('test'));

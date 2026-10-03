@@ -1,20 +1,7 @@
 /**
- * 样本写入器单测（04-02；04-04 R1-R5 返修；v5 全量共享请求载荷）：记录形状
- * 与 pretty 格式、片段配对身份（URL 合并 / JSON-LD 拆分 / 页内重复 / 空源排除）、
- * 请求级实发载荷（完整载荷直接发送 + fetch 桩的深相等、已派发失败保留输入证据、
- * skipped / breaker_open 分状态）、no_key 如实记账、写入失败路径与目录
- * 自愈、相对 log_dir 的绝对路径、过滤规则版本区分能力、构建异常 fail-open。
- *
- * v5 语义：实发 state / questions / answers / 映射在 jev.requests[]（一次搜索至多
- * 一条共享请求），来源级 sent[] 经 request_id 引用；in_state / score_question_sent
- * 按题目映射对实发载荷逐位检查——没有实发载荷（注入面 answered 无 dispatch）就不
- * 冒充。退役字段（mode / context_mode / temporal_context / planned_estimates /
- * fallback_reason / ladder / sent_snippets）在 v5 样本中不存在，负向断言把关。
- *
- * 身份与过程映射断言跑真实管道（filterLlmContext + 合成 classify 全保留），
- * 不复述实现——统计投影与候选口径都是生产口径。实发断言用**生产客户端**
- * （createJevClassifier）+ fetch 桩截获请求体，样本 state 与截获 state 深相等
- * （审查 R1：不许只手动缩短 stats 的 snippet_scores 来证明映射）。
+ * 样本形状、身份对应与失败路径测试。
+ * 真实管道配合回答桩验证映射；生产客户端配合 fetch 桩核对实发请求与落盘载荷。
+ * 无派发证据时不得伪造输入；错误样本与保存失败应如实记录。
  */
 
 import assert from 'node:assert/strict';
@@ -59,7 +46,7 @@ import type {
 const INTENT = 'What Brave Search is and how it differs from other engines';
 const QUERY = 'brave browser';
 
-/** 手工配置（照 pipeline.test.ts 的 offConfig 先例）：test 模式 + 临时 log_dir + 非空黑名单。 */
+/** test 配置，使用临时日志目录与非空黑名单。 */
 const configOf = (logDir: string, concurrency = 12): FilterConfig => ({
   mode: 'test',
   overfetchFactor: 1,
@@ -227,10 +214,7 @@ const answeredText = (body: CapturedRequest): string => {
 describe('QUESTION_SET_ID', () => {
   it('is 12 lowercase hex chars derived from the normalized question bank (recipe pinned)', () => {
     assert.match(QUESTION_SET_ID, /^[0-9a-f]{12}$/);
-    // 食谱镜像：总指令、来源题、当前时间上下文 score 完整模板 (0,0) 及其 criteria
-    // 的规范化 JSON SHA-256 前 12 位——意外改配方（键序、包裹方式、漏掉新题干）
-    // 会在这里红。旧 score 模板与三档 legend 已随 all-only 清理退役、不再进哈希
-    //（清理前双模板哈希锚 e307a770fb87 见 git 历史）
+    // 独立核对哈希配方：总指令、来源题、完整评分模板 (0,0) 和 criteria。
     const expected = createHash('sha256')
       .update(
         JSON.stringify([
@@ -475,7 +459,7 @@ describe('createSampleWriter', () => {
     // pretty 格式：两空格缩进 + 末尾换行（整份重序列化逐字一致即证明）
     assert.equal(raw, `${JSON.stringify(sample, null, 2)}\n`);
 
-    // 记录形状：语义字段齐备、顺序稳定（04-04 R4：新增 filter_rules_version）
+    // 核对字段完整性与稳定顺序。
     assert.deepEqual(Object.keys(sample), [
       'format_version',
       'request_id',
@@ -515,9 +499,7 @@ describe('createSampleWriter', () => {
     // final_return 原样回放
     assert.deepEqual(sample.final_return, { payload, status_line: statusLine });
 
-    // config_snapshot：九项阈值 snake_case 投影 + jev 组（v5 起只含
-    // model/timeout_ms/concurrency——context_mode/temporal_context 已退役）+
-    // 黑名单 + mode
+    // 配置快照只包含生效配置，Jev 组为模型、超时和并发。
     const snapshot = sample.config_snapshot as Record<string, unknown>;
     assert.deepEqual(Object.keys(snapshot), [
       'thresholds',
@@ -551,7 +533,7 @@ describe('createSampleWriter', () => {
     assert.equal(snapshot.mode, 'test');
     assert.deepEqual(snapshot.blocklist, ['a.farm.example', 'farm.example']);
 
-    // 版本锚：题库哈希 + 包版本 + 过滤规则版本（04-04 R4：三者各司其职）
+    // 题库、包版本与规则版本分别核对。
     assert.match(String(sample.question_set_id), /^[0-9a-f]{12}$/);
     assert.equal(sample.filter_program_version, '2.1.4');
     assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
@@ -624,8 +606,7 @@ describe('createSampleWriter', () => {
       };
     };
 
-    // 过程映射（SC2）：删除项的原因与执行阶段可凭样本定位——s1 merged（步 2）、
-    // s3 empty（步 8）、s2 第二片段 dup（步 3），身份键齐备
+    // 核对删除项的来源、片段身份和原因：URL 归并、空来源和页内重复应能分别定位。
     const outcomeByIndex = new Map(sample.outcome.sources.map((row) => [row.index, row]));
     assert.equal(outcomeByIndex.get(1)?.verdict, 'drop');
     assert.equal(outcomeByIndex.get(1)?.reason, 'merged');
@@ -688,10 +669,8 @@ describe('createSampleWriter', () => {
   });
 
   it('records the real dispatched payload deep-equal to the intercepted request when the full payload is sent (review R1)', async () => {
-    // 完整载荷直接发送（32K/64K 预检与阶梯已退役）：第二片段是 32000 个 CJK 字符
-    // （超过旧 32K 检测范围）→ 不删正文、不删题、不拆请求，一次共享请求原样发出；
-    // 样本请求级载荷必须记录实发 state 且与截获请求深相等——本地重建口径（v1 的
-    // 病灶）或任何输入缩减在这里当场红。
+    // 使用长 CJK 片段核对完整载荷直接发送；样本必须与 fetch 截获请求深相等。
+    // 删除正文、题目或拆分请求都应导致断言失败。
     const logDir = join(root, 'full-send', 'logs');
     const config = configOf(logDir);
     const giant = '資料'.repeat(16000);
@@ -790,7 +769,7 @@ describe('createSampleWriter', () => {
       assert.equal(Object.hasOwn(row, 'ladder'), false);
       assert.equal(Object.hasOwn(row, 'sent_snippets'), false);
     }
-    // R1 核心证据：请求级记录的实发 state 与截获请求深相等（完整实发，两段都在）
+    // 请求记录必须与 fetch 截获的完整 state 相等。
     assert.equal(sample.jev.requests.length, 1);
     const request = sample.jev.requests[0]!;
     assert.equal(request.dispatched, true);
@@ -1471,8 +1450,7 @@ describe('createSampleWriter', () => {
   });
 
   it('fails open without throwing when record construction itself explodes (boundary)', () => {
-    // 辅助边界（审查尾注）：记录构建/序列化在文件写入 try 内——不可序列化的循环
-    // 引用不再向外抛，与写入失败同口径（stderr 一行 + status failed）。
+    // 构建或序列化异常也应返回 failed 并告警，不能越过写入器错误处理。
     const logDir = join(root, 'circular', 'logs');
     const config = configOf(logDir);
     const writer = createSampleWriter(config);
@@ -1512,9 +1490,7 @@ describe('createSampleWriter', () => {
   });
 
   it('resolves a relative log_dir to an absolute allocated path that matches the real file (review R5)', () => {
-    // 相对 log_dir（配置允许的合法输入）：allocatePath 必须按写文件的解析基准
-    // （进程工作目录）给出绝对路径——v1 用 join 返回相对路径（审查复现
-    // isAbsolute=false），审核 AI 拿着它无法跨工作目录定位文件。
+    // 相对日志目录的绝对路径须按进程工作目录解析，与实际写文件使用相同基准。
     const relativeDir = join('test-relative-log-dir', 'sample-writer');
     const config = configOf(relativeDir);
     const writer = createSampleWriter(config);

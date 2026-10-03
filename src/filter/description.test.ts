@@ -19,12 +19,12 @@ describe('resolveToolDescription', () => {
 
   after(() => {
     console.error = originalConsoleError;
-    // 测后删临时目录（审查 R5：不清理会在本机 Temp 里无限积累）
+    // 测试结束清理临时目录。
     rmSync(dir, { recursive: true, force: true });
   });
 
   it('returns the fallback verbatim when no path is configured', () => {
-    // 路径来源自 02-FIX 批 B 起是配置对象（不再读环境变量）
+    // 覆盖文件路径来自配置对象。
     assert.equal(resolveToolDescription(fallback, undefined), fallback);
     assert.equal(resolveToolDescription(fallback, ''), fallback);
     assert.equal(resolveToolDescription(fallback, '   '), fallback);

@@ -1,22 +1,7 @@
 /**
- * 过滤层配置解析：单个 JSON 配置文件 → FilterConfig（EMBED-05）。
- *
- * 环境变量只剩两类：Jev key（`TYPESAFE_API_KEY`，见 jev/client.ts）
- * 与指向配置文件的 `JEV_FILTER_CONFIG_FILE`。其余设置全部进文件，**启动时读一次**
- * （适配行持惰性单例）；改配置要重启 MCP。
- *
- * 两层结构（用户已定决策 4 的落地）：
- * - `parseFilterConfigObject(raw, warn?)`：纯函数，入参是已解析的 JSON 值，不碰文件
- *   ——测试主力。坏值逐项回落默认并各报 stderr 一行（`config: ignoring …`）。
- * - `loadFilterConfig(env)`：读 `JEV_FILTER_CONFIG_FILE` 指向的文件与它指定的黑名单
- *   文件（与内置黑名单求并集），再调前者。文件读不到 / JSON 坏 / 顶层不是对象 →
- *   stderr 一行、整体回落默认。
- *
- * 坏值一律回落默认值而不是抛错：过滤层永远不能让服务器启动失败（EMBED-02）。
- * 只能用 console.error——stdout 是 stdio 传输的协议通道（description.ts 先例）。
- *
- * 依据：PLAN.md §5「配置载体」、notes/test-mode-logging.md、02-RESEARCH.md
- * 「环境变量清单」、02-FIX-PLAN 批 B。
+ * 单个 JSON 文件的过滤配置解析与加载。
+ * 纯解析入口逐项校验，加载入口读取配置及外部黑名单；坏值回落默认并向 stderr 告警。
+ * 宿主持有初始化后的配置，改文件需重启对应 MCP；stdout 留给协议通信。
  */
 
 import { readFileSync } from 'node:fs';
@@ -34,17 +19,13 @@ import type { FilterConfig, FilterMode, JevThresholds } from './types.js';
 /** 指向配置文件的唯一配置类环境变量；未设 → 全部默认（mode off）。 */
 export const JEV_CONFIG_FILE_ENV = 'JEV_FILTER_CONFIG_FILE';
 
-/**
- * 合法模式三值集合（04-CONTEXT 模式与兼容节）；旧配置值 'shadow' 作 test 的别名
- * 映射为 'test' 并发一次迁移诊断，其余集合外的值（含未设）一律回落 'off'。
- * 别名绝不能落成 off——别名回落会静默改变过滤强度（T-04-01-1）。
- */
+/** 模式归一为 off/test/on；旧 shadow 映射为 test 并提示迁移，不能静默退为 off。 */
 const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'test', 'on']);
 
 /** 旧别名到新值的映射（配置键 mode 不变；'shadow' 语义重定义为实际应用裁决的 test）。 */
 const LEGACY_MODE_ALIASES: ReadonlyMap<string, FilterMode> = new Map([['shadow', 'test']]);
 
-/** 旧别名 shadow 的迁移诊断行（04-CONTEXT：stderr 一次诊断 + 交接说明要求显式改配置）。 */
+/** 识别旧 shadow 别名时的迁移提示。 */
 const SHADOW_ALIAS_MIGRATION =
   `[jev-filter] config: mode 'shadow' is a legacy alias for 'test'; ` +
   `update the config file to mode 'test'.`;
@@ -59,13 +40,10 @@ export const JEV_TIMEOUT_MAX_MS = 60000;
 export const JEV_CONCURRENCY_MIN = 1;
 export const JEV_CONCURRENCY_MAX = 64;
 
-/**
- * `snippet_min` 的上限：score 的真实取值上限是 2.0，配成 > 2 会删光全部片段。
- * （02-06 的旧口径 [0,3] 是错的方向——02-FIX 批 B 收窄。）
- */
+/** score 上限为 2；snippet_min 超过此值会删光有效评分片段。 */
 export const SNIPPET_MIN_MAX = 2;
 
-/** JSONL 日志目录默认值（Phase 3 消费；本批只解析不使用）。`~` 展开为本机 home。 */
+/** 默认 JSONL 目录，~ 展开为本机主目录。 */
 export const DEFAULT_LOG_DIR = '~/.brave-jev/logs';
 
 /** 坏值告警出口；缺省写 stderr（stdout 是 stdio 协议通道）。 */
@@ -99,11 +77,7 @@ const inRange = (value: unknown, min: number, max: number, integer = false): val
   value <= max &&
   (!integer || Number.isInteger(value));
 
-/**
- * 配置文件里的非空字符串路径（trim + 开头 `~` 展开为本机 home）；非字符串或空白 →
- * undefined。三个路径键（`blocklist_file` / `tool_description_file` / `log_dir`）
- * 共用同一展开口径：只认单独 `~` 或 `~/`、`~\` 开头，`~foo` 原样保留（审查 R8）。
- */
+/** 路径值 trim 后非空才接受；只展开 ~、~/ 和 ~\ 前缀，~foo 原样保留。 */
 const optionalPath = (file: Record<string, unknown>, key: string): string | undefined => {
   const value = file[key];
   if (typeof value !== 'string') return undefined;
@@ -122,14 +96,9 @@ const expandHome = (path: string): string => {
 const configFileRecord = (raw: unknown): Record<string, unknown> => (isRecord(raw) ? raw : {});
 
 /**
- * 九项阈值在配置文件里的键 → JevThresholds 键与合法范围（键名用 snake_case，
- * 与 probe 的 THRESHOLDS 键名一致；未知键忽略为 fail-open 方向）。
- * 范围语义：四个概率门槛（三道丢弃 + reasoning 保护）与 cjk_bonus、cjk_share 取
- * [0,1] 的有限数；snippet_min 取 [0,2]（score 上限 2.0）；min_facts 与 novelty_min
- * 取 >= 1 的**整数**。max 为 Infinity 表示只有下限。
- *
- * logging.ts 的日志信封复用本表投影阈值快照（`key` 即日志键名）——绝不手写
- * 9 个键名，测试模式改阈值后旧记录仍可复现裁决（D-11）。
+ * 配置键、内部阈值键与合法范围的统一映射，日志和样本快照复用此表。
+ * 概率与 CJK 参数在 [0,1]，snippet_min 在 [0,2]，事实数与新颖度下限为正整数。
+ * max 为 Infinity 表示只有下限。
  */
 export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly key: string;
@@ -156,25 +125,8 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
 ]);
 
 /**
- * 解析配置对象（纯函数，不碰文件、不读 process.env）：缺项取默认、坏值逐项回落
- * 默认并报一行 stderr、未知键忽略。嵌套组（`jev` / `thresholds`）不是对象时整组
- * 回落默认并报一行。
- *
- * 字符串形式的数字（如 `"15000"`）算坏值——JSON 里写数字就是数字。
- *
- * @param raw 已解析的 JSON 值（`JSON.parse` 的输出，或测试直接构造的对象）
- * @param warn 告警出口；缺省写 stderr
- * @returns 每项都合法的 FilterConfig（mode 缺省 off、黑名单为内置表、logDir 已展开 `~`）
- * @example parseFilterConfigObject({}).mode === 'off'
- * @example parseFilterConfigObject({ mode: ' ON ' }).mode === 'on'
- * @example parseFilterConfigObject({ mode: 'shadow' }).mode === 'test'（旧别名，另发一次迁移诊断）
- * @example parseFilterConfigObject({ mode: 'banana' }).mode === 'off'
- * @example parseFilterConfigObject({ overfetch_factor: 0.5 }).overfetchFactor === 1
- * @example parseFilterConfigObject({ jev: 5 }).jev.model === 'jev-1.13.0'
- * @example parseFilterConfigObject({ thresholds: { timeout_ms: 1 } }).thresholds deepEqual DEFAULT_THRESHOLDS
- * @example parseFilterConfigObject({ jev: { timeout_ms: 15000.5 } }).jev.timeoutMs === 15000
- * @example parseFilterConfigObject({ jev: { concurrency: 65 } }).jev.concurrency === 12
- * @example parseFilterConfigObject({ thresholds: { snippet_min: 2.01 } }).thresholds.snippetMin === 1.0
+ * 解析已读取的配置对象，不读文件或环境。缺项取默认，坏值逐项回落并告警，未知键忽略。
+ * 嵌套组形状错误时整组回落；字符串数字不当作数值。warn 可注入，默认写 stderr。
  */
 export function parseFilterConfigObject(
   raw: unknown,
@@ -185,9 +137,7 @@ export function parseFilterConfigObject(
   }
   const file = configFileRecord(raw);
 
-  // mode：字符串、trim、不分大小写；三值 off/test/on；旧别名 'shadow' → 'test'
-  // 并发一次迁移诊断（每次 parseFilterConfigObject 调用至多一次——配置启动读一次，
-  // 进程内天然一次）；其余集合外一律 off
+  // 归一模式，shadow 每次解析至多提示一次迁移；宿主初始化后复用配置。
   let mode: FilterMode = 'off';
   if (Object.hasOwn(file, 'mode')) {
     const value = file.mode;
@@ -239,9 +189,7 @@ export function parseFilterConfigObject(
     else warn(ignored('jev.concurrency', value, DEFAULT_JEV_CONCURRENCY));
   }
 
-  // 退役开关（jev.context_mode / jev.temporal_context）不再解析：遗留 JSON 里写着
-  // 这两个键时按已有未知键规则忽略——不切换请求组织、不改评分题模板、不告警
-  // （all-only 清理，ALL_ONLY_FILTER_CLEANUP_PLAN §4 任务 B）。
+  // 遗留 context_mode / temporal_context 按未知键忽略，不影响请求或题目。
 
   // thresholds 组：逐键校验，坏值只回落该项
   let thresholdRecord: Record<string, unknown> = {};
@@ -295,17 +243,8 @@ export function parseFilterConfigObject(
 }
 
 /**
- * 读取配置文件并返回完整配置（EMBED-05）：`JEV_FILTER_CONFIG_FILE` 未设 → 全默认；
- * 文件读不到 / JSON 坏 / 顶层不是对象 → stderr 一行 + 全默认（fail-open）。
- * 配置里的 `blocklist_file` 指向的黑名单文件在此读取，与内置黑名单求并集；读不到
- * 时仅用内置黑名单 + stderr 一行（fail-open，description.ts 先例）。
- *
- * 适配行持惰性单例调用本函数——启动时读一次，之后复用；改配置要重启 MCP。
- *
- * @param env 环境变量映射（传 `process.env` 或测试用的显式对象）
- * @returns 完整 FilterConfig
- * @example loadFilterConfig({}).mode === 'off'
- * @example loadFilterConfig({ JEV_FILTER_CONFIG_FILE: '/no/such/file' }) → 默认 + stderr 一行
+ * 加载指定配置文件；未指定用默认值，读取或解析失败时告警并回落。
+ * 外部黑名单与内置表合并，读取失败时保留内置表。
  */
 export function loadFilterConfig(env: Record<string, string | undefined>): FilterConfig {
   const filePath = env[JEV_CONFIG_FILE_ENV]?.trim();
@@ -313,12 +252,10 @@ export function loadFilterConfig(env: Record<string, string | undefined>): Filte
   let raw: unknown;
   if (filePath) {
     try {
-      // 去掉开头的 UTF-8 BOM：PowerShell 5.1 的 `-Encoding UTF8` 写出的文件带 BOM，
-      // 不去掉整份配置会被 JSON.parse 作废（审查 R4）
+      // 容忍编辑器写入的 UTF-8 BOM，避免合法 JSON 因编码标记失效。
       raw = JSON.parse(readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
       if (raw === null) {
-        // JSON 文本 `null` 解析成功但顶层不是对象——与数组/标量同待遇报一行，
-        // 不能静默回落（审查 R3）；置 undefined 走"无配置"路径避免二次告警
+        // 顶层 null 也要告警；随后按未配置处理，避免重复告警。
         console.error('[jev-filter] config: top level is not a JSON object; using all defaults.');
         raw = undefined;
       }

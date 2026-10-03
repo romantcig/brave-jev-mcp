@@ -1,12 +1,8 @@
 /**
- * GitHub 局部清洗：仓库导航、PR 分支复制按钮及 Uh oh!、Release 成对比较提示，
- * 以及仓库首页独立 Topics 标签卡片和已有简介的完整包含回声。
- * search_block / reactions_unavailable 已退役；Conversation 保留。
- *
- * 在 Jev 前处理，幸存正文与行尾逐字保留；代码、引用及懒续行受保护。
- * 全部判定基于输入快照。删除产生新匹配时整轮保守放弃，保证幂等，不递归扩删。
- * earlierSnippets 仅由宿主提供同来源、当前本地步骤已保留的前序片段；
- * 简介只压缩空白后做完整包含，不降低全局 shingle 门槛，不推断语义相似。
+ * 清理 GitHub 支持页面中的界面文字，具体页面和动作由本模块判定。
+ * 保留正文与行尾，保护代码、引用及懒续行；全部规则基于同一输入快照。
+ * 删除后若产生新的命中则整轮放弃，避免递归扩删。
+ * earlierSnippets 只含同来源当前本地步骤已保留的前序文本；简介仅做完整包含比较。
  */
 
 import { codeRegionFlags } from './prefilter.js';
@@ -23,20 +19,15 @@ const TAG_COMPARE_PROMPT = 'Choose a tag to compare';
 const TAG_COMPARE_EMPTY = 'No results found';
 
 /**
- * 界面文字使用的行归一化：只剥 CommonMark ATX 标题标记（最多 3 空格缩进、
- * 1–6 个 `#` 后必须跟空格/制表符——`#tag` 不是标题）再 trim。**不复用**
- * `normalizeLine`：它把 `*` / `-` 列表符也当标记剥掉，会把列表行误纳入精确
- * 等于的命中面，超出计划"去除 Markdown 标题标记"的授权范围。
+ * 只剥 CommonMark ATX 标题标记再 trim：最多三空格、1–6 个 # 后须有空白。
+ * 不复用 normalizeLine，避免将列表符也剥掉而误判为独立界面行。
  */
 const stripAtxHeading = (line: string): string => line.replace(/^ {0,3}#{1,6}[ \t]+/, '').trim();
 
 /**
- * 引用区域标记（引用行 + 引用段落的懒续行）：引用行（`>` 起头）之后的非空行即使
- * 不带 `>` 也可能仍是同一段引用的懒续行（CommonMark lazy continuation）——审查 R1
- * 引用内的界面文字不得当作页面控件。空行结束引用段落；ATX 标题开始新块；
- * 围栏/缩进代码行（`codeFlags`）不改变开放状态，其自身已由代码保护覆盖。列表项、
- * HTML 块等其余可能打断段落的形态按续行保守保护——多留可接受，不追求完整解析。
- * @returns 与行数组等长的标记：true = 引用行或引用续行，不参与删除判定
+ * 保护引用行及其非空懒续行；空行或 ATX 标题结束引用段落。
+ * 代码行自行受保护，不改变引用开放状态。列表项、HTML 等可能的段落边界
+ * 按续行保守保护，不尝试完整解析 Markdown。
  */
 const referenceGuardFlags = (
   contents: readonly string[],
@@ -83,12 +74,7 @@ type GitHubCleanPage = {
   repo: string;
 };
 
-/**
- * GitHub 全局命名空间一级路径：`/topics/redlib` 这类页面与 `/owner/repo` 同为两段
- * 形态，仅凭段数无法区分，按保留名排除（GitHub 保留用户名不可注册，仓库不会误
- * 伤——黑名单漏项的最坏后果只是对全局页应用仓库规则，局部规则在那些页面没有
- * 独立界面行证据，实际命中≈0）。
- */
+/** 排除与 owner/repo 同为两段路径的 GitHub 全局命名空间，避免误认仓库首页。 */
 const GITHUB_GLOBAL_NAMESPACES: readonly string[] = [
   'topics',
   'search',
@@ -146,11 +132,8 @@ const parseGitHubPage = (url: string): GitHubCleanPage | null => {
 };
 
 /**
- * 判断 head（剥掉按钮后缀后的行内容）里是否含当前仓库限定的分支引用
- * `owner/repo:分支`。大小写不敏感比对（Brave 返回的 URL 与页面渲染文本大小写
- * 可能漂移）；引用的 owner 前一个字符不得是名称字符——`xowner/repo:`、
- * `sub/owner/repo:` 这类其它路径或仓库名的子串不命中；冒号后必须有非空白内容
- * 作分支名——`owner/repo:` 后直接接按钮后缀（残缺引用）不命中（审查非阻塞补充）。
+ * 仅匹配当前 owner/repo:分支，忽略大小写。
+ * 前一字符不能属于名称，冒号后必须有非空分支，避免子串和残缺引用误匹配。
  */
 const containsRepoBranchRef = (head: string, owner: string, repo: string): boolean => {
   const needle = `${owner}/${repo}:`.toLowerCase();
@@ -318,14 +301,8 @@ const applyCleanup = (plan: ReturnType<typeof judgeCleanup>): string => {
 };
 
 /**
- * GitHub 平台界面文字清洗主入口：输入片段原文与来源 URL，输出清洗后的文本与
- * 逐动作清单（每条动作含规则名与 1 起行号——行号相对进入本清洗时的片段文本，
- * 即步 3 付费墙截断之后；GitHub 页面与付费墙标记实际不重叠，动作不记正文，
- * 内容凭行号回 pre_filter 对齐）。非 GitHub、不支持页面或未命中时原样返回，
- * `actions` 为空表。
- *
- * 幂等保证（见文件头）：首判无命中原样返回；有命中则应用后在新文本上重判，
- * 重判仍有命中说明本轮删除制造了原本不成立的接壤块——整轮保守放弃、原样返回。
+ * 返回清洗文本与动作清单，行号从进入清洗时的片段首行按 1 起算。
+ * 不支持或未命中时原样返回；应用后重判仍有命中时整轮放弃，保证幂等。
  */
 export function cleanGitHubBoilerplate(
   text: string,

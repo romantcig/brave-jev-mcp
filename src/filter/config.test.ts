@@ -1,9 +1,4 @@
-/**
- * 配置解析单测（02-FIX 批 B）：单一 JSON 配置文件 → FilterConfig。
- * - `parseFilterConfigObject` 是纯函数主力：逐键合法值、边界值、坏值回落与 stderr 行。
- * - `loadFilterConfig` 覆盖文件读取、黑名单文件并集与 fail-open。
- * 真实临时目录 + 真实文件，不 mock fs；stderr 捕获后必须恢复。
- */
+/** 配置解析、默认回落与文件加载测试；使用临时真实文件，捕获 stderr 后恢复。 */
 
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
@@ -156,8 +151,7 @@ describe('parseFilterConfigObject: mode', () => {
   });
 
   it("maps the legacy alias 'shadow' to 'test' with exactly one migration warning", () => {
-    // 04-CONTEXT 模式与兼容节：旧 shadow 是 test 的别名（实际应用 Jev 裁决），
-    // 解析到时向 warn 出口发一行迁移诊断；别名绝不能落成 off（T-04-01-1）
+    // shadow 应映射到 test 并提示迁移，不能静默降为 off。
     const lines: string[] = [];
     const config = parseFilterConfigObject({ mode: 'shadow' }, (line) => lines.push(line));
     assert.equal(config.mode, 'test');
@@ -272,9 +266,7 @@ describe('parseFilterConfigObject: jev group', () => {
   });
 
   it('ignores the retired context_mode / temporal_context keys like any unknown key', () => {
-    // all-only 清理（ALL_ONLY_FILTER_CLEANUP_PLAN §4 任务 B）：遗留 JSON 里的两个
-    // 退役键按未知键规则忽略——single / all / false / true 都不能切换请求组织或
-    // 评分题模板，也不发告警（与 thresholds 内未知键同口径）
+    // 遗留请求开关按未知键忽略，各种旧取值均不改变配置，也不告警。
     const retired: Record<string, unknown>[] = [
       { context_mode: 'single' },
       { context_mode: 'all' },
@@ -622,8 +614,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
   });
 
   it('warns instead of falling back silently when the file content is JSON null (R3)', () => {
-    // JSON 文本 `null` 解析成功但顶层不是对象——必须与数组/标量同待遇，报同一行，
-    // 不能静默回落（审查 R3：静默失效违背 EMBED-05"坏值要看得见"）
+    // 顶层 null 与其他非对象值一样告警，不能静默回落。
     const file = writeFixture(tmpRoot, 'null.json', null);
     let config: FilterConfig | undefined;
     const stderr = captureStderr(() => {
@@ -635,8 +626,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
   });
 
   it('tolerates a UTF-8 BOM instead of discarding the whole file (R4)', () => {
-    // PowerShell 5.1 的 `-Encoding UTF8` 写出的文件带 BOM；JSON.parse 会报错，
-    // 整份配置回落 off——去 BOM 后照常解析（审查 R4）
+    // 带 BOM 的合法配置应正常解析，避免意外回落 off。
     const file = join(tmpRoot, 'bom.json');
     writeFileSync(file, `\uFEFF${JSON.stringify({ mode: 'on' })}`, 'utf8');
     let config: FilterConfig | undefined;

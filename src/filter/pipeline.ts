@@ -1,21 +1,7 @@
 /**
- * 十步管道的编排骨架与输出重建。
- *
- * 模式：先把 Brave 响应摊成"工作表"（每源每片段带原始索引与裁决），各步只在表上
- * 翻 `kept` / `verdict` / `reason` 或替换文本，**不 sort、不 filter 出新数组**，最后
- * 一次性重建输出——幸存来源与片段因此天然保持 Brave 原序（RULES-08）。
- *
- * 01-01 定型位置与类型，01-02 填了步 1、2，01-03 填了步 3（含付费墙截断）、步 4 与
- * 步 8，01-04 填了步 9（裁回预算，实现在 budget.ts）；02-02 把 `filterLlmContext`
- * 改为 async 并接线步 5（全候选并发派发 + 逐源记账），`runJevStage` 是私有编排件，
- * 不进 barrel。02-03 填了步 6/7 前半（来源级裁决与片段 score），02-04 填了步 7 后半
- * （指纹新颖度与跨源逐字去重，实现在 novelty.ts）；步 10（状态行）在 Phase 3 落地。
- * 04-01 起单链化：test 与 on 共用同一条 Jev 过滤链（runJevStage + runOnChain，裁决
- * 真实生效），off 短路走本地链；旧影子双链（would 层、shadow_diff / shadow_evidence）
- * 退役，历史字段仅为读旧记录保留。
- *
- * 依据：PLAN.md §3.2、notes/local-rules-design.md、04-CONTEXT.md「模式与兼容」、
- * 测试模式与搜索样本记录实施计划.md 第二节。
+ * 十步过滤管道与输出重建。
+ * 各步在保留原始身份的工作表上标记裁决或替换文本，最后按表序重建输出。
+ * test 与 on 共用实际 Jev 裁决链；off 使用本地链，幸存来源与片段保持 Brave 原序。
  */
 
 import { parseFilterConfigObject } from './config.js';
@@ -73,7 +59,7 @@ import type {
   SourceStats,
 } from './types.js';
 
-/** `age` 元素的 ISO 日期判定：前缀匹配，不数字符（EMBED-01/encoding）。 */
+/** 输出元数据的日期前缀匹配，不用于 Jev 页面日期的有效性判断。 */
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
 
 /** 工作表里的一条片段。`chars` 不单独存，投影到统计表时按当前文本算。 */
@@ -177,15 +163,10 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
 const PAYWALL_MARKERS: readonly string[] = [...PAYWALL_MARKERS_EN, ...PAYWALL_MARKERS_ZH];
 
 /**
- * 步 3 片段预筛（含付费墙截断）：顺序固定为付费墙截断 → 样板行剥离（GitHub 界面
- * 清洗 → 前缀行 → 标题重复行 → 引用块，GitHub 子步仅 test/on 生效、off 不应用——
- * 清洗属 Jev 过滤链的文本准备，见 stripBoilerplateLines 与 githubCleanup.ts）→
- * 页内逐字重复（RULES-03/ordering）。被删片段留在原位只翻 `kept`；
- * 重复判定按原序只与同来源内**已幸存**片段比，保留先出现者。`snippets_prefiltered`
- * 记空片段（nav）与 boilerplate 两类之和，`dup_removed` 单独记，`paywall_truncated`
- * 只记截断后保留的，`github_cleanup_actions` 记 GitHub 清洗动作数（清洗后为空的片段
- * Topics 整片删走 boilerplate 语义，About 回声走 dup）。「短且无实词」预筛已随 filter-rules-13 退役——第二十
- * 四轮消融实证该条件误伤真实内容，片段级质量判断交 Jev 评分。
+ * 步 3 固定顺序：付费墙截断 → 样板行剥离 → 页内逐字去重。
+ * 样板剥离内部依次为 GitHub 清洗、前缀行、标题重复行、引用块；GitHub 子步仅 test/on 应用。
+ * 去重只与同来源内已保留片段比较，被删片段仍留表供统计。
+ * 空片段和样板删除合计入 snippets_prefiltered，重复删除单独计数。
  */
 const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub: boolean): void => {
   for (const source of table) {
@@ -296,17 +277,10 @@ const dropNonArticles = (table: WorkSource[], config: FilterConfig, stats: Filte
 };
 
 /**
- * 步 8：空来源与一句话来源，接在片段级之后。片段删光（或本就没有片段、
- * `sources` 元数据缺条目）的来源整体丢弃；只剩一条短片段的来源按**只看 query
- * 实词**判定，不含则丢、含则留（intent 不参与本步——步 3 的实词预筛已随
- * filter-rules-13 退役，片段级意图匹配由 Jev 评分承担）。
- * 被丢来源只翻 `verdict`，不从工作表数组里移除（RULES-05/ordering）。
- *
- * 归因（A2 口径，notes/dedup-and-rewrite-policy.md）：来源被删光且 `jevSideDeletions`
- * 显示其删除含新颖度或跨源 dup → reason 'rewrite'；仅 score 或本地原因 → 维持
- * 'empty'。不传标记时行为与 Phase 1 完全一致（全记 'empty'）。'rewrite' 丢弃
- * 不计进 `empty_dropped`（该计数只收 reason 'empty'）——rewrite 从
- * `stats.sources[].reason` 按原因计数（Phase 3 状态行共同来源）。
+ * 步 8 删除空来源和不含 query 实词的一句话来源；intent 不参与本步。
+ * 删除只更新工作表标记，不移除行。
+ * 若来源删空且包含新颖度或跨源去重删除，归因为 rewrite；否则为 empty。
+ * empty_dropped 只统计 empty，rewrite 由来源裁决表计数。
  */
 const dropEmptySources = (
   table: WorkSource[],
@@ -331,10 +305,8 @@ const dropEmptySources = (
 };
 
 /**
- * 本地规则层（步 1–4）的固定顺序编排：JSON-LD 分流 → URL 规范化归并 → 片段预筛
- * （付费墙截断 → 样板剥离 → 页内逐字重复）→ feed URL 与结构性黑名单。
- * 从 `filterLlmContext` 抽出，供重录 dump 的 `collectJevCandidates` 复用同一候选口径
- * （02-01）。
+ * 本地步骤 1–4：JSON-LD 分流 → URL 归并 → 片段预筛 → feed 与结构性黑名单。
+ * 候选导出与实际过滤共用此顺序。
  */
 const runLocalRules = (table: WorkSource[], stats: FilterStats, config: FilterConfig): void => {
   splitJsonLd(table, stats); // 步 1：JSON-LD 分流
@@ -346,15 +318,8 @@ const runLocalRules = (table: WorkSource[], stats: FilterStats, config: FilterCo
 };
 
 /**
- * 精简 `sources` 表里一条元数据：只留 `title` / `hostname` / `age`。
- * - 非对象入参返回 `{}`；`title` / `hostname` 仅在为 string 时写入。
- * - `age` 只取首个匹配 `^\d{4}-\d{2}-\d{2}` 的元素写成单元素数组；找不到就省略 `age` 键，
- *   绝不产出 `age: [undefined]`。
- * - 写时复制：每次返回新对象，不修改传入的元数据。
- * @returns 精简后的新对象
- * @example trimSourceMeta({ title: 'T', hostname: 'h', age: ['Wed', '2026-09-16', '1 week ago'] }) → { title: 'T', hostname: 'h', age: ['2026-09-16'] }
- * @example trimSourceMeta({ title: 'T', age: [] }) → { title: 'T' }
- * @example trimSourceMeta(null) → {}
+ * 精简元数据，只保留字符串 title / hostname 和首个日期前缀匹配的 age。
+ * 无匹配日期时省略 age，非对象输入返回空对象；不修改入参。
  */
 export function trimSourceMeta(meta: unknown): Record<string, unknown> {
   if (!isRecord(meta)) return {};
@@ -457,8 +422,7 @@ const toStatsRequest = (
     ...(params.maximum_number_of_tokens_per_url !== undefined
       ? { per_url_tokens: params.maximum_number_of_tokens_per_url }
       : {}),
-    // D-10：请求带 freshness / context_threshold_mode 才记键——条件 spread 省略
-    // undefined（deepEqual 把显式 undefined 键判不等），照 per_url_tokens 先例
+    // 可选请求字段仅在有值时记录，省略与显式 undefined 在对象比较中不同。
     ...(params.freshness !== undefined ? { freshness: params.freshness } : {}),
     ...(params.context_threshold_mode !== undefined
       ? { context_threshold_mode: params.context_threshold_mode }
@@ -468,25 +432,10 @@ const toStatsRequest = (
 };
 
 /**
- * 过滤层入口：Brave 响应 + 请求 → 过滤后的响应 + 统计对象。
- *
- * 自 02-02 起异步（步 5 要 `await` 注入的 classify），仍不发任何网络请求——
- * 网络只发生在注入的 classify 实现里。`config` 省略时取全默认（不读文件、不看
- * 环境——配置载体是单一 JSON 文件，读一次的责任在适配行）。
- * 模式分叉（04-01 单链语义）：off 整段跳过 Jev（`stats.jev` 保持 null）；test 与
- * on 注入 classify 后**共用同一条过滤链**——runJevStage 共享请求派发（步 5）接
- * runOnChain（步 6 → 步 7 → 步 8），裁决真实生效，不维护两套实现；未注入 classify
- * 时记 no_key 零值对象且零请求（SAFE-01 语义前置）。调用方不 `await` 会在 tsc 处
- * 报类型错——tsx 不查类型，`npm run build` 是唯一漏改闸（Pitfall 1）。
- *
- * @param data Brave LLM Context 响应（已过上游 zod 校验）
- * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带；
- *   `retrievalTime`（可选）是宿主发起 Brave 请求前捕获的检索时间——归一后进入
- *   Jev state（`retrieval_time`），同一搜索的请求与重试共用该值；未提供或非法时
- *   省略字段，绝不读取系统时间冒充
- * @param config 过滤配置；省略时为全默认配置（mode off）
- * @param deps Phase 2 注入点：`classify` 缺省时 on/test 记 no_key
- * @returns `{ result, stats }` 的 Promise；`result` 与输入同形，`stats` 是本次调用新建的对象
+ * 过滤入口：接收已通过宿主校验的 Brave 响应，返回过滤结果、统计与派发记录。
+ * 网络只发生在注入的 classify 中；缺省配置为 off，本函数不读配置文件或环境。
+ * test/on 共用 Jev 链，缺少 classify 时记 no_key 并使用本地链。
+ * request.retrievalTime 来自宿主发起 Brave 请求前的取时，非法或缺失时省略，不补当前时间。
  */
 export async function filterLlmContext(
   data: BraveLlmContextResponse,
@@ -498,9 +447,9 @@ export async function filterLlmContext(
   const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
   // 步 8 只看 query 实词（intent 不参与本步判定）
   const queryTerms = contentTerms(request.params.query);
-  // 实发派发记录（04-04 R1）：Jev 分支由步 5 填充，off / no_key 保持空表
+  // 步 5 填充派发证据，off / no_key 保持空表。
   let dispatches: JevDispatchRecord[] = [];
-  // 请求级记录（四题全量上下文，计划 §6.1）：每逻辑请求一条，off / no_key 空表
+  // 请求级记录每次逻辑调用一条，off / no_key 保持空表。
   let requests: JevRequestRecord[] = [];
 
   runLocalRules(table, stats, config);
@@ -508,9 +457,7 @@ export async function filterLlmContext(
     // off：整段跳过 Jev（stats.jev 保持 null），只跑本地链
     runOffChain(table, undefined, config.thresholds, stats, queryTerms);
   } else if (deps?.classify === undefined) {
-    // no_key（on/test 未注入 classify）：全部来源未判定 → 无论证段保护、去重同
-    // Brave 原序（PLAN §3.2 明文设计，用户已定决策 3——off 期望文件的重标注是
-    // 设计意图不是回归；no_key 等价 off 口径，SAFE-01 前置语义）
+    // 缺少分类器时走本地链，不使用 Jev 论证保护，去重仍按 Brave 原序。
     stats.jev = createNoKeyJevStats();
     runOffChain(table, undefined, config.thresholds, stats, queryTerms);
   } else {
@@ -527,11 +474,8 @@ export async function filterLlmContext(
         row?.status === 'answered' && row.verdict !== undefined && row.fail_kind !== 'validation';
     }
   }
-  // 步 9 裁回预算：只在超量倍数 > 1 时执行——此时抓取量被放大、Brave 返回的内容超出
-  // 模型原始请求，需要按原始请求值（与 applyOverfetch 放大后的参数无关）从末源末片段
-  // 往回砍、不重排。倍数为 1 时 Brave 已按请求上限返回、过滤层只删不加，而估算公式
-  // 是为 Jev 32k 保护标定的、对普通网页文本偏高（审查问题 6），再按估算裁只会误砍。
-  // 计数按裁决累加（reason 'budget' 只有本步会写）。
+  // 仅 overfetch 放大抓取量时，按原始请求预算从末源末片段向前裁剪。
+  // 倍数为 1 时 Brave 已按请求上限返回；本地估算偏保守，再裁可能误删。
   if (config.overfetchFactor !== 1) {
     trimToBudget(table, request.params, estimateTokens);
   }
@@ -546,17 +490,15 @@ export async function filterLlmContext(
   );
   const result = rebuildOutput(table, data);
   finalizeStats(stats, table);
-  // 步 10 状态行：从最终统计对象投影（D-01..D-08）。落点必须在 finalizeStats
-  // 之后——它整体替换 stats.output，写在之前会被吞掉（03-RESEARCH Pitfall 1）。
+  // 状态行必须在 finalizeStats 后写入，后者会整体替换 stats.output。
   stats.output.status_line = buildStatusLine(stats);
 
   return { result, stats, jev_dispatch: dispatches, jev_requests: requests };
 }
 
 /**
- * 片段配对身份（04-02 样本映射用）：`{merged_from}:{index}` 前缀可省（无并入来源），
- * JSON-LD 多段加 `.{part}`——与统计表 SnippetStats 的 index/part/merged_from 同源，
- * 与旧证据类型的 snippetKey 同格式。
+ * 片段身份：可选 merged_from 前缀 + 原片段 index + 可选 JSON-LD part。
+ * 与统计表的身份字段同源，用于样本配对。
  */
 const snippetKeyOf = (snippet: WorkSnippet): string =>
   `${snippet.mergedFrom !== undefined ? `${snippet.mergedFrom}:` : ''}${snippet.index}` +
@@ -573,16 +515,10 @@ const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
   }));
 
 /**
- * 工作表 → Jev 候选集：`verdict === 'keep'` 且幸存片段 ≥ 1 的来源。`id` 取
- * `s{source.index}`（与探测脚本 `s0..s11` 约定一致），`url` / `title` 用工作表
- * 原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段）
- * 及其配对身份，顺序即表序（Brave 原序）。只读表，不翻标记、不重排（RULES-08）。
- *
- * 页面日期（时间上下文）：按 `s{braveIndex}` 与原 URL 的映射从各来源**原 Brave 元数据**
- * `age` 选出（selectPageDate），绑定来源身份——绝不在候选数组压缩后按下标读原始元数据。
- * 步 2 归并的候选统计全部贡献原来源（宿主索引 ∪ 幸存片段的 mergedFrom），日期不同或
- * 部分未知统一 null（mergePageDates），不把 A 的日期贴到 B 的事实上。日期字段恒在
- * （无日期为 null），进入全量请求构造的唯一候选口径。
+ * 收集 keep 且仍有片段的来源，ID 为 s{原始索引}，文本取工作表当前值。
+ * 候选与片段均按 Brave 原序，只读工作表。
+ * 页面日期按原始来源身份读取，不能用压缩后的候选下标对应原元数据。
+ * 归并时综合宿主与幸存片段的原来源日期；存在冲突或未知时为 null。
  */
 const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => {
   const pageDateByIndex = new Map<number, string | null>(
@@ -617,32 +553,10 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => 
 };
 
 /**
- * 步 5：Jev 请求派发（all-only 唯一组织，ALL_ONLY_FILTER_CLEANUP_PLAN §3.1）：
- * 非空候选组织**一次**全量共享逻辑请求——一个或多个候选都进 `state.sources[]`，
- * 单候选同样用 `sources[0]` 与新题，不走特殊模板；零候选零次 Jev 逻辑调用与 HTTP，
- * 不构造空问题请求。进程级并发闸按 Responsibility Map 由 02-05 的
- * `createJevClassifier` 闭包持有并消费 `config.jev.concurrency`，本处不建双闸；
- * 32K／64K 预检、估算与 single 阶梯、三条回退（单候选／预算／客户端拒绝）已整体
- * 退役——同一搜索的重试由客户端复用完全相同的 body，属于同一逻辑请求。
- *
- * 记账口径（SAFE-01/JEV-04/计划 §3.3）：
- * - `n_requests` 仅在 outcome 带 `dispatch`（fetch 已调用）时加一；回答桩可
- *   `answered=true` 而 `dispatched=false`，此时计零请求、载荷保持 null。熔断短路
- *   （零 fetch）不虚记。N 来源一次全量请求记 1，绝不冒充 N 次 HTTP；
- * - `n_http_attempts` = 全部请求的真实 fetch 次数（含重试），与 n_requests 分开记；
- * - `latency_ms_total` = 逻辑请求耗时之和（每次 classify 全程），不冒充过滤阶段
- *   墙钟耗时；
- * - 用量只在请求级累计；缺少用量完整性信息时 `usage_complete=false`，不由
- *   answered 自动推定；
- * - answered → per_source 记四题概率与 snippet_scores、model、request_id；
- *   failed 且非熔断短路 → 记 fail_kind；失败来源什么都不动（按"留"，SAFE-01）；
- *   keep 但幸存片段为 0 的来源 → per_source 记 'skipped' 且无请求。
- * - 请求级完整事实（实发载荷、映射、答案）在 `requests`，经
- *   FilterResult.jev_requests 交样本层；stats.jev.requests 只留无正文摘要（LOG-03）。
- *
- * @returns `{ rows, dispatches, requests }`：rows 为逐源 judged 结果映射（键 = src
- * id `s{index}`）——步 6/7 的裁决消费入口；dispatches 为来源级派发证据（每 keep
- * 来源一条、按表序）；requests 为请求级记录（零条或一条，按派发顺序）。
+ * 步 5：零候选不调用 Jev，非空候选共用一次请求；并发和重试由客户端负责。
+ * 按显式映射投影答案，失败来源保守保留，空来源记 skipped。
+ * requests 保存完整载荷，stats 只存无正文摘要；派发、回答和用量完整性分别记账。
+ * 返回逐来源裁决 rows、来源派发证据 dispatches 和请求记录 requests。
  */
 const runJevStage = async (
   table: WorkSource[],
@@ -667,13 +581,11 @@ const runJevStage = async (
     n_http_attempts: 0,
     requests: [],
   };
-  // 带身份候选（04-04 R1）：派发记录需要片段配对身份与候选口径文本，plain 形状给不出
+  // 候选需携带原片段身份和当前文本，供派发记录配对。
   const candidates = jevCandidatesFromTable(table);
 
-  // 先按表序给每个 keep 来源立 skipped 占位行，候选来源派发后覆盖——per_source
-  // 天然保持 Brave 原序（RULES-08），顺序由 Map 的插入序保证；无候选的来源
-  // （本地规则删光、未调 Jev）预置 skipped 派发记录（04-04 R1：与候选来源的
-  // "未派发"区分开——skipped 是无内容可发，breaker_open 是有内容没发）
+  // 先按表序为 keep 来源建立 skipped 占位，再覆盖候选来源。
+  // Map 插入顺序保留 Brave 原序；无内容可发与有候选但熔断未发分别记录。
   const rows = new Map<string, JevPerSourceStats>();
   const dispatchMap = new Map<string, JevDispatchRecord>();
   const candidateIds = new Set(candidates.map((candidate) => candidate.id));
@@ -712,16 +624,14 @@ const runJevStage = async (
     snippet_texts: candidate.snippets.map((snippet) => snippet.text),
   });
 
-  // 请求级记录（计划 §3.3）：每逻辑请求一条、按派发顺序；本次搜索内零条或一条
+  // 一次搜索零条或一条逻辑请求记录。
   const requestRecords: JevRequestRecord[] = [];
   let requestSeq = 0;
   const nextRequestId = (): string => `j${(requestSeq += 1)}`;
 
   /**
-   * 一次 classify 调用与请求级账目的公共路径：计时、实发载荷捕获、
-   * answered / dispatched / usage_complete 独立记、n_requests 与 n_http_attempts
-   * 汇总。classify 契约是返回 failed 而非 reject；真 reject 按网络失败记账（防御
-   * 注入面），此时无实发载荷——没有派发证据绝不虚记请求（§3.3）。
+   * 计时并独立记录回答、派发与用量完整性，分别汇总逻辑请求和 HTTP 尝试。
+   * classify 意外 reject 时按网络失败处理；没有 dispatch 证据不虚记请求。
    */
   const runRequest = async (
     record: JevRequestRecord,
@@ -794,8 +704,7 @@ const runJevStage = async (
     const outcome = await runRequest(record, state, questions);
 
     if (outcome.status === 'answered') {
-      // 投影（计划 §3.3/§4.2）：按显式映射把全量答案分回各来源行，不按键序、URL
-      // 或压缩位置猜；片段数来自当前请求映射，实发范围即候选全长
+      // 按显式映射分配全量答案，不能用键序、URL 或压缩位置猜来源。
       for (const entry of entries) {
         const candidate = candidates.find((item) => item.id === entry.source_id);
         if (candidate === undefined) continue; // 映射与候选同源，防御分支
@@ -811,9 +720,8 @@ const runJevStage = async (
           ...(projected.snippetScores !== undefined
             ? { snippet_scores: projected.snippetScores }
             : {}),
-          // 请求级维度（input_tokens / latency_ms）不逐来源复制（§6.1：N 行同值
-          // 会被误加成 N 倍）——经 request_id 关联请求记录；model 保留供
-          // model_reported 去重投影
+          // 请求用量和耗时只记一次，通过 request_id 关联，避免按来源重复累计。
+          // model 留在来源行中供日志去重。
           model: outcome.model,
           request_id: record.request_id,
         });
@@ -883,7 +791,7 @@ const runJevStage = async (
     : jev.per_source.some((row) => row.status === 'failed')
       ? 'degraded'
       : 'ok';
-  // 请求级摘要（无正文——LOG-03）：JSONL 只留身份与计数，正文走样本
+  // 日志只存无正文请求摘要，完整载荷交给样本。
   jev.requests = requestRecords.map((record) => {
     const {
       state: _state,
@@ -896,19 +804,14 @@ const runJevStage = async (
     return summary;
   });
   stats.jev = jev;
-  // 实发派发记录按表序（rows 插入序 = Brave 原序）输出：每个 keep 来源恰一条
-  // （候选来源派发后覆盖、无候选来源预置 skipped）——不变式由上方构造保证，
-  // 非空断言安全（llm_context 适配行 `filtered!` 同款先例）
+  // 占位与覆盖流程保证每个 keep 来源都有记录，按插入序输出。
   const dispatches = [...rows.values()].map((row) => dispatchMap.get(row.src)!);
   return { rows, dispatches, requests: requestRecords };
 };
 
 /**
- * on 链：步 6 来源级裁决 → 步 7 前半 score 删除 → 步 7 后半跨源 dup 与指纹新颖度
- * → 步 8 空来源/一句话来源。test 与 on 共用这一份实现（04-01 单链语义，不许写
- * 平行版本）；裁决真实生效——drop 的来源从输出消失、低分片段被删。
- *
- * `stats` 承载计数与 per_source 回写（test 与 on 的过滤统计一致）。
+ * test/on 共用：步 6 来源裁决 → 步 7 评分、跨源去重与新颖度 → 步 8。
+ * 裁决实际修改工作表，统计同步回写。
  */
 const runOnChain = (
   table: WorkSource[],
@@ -923,11 +826,7 @@ const runOnChain = (
   dropEmptySources(table, stats, queryTerms, jevSideDeletions);
 };
 
-/**
- * off 链：步 7 后半（Brave 原序的跨源逐字去重与指纹新颖度）→ 步 8。off 模式与
- * no_key（on/test 未注入 classify）等价 off 口径时走这条链；test 与 on 的正式
- * 过滤走 runOnChain——两者不再共用一条链下的双分支（04-01 起旧影子正本路径退役）。
- */
+/** off 或缺少 classify 时：按 Brave 原序执行跨源去重、新颖度和步 8。 */
 const runOffChain = (
   table: WorkSource[],
   judged: ReadonlyMap<string, JevPerSourceStats> | undefined,
@@ -940,15 +839,8 @@ const runOffChain = (
 };
 
 /**
- * Jev 候选集收集（02-01）：对输入跑一遍本地规则层（步 1–4），收集幸存来源与其
- * 幸存片段。重录 dump（`dev/dump_local_rules.ts`）与管道步 5 共用同一候选口径——
- * 录好的答案因此与生产 state 逐源逐片段对齐（02-02 起两口径统一走
- * `jevCandidatesFromTable`）。
- *
- * 纯函数：`buildWorkTable` 建工作表、一次性 stats 只作步 1–4 计数载体（用后即弃，
- * 不返回）、不改输入。04-02 v1 曾经 `collectJevCandidatesDetailed` 供样本层重建
- * 实发映射（片段配对身份只有工作表知道，字符串数组签名给不出）；04-04 R1 起样本层
- * 只信管道交来的 JevDispatchRecord，不再重建候选。
+ * 跑本地步骤 1–4 后收集候选，供开发导出与请求构造核对。
+ * 不修改输入；实际样本使用客户端派发证据，不在保存时重新调用此函数。
  */
 export function collectJevCandidates(
   data: BraveLlmContextResponse,
@@ -959,12 +851,8 @@ export function collectJevCandidates(
 }
 
 /**
- * 带身份版候选集收集（04-02）：与 `collectJevCandidates` 完全同一口径（同一纯函数
- * 链、同一输入），只是片段带 `key` 配对身份（`{merged_from}:{index}` 前缀可省、
- * JSON-LD 多段加 `.{part}`）。04-02 v1 曾供样本层重建实发 state 映射；04-04 R1 起
- * 样本层只信管道交来的 JevDispatchRecord（重建会得到阶梯前 state，与实发不符），
- * 本函数无样本层消费方，除作内部 plain 版包装与候选口径核对备用外，开发冒烟脚本
- * （dev/full-context-smoke.mjs）也使用它构造带身份的候选并组装请求载荷。
+ * 带片段身份的候选导出；与 collectJevCandidates 共用本地处理和候选口径。
+ * 供其包装及开发冒烟使用，样本保存不依赖此导出。
  */
 export function collectJevCandidatesDetailed(
   data: BraveLlmContextResponse,

@@ -1,10 +1,4 @@
-/**
- * 题库常量单测：四键齐全（2026-10-03 精简后）、总指令前缀、来源题命名空间转换、
- * 时间上下文评分题逐字冻结、唯一题库哈希，以及历史录制兼容——两份重录 `.jev.json`
- * 夹具是 v3 十题题库的历史证据（不得改写冒充新题库），这里只验证其结构完整可读；
- * 当前题库契约由 SOURCE_QUESTIONS / buildSourceQuestions / buildSnippetScoreQuestion
- * 断言锁定，不再要求旧录制等于当前生成器。
- */
+/** 当前题库生成与哈希测试；历史录制单独验证结构完整性，不改写成当前题库回答。 */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -131,11 +125,7 @@ describe('buildSourceQuestions', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 时间上下文评分题（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5 / 附录 A）：第二十
-// 五轮实测、第二十六轮保持冻结的 all 片段评分题。题干全文在此逐字锁定——任何
-// 一个字符的改动都是新候选，必须重新请求 Jev，不能拿现有回答背书。
-// ---------------------------------------------------------------------------
+// 逐字锁定评分题干与 criteria，改题后必须重新取得回答。
 
 /** 附录 A 冻结题干（位置 (3,1) 实例化；与 main/plan.json new_dates 请求逐字一致）。 */
 const FROZEN_INSTRUCTIONS_3_1 =
@@ -184,22 +174,15 @@ describe('buildSnippetScoreQuestion', () => {
 
 describe('QUESTION_SET_ID (all-only recipe)', () => {
   it('pins the hash that covers only the active bank: source questions, global instruction, the frozen score template and criteria', () => {
-    // all-only 清理后的唯一题库哈希：改任何题干 / criteria / 键序 / 总指令都会变红，
-    // 变红即必须重新请求 Jev 并递增记录（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5）。
-    // 清理前覆盖旧 score 模板的双模板哈希 e307a770fb87 已随旧题退役（git 历史可查）。
+    // 锁定现行题库完整哈希，防止题干、criteria、键序或总指令无意漂移。
     assert.equal(QUESTION_SET_ID, '0ef644dda1ad');
   });
 });
 
-// ---------------------------------------------------------------------------
-// 历史录制兼容：两份 .jev.json 是 2026-09-25 v3 十题题库的真实探测记录（历史证据，
-// 不得修改 questions / answers / model / usage 冒充新题库录制）。2026-10-01 六题
-// 精简后它们不再是当前生成器的投影——这里只验证历史结构完整可读（v3 十键齐全、
-// 总指令前缀、三档 levels），供回放与历史对账；旧回答在新规则下回放属于"固定回
-// 答的规则验证"，不能冒充新题的真实回答。
-// ---------------------------------------------------------------------------
+// 两份历史录制是旧十题题库的真实记录，验证原始结构，不改写内容。
+// 其回答用于当前规则回放时属于固定回答验证，不代表模型对当前题目的回答。
 
-/** v3 历史十题键（2026-10-01 精简前的完整集合；git 历史 `git log -- src/filter/jev/questions.ts` 可取证）。 */
+/** 历史录制对应的十个来源题键。 */
 const V3_HISTORICAL_KEYS: readonly string[] = [
   'worth_keeping',
   'is_primary',
@@ -213,7 +196,7 @@ const V3_HISTORICAL_KEYS: readonly string[] = [
   'paywalled',
 ];
 
-/** v3 历史三档片段评分 legend（已退役旧评分题 legend 的逐字内容，只作历史对账）。 */
+/** 历史录制的三档评分说明，仅用于核对原始格式。 */
 const V3_HISTORICAL_LEVELS: readonly string[] = [
   'Navigation, metadata, boilerplate, or unrelated to `query`',
   'Mentions the subject of `query` but adds no specific information',
