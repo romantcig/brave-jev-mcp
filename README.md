@@ -124,7 +124,7 @@ Searches for points of interest (POIs) in a specified geographic area using Brav
 
 ### LLM Context (`brave_llm_context`)
 
-This fork includes an optional Jev page filter. See [filter configuration and temporal-context rollout](FILTERING.md) for configuration, sample records, and rollback behavior.
+This fork includes an optional Jev page filter. See [Jev filter configuration](FILTERING.md) for configuration, request behavior, sample verification, and rollback options.
 Retrieves pre-extracted web content optimized for AI agents, LLM grounding, and RAG pipelines.
 
 **Parameters:**

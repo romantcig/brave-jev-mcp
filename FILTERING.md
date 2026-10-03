@@ -1,44 +1,67 @@
-# Jev 页面过滤与时间上下文试运行
+# Jev 页面过滤配置
 
 `brave_llm_context` 可通过 `JEV_FILTER_CONFIG_FILE` 环境变量指定本地 JSON 配置。密钥继续使用环境变量 `TYPESAFE_API_KEY`。配置在 MCP 进程初始化时读取，修改后需要重连或重启对应 MCP。
 
-下面是时间上下文日常试运行的最小配置；向既有配置合并这些字段即可，其余设置保持原值：
+最小配置只需过滤模式一项；向既有配置合并即可，其余设置保持原值：
 
 ```json
 {
-  "mode": "test",
-  "jev": {
-    "context_mode": "all",
-    "temporal_context": true
-  }
+  "mode": "test"
 }
 ```
 
-`temporal_context` 默认 `false`，只接受布尔值，错误类型会警告并回落为 `false`。`test` 与 `on` 使用同一条实际过滤链；`test` 还保存过滤前响应、最终返回、实际 Jev 请求、回答和身份映射。`off` 不请求 Jev。
+`test` 与 `on` 使用同一条实际过滤链；`test` 还保存过滤前响应、最终返回、实际 Jev 请求、回答和身份映射。`off` 只跑本地规则，不请求 Jev。旧值 `shadow` 是 `test` 的兼容别名。
 
-| 配置与实际路径 | 时间输入 | 片段评分题 |
-| --- | --- | --- |
-| `temporal_context: false` | 不添加时间字段 | 原有评分题，完整功能回退 |
-| `true`，实际 all | 检索时间与各来源页面日期 | 第二十五、二十六轮冻结的时间上下文评分题 |
-| `true`，实际 single，包括 all 回退 | 同一检索时间与该来源页面日期 | 原有单来源评分题 |
+Jev 请求组织只有一种：全部候选共享一次请求（all）。曾经的双开关 `jev.context_mode` 与 `jev.temporal_context` 已于 filter-rules-16 退役——遗留配置里出现这两个键按未知键忽略，不需要清理也能运行，但它们不再改变任何行为。
 
-检索时间在 Brave 请求前捕获一次，以带时区的 ISO 字符串传入 `retrieval_time`。日期不会进入公开 MCP 参数或 Brave 查询参数。回放必须使用原日志时间或保存的实际 state；纯过滤库不读取当前日期补齐缺失值。
+## 请求契约（filter-rules-16 起）
 
-页面日期 `brave_page_date` 从原 Brave 元数据 `age` 中选择：优先合法绝对时间，再选合法 `YYYY-MM-DD`，保留原字串。相对时间不倒推，非法日期、缺失日期记为 `null`。合并来源的日期不同或部分未知时统一为 `null`，避免把一个页面的日期归给另一个页面。
+- 零候选：零次 Jev 逻辑调用与 HTTP，不构造空问题请求。
+- 一个或多个候选：本地步骤 1–4 之后的完整候选数组进入同一次共享请求（`state.sources[]`，保持 Brave 原序）；只有一个候选也走同一模板，没有单候选特殊路径。
+- 一次搜索最多一次 Jev 逻辑请求。没有 single 回退、没有超限降级、没有本地 `too_large` 分类：发送前不做 token 估算预检，不删正文、不删题、不拆请求。载荷超过官方限额时依赖服务端拒绝——HTTP 413／422 按通用非重试 `validation` 处理，相关来源保守保留。
+- 同一搜索的重试复用完全相同的 body、检索时间和题目；重试属于同一逻辑请求。
+- 逐题错误隔离是唯一解析语义：单个坏答案不使其他来源的有效答案失效；顶层协议错误仍整请求失败。
+- 超时、重试、退避、Retry-After、熔断与进程级并发闸照旧。
+- 回答桩可 `answered` 而未派发（无 fetch 证据）：计零请求，载荷保持 null。
 
-页面日期只是发表或更新线索，不代表项目维护时间，也不代表所有内容失效。新题根据需求时期、事件状态以及候选材料中的同事件后续证据评分；历史需求与仍适用的技术说明仍可能保留。实际 all 候选材料不等于最终存活材料，本功能没有加入跨来源覆盖删除或最终参照复核。
+## 时间上下文与题库
 
-四道来源题、原创论证保护、Brave 原序、十步管道和既有去重不变。片段仍是三档 score，默认 `thresholds.snippet_min = 1.00`，严格小于才删除，原因仍记为 `score`。未恢复独立时间题、年份选择器或按页面年龄删除的门槛。完整时间和题目先进入载荷，再按既有 32k／64k 限额与 15% 余量检查；all 超限时回退 single。
+时间上下文字段常开，没有开关：
 
-当前版本为 `filter-rules-15`、`jev-context-2`、题库 `e307a770fb87`，模型保持 `jev-1.13.0`。时间上下文在规则版本 14 接入，版本 15 调整 GitHub 本地清洗。样本容器仍为 v4，旧样本无需迁移。核对生效分支应查看配置快照、实际请求模式和保存的题目，不能只凭题库 ID 判断。
+- `retrieval_time`：宿主发起 Brave 请求前捕获的那一个时刻，带时区的 ISO 字符串；缺失或非法时省略，不补"今天"。纯过滤库与回放不读当前时间。
+- 每个候选带 `brave_page_date`（`string | null`）：从原 Brave 元数据 `age` 中选择，优先合法绝对时间，再选合法 `YYYY-MM-DD`，保留原字串。相对时间不倒推；非法日期、缺失日期、合并来源日期冲突统一为 `null`。日期不进公开 MCP 参数或 Brave 查询参数。
 
-这是可回退的日常试运行。Redlib 旧测量残留、Grok 参数冲突与纠错、Gemini 争议反证、Sanity 独有技术细节，以及交易报道的混合条款仍需观察；工程验证不代表这些问题全部解决，也不代表已经证明总体误删率低于 4%。
+页面日期只是发表或更新线索，不代表项目维护时间，也不代表所有内容失效。评分题根据需求时期、事件状态以及候选材料中的同事件后续证据打分；历史需求与仍适用的技术说明仍可能保留。没有跨来源覆盖删除或最终参照复核。
 
-优先回退方法：将 `jev.temporal_context` 改成 `false`，重启目标 MCP，并在新样本中确认 state 不再带时间字段、评分题回到原模板。`context_mode: "single"` 只改变请求组织，仍保留时间输入；`mode: "off"` 则会同时关闭其他 Jev 过滤。
+题库（QUESTION_SET_ID `0ef644dda1ad`）：
+
+- 来源级四题：`has_original_reasoning`、`is_template_filler`、`is_off_topic`、`is_listing`。
+- 片段级：每个候选片段一道时间上下文评分题。
+- 总题数 = 候选数 × 4 + 片段数。
+
+四道来源题、原创论证保护、Brave 原序、十步管道和既有去重不变。片段仍是三档 score，默认 `thresholds.snippet_min = 1.00`，严格小于才删除，原因仍记为 `score`。没有独立时间题、年份选择器或按页面年龄删除的门槛。
+
+## v5 样本核对方法
+
+当前样本 `format_version` 为 5，规则与布局版本为 `filter-rules-16`、`jev-context-3`。核对一次实际搜索：
+
+1. 样本根字段 `format_version: 5`。
+2. `config_snapshot.jev` 只含 `model`、`timeout_ms`、`concurrency` 三键；`context_mode`／`temporal_context` 不再出现在新样本里。
+3. 请求级记录 `jev.requests` 一次搜索至多一条：`request_id`、`source_ids`、`dispatched`／`answered`／`usage_complete`、真实 `input_tokens`、`mapping`；字段中没有 `mode`、`requested`、`effective`、`fallback_reason`、`planned_estimates`。`n_requests` ≤ 1，`n_http_attempts` 单独记真实 HTTP 尝试（含重试）。
+4. `question_set_id` 为 `0ef644dda1ad`，`filter_rules_version` 为 `filter-rules-16`。
+
+旧样本按其自身版本语义读取，不迁移、不改写（v1 的 sent 段是阶梯前重建口径、v2/v3 是逐来源 state、v4 起有请求级载荷——读取规则见 `src/filter/sample.ts` 头注释）。核对生效版本应查看配置快照、实际请求记录和保存的题目，不能只凭题库 ID 判断。
+
+## 回退与关闭
+
+- 关闭 Jev 过滤：`mode: "off"`，重启目标 MCP。只保留本地规则层，Jev 完全不参与。
+- 没有配置级回退到旧评分题或 single 请求：备用题库与回退路径不在新代码内。若要回滚代码，使用此前完整构建版本（git 历史），不做手工拼接。
+
+已知的观察项继续保留：Redlib 旧测量残留、Grok 参数冲突与纠错、Gemini 争议反证、Sanity 独有技术细节，以及交易报道的混合条款仍需观察；工程验证不代表这些问题全部解决，也不代表已经证明总体误删率低于 4%。
 
 ## GitHub 本地清洗
 
-规则版本 15 在 `test/on` 下、送入 Jev 前处理以下内容，`off` 不应用这些 GitHub 专属规则：
+filter-rules-15 接入的 GitHub 本地清洗在现行版本保留：`test/on` 下、送入 Jev 前处理以下内容，`off` 不应用这些 GitHub 专属规则：
 
 | 页面 | 清理范围 |
 | --- | --- |
