@@ -1,6 +1,8 @@
 # All-Only Filter Cleanup Plan
 
-日期：2026-10-03。状态：**已复审修订，待实施。**
+日期：2026-10-03。状态：**实施中。**
+
+> 修订记录：2026-10-04 老大决定，任务 E 的历史实验处理由「登记冻结」改为「archive/ 归档」——迁入仓库 `archive/` 目录、git 跟踪文件以 `git rm --cached` 退出版本库、`archive/` 整目录加入 `.gitignore`；任务 F 第 7 条与 §7.1/§7.2 同步调整。详见任务 E「历史实验的归档边界」。
 
 目标：Jev 过滤只维护全量共享上下文和当前新题，彻底移除 single、旧评分题回退、Jev 请求的 32K／64K 预检与降级体系，包括它们在配置、类型、日志、测试和维护脚本中的依赖。
 
@@ -178,9 +180,9 @@ questions.ts 的评分 criteria → verdict.isUsableSnippetScore
 8. 按执行时基线递增 `FILTER_RULES_VERSION` 和 `CONTEXT_LAYOUT_ID`。若基线仍为 14／2，则新值为 `filter-rules-15`／`jev-context-3`；并发任务若已推进版本，使用其后的新值。
 9. 旧样本和两份 `.jev.json` 夹具不改写、不升级、不伪造新题回答。生产代码不为读旧样本继续保留 single 类型；历史查看工具按文件自身格式解释。
 
-### 任务 E：迁移当前维护入口，冻结历史实验
+### 任务 E：迁移当前维护入口，归档历史实验
 
-责任文件：full-context、stub、两个 stdio smoke、compare、dump、demand 入口及相关说明。
+责任文件：full-context、stub、两个 stdio smoke、compare、dump、demand 入口、`archive/` 归档及相关说明。
 
 **当前入口必须能用：**
 
@@ -207,13 +209,15 @@ questions.ts 的评分 criteria → verdict.isUsableSnippetScore
 - 检查 plan、run、loader、audit 的调用关系。旧 quality 的 `.source` 读取只能到达离线回放；缓存继续核对完整请求身份。
 - `filter-experiment-budget.ts`、`filter-demand-run.ts` 删除 32K／64K 断言和最长单题估算，保留实验累计费用预留、`--live` 及逐次 HTTP 记账。
 
-**历史实验的处理边界：**
+**历史实验的归档边界（2026-10-04 修订）：**
 
-- `dev/jev_probe.py` 已注明只服务 v3 历史十题，但仍能真实发 single。它从当前维护入口退役：删除现行使用说明及活跃脚本入口；已跟踪代码由 Git 历史保留，冻结夹具保留。不改写成新题的第二套 Python 生成器。
-- 本地忽略脚本中，以下文件明确依赖旧 `buildQuestions`／旧 `SNIPPET_LEVELS` 或旧 single 请求：`filter-experiments.ts`、`filter-distribution-experiments.ts`、`filter-distribution-record.ts`、`filter-five-question-ablation.ts`、`filter-round11-targeted.ts`、`filter-round13-time.ts`、`filter-round13-time-concise.ts`、`filter-round13-holdout.ts`、`filter-round13-spotcheck.ts`、`filter-round14-rollout.ts`、`filter-round15-content.ts`、`filter-round16-quality.ts`、`filter-round17-order.ts`、`filter-round19-retest.ts`、`filter-six-question-validation.ts`、`filter-signal-experiments.ts`、`filter-tail-experiments.ts`。
-- 另有旧 single 注入或比较入口：`filter-abstention-experiments.ts`、`filter-reasoning-ablation.ts`、`filter-rollout-review.ts`、`filter-round10-review.ts`、`filter-signal-calibration.ts`、`filter-tail-isolation.ts`、`filter-round13-scoped.ts`、`filter-round16-semantic.ts`。
-- 上述入口登记冻结，从现行说明摘除，不再支持搭配当前生产源码运行；保留本地文件和实验结果。仍被维护入口导入的依赖必须迁移，不能只登记冻结。
-- `filter-round16-common.ts`、`filter-round17-common.ts` 和旧语义比较脚本还有独立的 32K／64K 检测与按 64K 拆题逻辑；它们属于旧轮次方案。冻结记录不重写，不能将其作为新维护入口继续调用。
+- 在仓库根创建 `archive/` 目录，把历史实验与已退役脚本迁入其中；`archive/` 整目录加入 `.gitignore`。`archive/README.md` 是唯一的冻结登记，取代散落名单，写明：此处全部为历史实验与已执行计划，不兼容当前代码，勿运行、勿 import、勿引用；迁入后内容保持原样，不修复、不重写，脚本间相对引用失效不作修复。
+- `dev/jev_probe.py` 已注明只服务 v3 历史十题，但仍能真实发 single。迁入 `archive/`；它是 git 跟踪文件，用 `git rm --cached` 退出版本库（本地保留，历史可查）。其关联夹具若在 `fixtures/` 且仍被测试引用则留在原处。不改写成新题的第二套 Python 生成器。
+- 本地忽略脚本中，以下文件明确依赖旧 `buildQuestions`／旧 `SNIPPET_LEVELS` 或旧 single 请求，全部迁入 `archive/`：`filter-experiments.ts`、`filter-distribution-experiments.ts`、`filter-distribution-record.ts`、`filter-five-question-ablation.ts`、`filter-round11-targeted.ts`、`filter-round13-time.ts`、`filter-round13-time-concise.ts`、`filter-round13-holdout.ts`、`filter-round13-spotcheck.ts`、`filter-round14-rollout.ts`、`filter-round15-content.ts`、`filter-round16-quality.ts`、`filter-round17-order.ts`、`filter-round19-retest.ts`、`filter-six-question-validation.ts`、`filter-signal-experiments.ts`、`filter-tail-experiments.ts`。
+- 另有旧 single 注入或比较入口，一并迁入：`filter-abstention-experiments.ts`、`filter-reasoning-ablation.ts`、`filter-rollout-review.ts`、`filter-round10-review.ts`、`filter-signal-calibration.ts`、`filter-tail-isolation.ts`、`filter-round13-scoped.ts`、`filter-round16-semantic.ts`。
+- `filter-round16-common.ts`、`filter-round17-common.ts` 和旧语义比较脚本还有独立的 32K／64K 检测与按 64K 拆题逻辑；它们属于旧轮次方案，随上述名单一并归档。归档内容不重写，不能将其作为新维护入口继续调用。
+- 归档采用**清单制**：动手前先核实 `dev/` 现有文件的 import 关系，凡仍被当前维护入口导入的依赖必须留下并完成迁移（本任务前半部分的迁移义务不变），不得按关键词批量移入。`fixtures/*.jev.json` 与两份 shadow 现场夹具是已授权入库的测试资产，永不归档。
+- 已跟踪文件退出跟踪的动作（`git rm --cached`）与迁移在同一次提交中说明；此后这些内容只存在于本机与 Git 历史，重新 clone 不含 `archive/`，老大知情接受。
 
 dev 不在默认 tsc/npm test 范围内，维护入口需显式验证。
 
@@ -227,7 +231,7 @@ dev 不在默认 tsc/npm test 范围内，维护入口需显式验证。
 4. `AGENTS.md` 的当前项目约束更新为本计划的请求策略。
 5. 更新 `notes/status.md`、`notes/test-mode-logging.md`、`notes/README.md` 和 `filter-notes.md` 的当前状态；旧实验记录只加必要的退役指向，不改写原始结果。
 6. `notes/jev-api.md` 保留官方限制记录，注明本项目预检已退役。
-7. 根目录旧计划中涉及 single、旧评分回退、预算统一或旧样本格式的要求，以本计划为后继决定；在相关计划顶部加简短去向说明，保留其历史内容。重点涉及 `MAINTENANCE_SIMPLIFICATION_PLAN.md`、`SOURCE_QUESTION_TRIM_PLAN.md`、`TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN.md`。
+7. 根目录旧计划中涉及 single、旧评分回退、预算统一或旧样本格式的要求，以本计划为后继决定；相关计划文档迁入 `archive/`（按任务 E 归档边界处理，git 跟踪的用 `git rm --cached` 退出），原地不留存根，活文档中的指向统一引用 `archive/README.md`。重点涉及 `MAINTENANCE_SIMPLIFICATION_PLAN.md`、`SOURCE_QUESTION_TRIM_PLAN.md`、`TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN.md`。本计划文件在验收完成后同样归档。
 8. `.planning/` 是历史工程记录，本轮不启动新 GSD 阶段；必要时只在当前状态入口注明 JEV-05 与旧请求组织已退役，不重写已完成阶段的验证结论。
 9. 安装阶段按 `notes/private-local-env.md` 找到实际配置，只删除两个退役键，保留其他配置与环境变量。
 
@@ -339,8 +343,8 @@ cut_tail / source_only_questions / sent_snippets
 
 另查 `.source` 形状访问、`'source' in state` 和历史 request 原样传入 classify 的路径，包含被 `any` 绕过的 dev 调用。历史字段可保留在明确的离线读取中。
 
-搜索包含忽略文件，按当前入口和冻结记录分类；仍被维护入口导入的旧依赖需要处理。
+搜索包含忽略文件，按当前维护入口与 `archive/` 归档分类；仍被维护入口导入的旧依赖需要处理，`archive/` 内文件不作为残留检查对象。
 
 ### 7.2 完成标准
 
-生产仅保留全量 state、新题和一条编排路径；维护入口不再将旧请求交给生产分类器；v5 与 JSONL 的实发、回答和评分证据一致；工程与零网络端到端检查通过，源码和安装状态分别记录。
+生产仅保留全量 state、新题和一条编排路径；维护入口不再将旧请求交给生产分类器；历史实验已迁入 `archive/` 并按清单制与维护入口无 import 关联；v5 与 JSONL 的实发、回答和评分证据一致；工程与零网络端到端检查通过，源码和安装状态分别记录。
