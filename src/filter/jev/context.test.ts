@@ -298,7 +298,7 @@ describe('projectSourceAnswers', () => {
     assert.deepEqual(projected.snippetScores, [1.5, 0.3]);
   });
 
-  it('single mode identity lookup behaves like the previous inline collection (T12 basis)', () => {
+  it('projects one source by explicit keys like the previous inline collection (T12 basis)', () => {
     const projected = projectSourceAnswers({
       snippetCount: 2,
       answerAt: (key) =>

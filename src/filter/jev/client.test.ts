@@ -340,6 +340,14 @@ describe('parseJevResponse boundaries', () => {
     });
   });
 
+  it('returns kind http with the status for a 413 — no local too_large branch (all-only §3.3)', () => {
+    assert.deepEqual(parseJevResponse(413, '{"error":{"message":"payload too large"}}'), {
+      ok: false,
+      kind: 'http',
+      status: 413,
+    });
+  });
+
   it('returns kind shape when input_tokens is missing (JEV-02 contract)', () => {
     const body = JSON.stringify({
       model: 'jev-1.13.0',
@@ -913,6 +921,82 @@ describe('createJevClassifier retry (SAFE-03)', () => {
         http_status: 422,
       });
       assert.equal(counter.calls, 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('never retries 413 either — validation, not a local oversize branch (all-only §3.3)', async () => {
+    const saved = globalThis.fetch;
+    const { fetchImpl, counter } = statusFetch(413, 'payload too large');
+    globalThis.fetch = fetchImpl;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const outcome = await classifier.classify(request);
+
+      assert.deepEqual(outcome, {
+        status: 'failed',
+        kind: 'validation',
+        detail: '413 payload too large',
+        dispatch: request,
+        http_attempts: 1,
+        usage_complete: false,
+        http_status: 413,
+      });
+      assert.equal(counter.calls, 1);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('sends a synthetic request over the old 32K/64K detection range whole — no trimming, no question drops, no splitting (all-only §6)', async () => {
+    const saved = globalThis.fetch;
+    // 单来源 ~80k 字符正文：旧 32K／64K 预检体系下会触发阶梯／降级，
+    // 现在必须一次完整原样发出——没有输入限额检测，也不重建边界计算器
+    const bigState: JevState = {
+      query: 'q',
+      intent: 'i',
+      sources: [
+        {
+          id: 's0',
+          url: 'https://s0.example/',
+          title: 'Title',
+          snippets: ['x'.repeat(80_000)],
+          brave_page_date: null,
+        },
+      ],
+    };
+    const bigQuestions = makeQuestions(bigState, 1);
+    let capturedBody: string | undefined;
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      capturedBody = String(init?.body);
+      return new Response(
+        JSON.stringify({
+          model: 'jev-1.13.0',
+          answers: { s0__has_original_reasoning: { kind: 'noul', probability: 0.1 } },
+          usage: { input_tokens: 7 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const outcome = await classifier.classify({ state: bigState, questions: bigQuestions });
+      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
+
+      const sent = JSON.parse(String(capturedBody)) as { state: JevState; questions: unknown };
+      assert.ok(String(capturedBody).length > 64_000, '合成请求必须真的超过旧 64K 检测范围');
+      assert.deepEqual(sent.state, bigState, '正文不得被删改');
+      assert.equal(
+        Object.keys(sent.questions as Record<string, unknown>).length,
+        Object.keys(bigQuestions).length,
+        '题目不得被删减'
+      );
+      assert.equal(calls, 1, '不得拆成多次请求');
     } finally {
       globalThis.fetch = saved;
     }
