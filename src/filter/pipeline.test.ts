@@ -5,7 +5,12 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJevResponse } from './jev/client.js';
-import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
+import {
+  DEFAULT_JEV_MODEL,
+  DEFAULT_THRESHOLDS,
+  SOURCE_QUESTIONS,
+  SNIPPET_LEVELS,
+} from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import { createNoKeyJevStats } from './stats.js';
 import { estimateTokens } from './tokens.js';
@@ -27,7 +32,13 @@ const offConfig: FilterConfig = {
   overfetchFactor: 1,
   blocklist: new Set(),
   thresholds: { ...DEFAULT_THRESHOLDS },
-  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
+  jev: {
+    model: DEFAULT_JEV_MODEL,
+    timeoutMs: 15000,
+    concurrency: 12,
+    contextMode: 'single',
+    temporalContext: false,
+  },
   logDir: join(homedir(), '.brave-jev', 'logs'),
 };
 
@@ -443,7 +454,13 @@ describe('filterLlmContext', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
+        jev: {
+          model: DEFAULT_JEV_MODEL,
+          timeoutMs: 15000,
+          concurrency: 12,
+          contextMode: 'single',
+          temporalContext: false,
+        },
         logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
@@ -455,7 +472,13 @@ describe('filterLlmContext', () => {
         overfetchFactor: 1,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
+        jev: {
+          model: DEFAULT_JEV_MODEL,
+          timeoutMs: 15000,
+          concurrency: 12,
+          contextMode: 'single',
+          temporalContext: false,
+        },
         logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
@@ -467,7 +490,13 @@ describe('filterLlmContext', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
+        jev: {
+          model: DEFAULT_JEV_MODEL,
+          timeoutMs: 15000,
+          concurrency: 12,
+          contextMode: 'single',
+          temporalContext: false,
+        },
         logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );
@@ -543,7 +572,13 @@ describe('filterLlmContext', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
+        jev: {
+          model: DEFAULT_JEV_MODEL,
+          timeoutMs: 15000,
+          concurrency: 12,
+          contextMode: 'single',
+          temporalContext: false,
+        },
         logDir: join(homedir(), '.brave-jev', 'logs'),
       };
       const { result, stats } = await filterLlmContext(payload(), tightRequest, config);
@@ -598,7 +633,7 @@ describe('collectJevCandidates', () => {
   it('collects surviving sources with s{index} ids and excludes feed and merged ones', () => {
     const candidates = collectJevCandidates(jevPayload(), request, offConfig);
 
-    // feed 来源（s2）与被归并来源（s3）不出现在候选集；被归并片段并入 s0 的片段序列
+    // feed 来源（s2）与被归并来源（s3）不出现在候选集；被归并片段并入 s0 的片段序列。
     assert.deepEqual(candidates, [
       {
         id: 's0',
@@ -2290,5 +2325,399 @@ describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
         'Private front-end for Reddit, a brave browser project.',
       ]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 时间上下文端到端（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §7.1–7.6）：开关关闭精
+// 确恢复旧请求形态（完整功能回退）；开关开启时 all / single / 回退三条路径的
+// state 时间字段与题目分支、归并冲突置 null、非法检索时间省略。
+// ---------------------------------------------------------------------------
+
+describe('temporal context rollout (TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN)', () => {
+  const RETRIEVAL = '2026-10-02T04:26:27.787+08:00';
+  const temporalAllConfig: FilterConfig = {
+    ...offConfig,
+    mode: 'on',
+    jev: { ...offConfig.jev, contextMode: 'all', temporalContext: true },
+  };
+  const temporalSingleConfig: FilterConfig = {
+    ...offConfig,
+    mode: 'on',
+    jev: { ...offConfig.jev, contextMode: 'single', temporalContext: true },
+  };
+
+  const seen: Array<{ state: JevState; questions: Record<string, JevQuestion> }> = [];
+  const keepClassify: ClassifyDeps['classify'] = async ({ state, questions }) => {
+    seen.push({ state, questions });
+    const answers: Record<string, JevAnswer> = {};
+    for (const key of Object.keys(questions)) {
+      answers[key] = key.includes('snip')
+        ? { kind: 'score', score: 2 }
+        : { kind: 'noul', probability: 0.1 };
+    }
+    return {
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      answers,
+      input_tokens: 42,
+      dispatch: { state, questions },
+    };
+  };
+
+  it('off 即使开启时间上下文也不请求 Jev；关闭开关的 all 不携带日期且恢复旧题', async () => {
+    seen.length = 0;
+    await filterLlmContext(
+      payload(),
+      { ...request, retrievalTime: RETRIEVAL },
+      { ...temporalAllConfig, mode: 'off' },
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 0);
+    await filterLlmContext(
+      payload(),
+      { ...request, retrievalTime: RETRIEVAL },
+      {
+        ...temporalAllConfig,
+        jev: { ...temporalAllConfig.jev, temporalContext: false },
+      },
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 1);
+    assert.ok('sources' in seen[0].state);
+    assert.equal('retrieval_time' in seen[0].state, false);
+    assert.ok(seen[0].state.sources.every((source) => !('brave_page_date' in source)));
+    assert.match(seen[0].questions.s0__snip0.instructions, /^Judge only/);
+    assert.deepEqual(seen[0].questions.s0__snip0.criteria, SNIPPET_LEVELS);
+  });
+
+  it('完整新题触发 64k 预算回退，所有 single 沿用同一时间和旧题', async () => {
+    // 旧题能放下，新题的三百个完整长题超出总限额；正文很短，不触发 32k。
+    const data = payload();
+    data.grounding.generic[0].snippets = Array.from(
+      { length: 150 },
+      (_, i) => `Brave parameter A${i} is ${i}.`
+    );
+    data.grounding.generic[1].snippets = Array.from(
+      { length: 150 },
+      (_, i) => `Browser constraint B${i} requires ${i}.`
+    );
+    seen.length = 0;
+    await filterLlmContext(
+      data,
+      request,
+      {
+        ...temporalAllConfig,
+        jev: { ...temporalAllConfig.jev, temporalContext: false },
+      },
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 1);
+    assert.ok('sources' in seen[0].state);
+    seen.length = 0;
+    const filtered = await filterLlmContext(
+      data,
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalAllConfig,
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 2);
+    for (const { state, questions } of seen) {
+      assert.ok('source' in state);
+      assert.equal(state.retrieval_time, RETRIEVAL);
+      assert.ok('brave_page_date' in state.source);
+      assert.match(questions.snip0.instructions, /^Judge only/);
+      assert.ok(Object.values(questions).every((q) => !q.instructions.includes('`sources')));
+    }
+    assert.ok(
+      filtered.jev_requests.every(
+        (r) => r.effective === 'single' && r.fallback_reason === 'over_budget'
+      )
+    );
+  });
+
+  it('过滤后非连续 ID、JSON-LD 拆分及归并片段保留原身份和日期归属', async () => {
+    const article =
+      'Brave browser uses independent indexing and provides detailed technical measurements.';
+    const answer =
+      'Rendering performance depends on cache capacity, CPU scheduling and transport latency.';
+    const merged =
+      'A separate experiment measures memory allocation under concurrent browser requests.';
+    const other =
+      'Privacy guarantees require disabling optional telemetry and reviewing the network settings.';
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          { url: 'https://empty.example/', title: 'Empty', snippets: [''] },
+          {
+            url: 'https://a.example/post',
+            title: 'A',
+            snippets: [
+              JSON.stringify({
+                articleBody: article,
+                mainEntity: [{ acceptedAnswer: { text: answer } }],
+              }),
+            ],
+          },
+          { url: 'https://b.example/post', title: 'B', snippets: [other] },
+          { url: 'https://www.a.example/post', title: 'A mirror', snippets: [merged] },
+        ],
+      },
+      sources: {
+        'https://empty.example/': { age: ['1999-01-01'] },
+        'https://a.example/post': { age: ['2026-10-01'] },
+        'https://b.example/post': { age: ['2024-02-29'] },
+        'https://www.a.example/post': { age: ['2026-09-01'] },
+      },
+    };
+    const before = structuredClone(data);
+    seen.length = 0;
+    const filtered = await filterLlmContext(
+      data,
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalAllConfig,
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 1);
+    assert.ok('sources' in seen[0].state);
+    assert.deepEqual(
+      seen[0].state.sources.map((s) => [s.id, s.brave_page_date]),
+      [
+        ['s1', null],
+        ['s2', '2024-02-29'],
+      ]
+    );
+    assert.deepEqual(seen[0].state.sources[0].snippets, [article, `A: ${answer}`, merged]);
+    assert.deepEqual(filtered.jev_requests[0].mapping[0].snippet_keys, ['0.0', '0.1', '3:0']);
+    assert.match(
+      seen[0].questions.s1__snip2.instructions,
+      /^How useful is `sources\[0\].snippets\[2\]`/
+    );
+    assert.match(
+      seen[0].questions.s2__snip0.instructions,
+      /^How useful is `sources\[1\].snippets\[0\]`/
+    );
+    assert.deepEqual(data, before, '日期接入不改原正文或元数据');
+    const onSources = filtered.stats.sources;
+    const test = await filterLlmContext(
+      data,
+      { ...request, retrievalTime: RETRIEVAL },
+      { ...temporalAllConfig, mode: 'test' },
+      { classify: keepClassify }
+    );
+    assert.deepEqual(test.result, filtered.result);
+    assert.deepEqual(test.stats.sources, onSources);
+  });
+
+  it('switch off: the classify payload keeps the exact legacy shape (no time fields, old questions)', async () => {
+    seen.length = 0;
+    await filterLlmContext(
+      payload(),
+      { ...request, retrievalTime: RETRIEVAL },
+      { ...offConfig, mode: 'on' },
+      {
+        classify: keepClassify,
+      }
+    );
+    assert.equal(seen.length, 2, 'single 模式两来源各一次请求');
+    for (const { state, questions } of seen) {
+      assert.ok('source' in state);
+      assert.equal('retrieval_time' in state, false);
+      assert.equal('brave_page_date' in state.source, false);
+      // 旧 score 题干（总指令前缀 + source.snippets[i]）
+      const snip = questions['snip0'];
+      assert.ok(snip);
+      assert.match(
+        snip.instructions,
+        /Judge only the observable text of `source`.* How useful is `source\.snippets\[0\]` for `intent`\?$/
+      );
+      assert.deepEqual(snip.criteria, SNIPPET_LEVELS);
+    }
+  });
+
+  it('switch on + all: state carries retrieval_time and per-source brave_page_date; snip questions are the frozen temporal ones', async () => {
+    seen.length = 0;
+    const { result } = await filterLlmContext(
+      payload(),
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalAllConfig,
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 1, 'all 模式一次共享请求');
+    const { state, questions } = seen[0] as {
+      state: JevAllState;
+      questions: Record<string, JevQuestion>;
+    };
+    assert.equal(state.retrieval_time, RETRIEVAL);
+    assert.equal(
+      state.sources[0]?.brave_page_date,
+      '2026-09-16T00:00:00',
+      '合法绝对时间优先于纯日期'
+    );
+    assert.equal(state.sources[1]?.brave_page_date, null, 'age 为空数组 → null，键恒在');
+
+    // snip 题走冻结新题（s0 在数组位置 0），来源题保持总指令前缀的旧转换
+    const snip = questions['s0__snip0'];
+    assert.ok(snip);
+    assert.equal(snip.type, 'score');
+    assert.ok(
+      snip.instructions.startsWith('How useful is `sources[0].snippets[0]` for answering `intent`?')
+    );
+    assert.ok(snip.instructions.includes("A source's `brave_page_date`"));
+    const sourceQuestion = questions['s0__is_off_topic'];
+    assert.ok(sourceQuestion);
+    assert.ok(
+      sourceQuestion.instructions.startsWith('Judge only the observable text of `sources[0]`.')
+    );
+
+    // 幸存内容与裁决照旧：全 keep 输出 Brave 原序两来源
+    assert.equal(result.grounding.generic.length, 2);
+  });
+
+  it('switch on + single: state carries time fields but the score questions stay the legacy template', async () => {
+    seen.length = 0;
+    await filterLlmContext(
+      payload(),
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalSingleConfig,
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 2);
+    for (const { state, questions } of seen) {
+      assert.ok('source' in state);
+      assert.equal('retrieval_time' in state, true);
+      assert.equal(state.retrieval_time, RETRIEVAL);
+      assert.equal('brave_page_date' in state.source, true);
+      // single 沿用旧评分题：题干引用 source.snippets[i]，绝不指向不存在的 sources
+      const snip = questions['snip0'];
+      assert.ok(snip);
+      assert.match(snip.instructions, /How useful is `source\.snippets\[0\]` for `intent`\?$/);
+      assert.equal(questions['s0__snip0'], undefined);
+      assert.deepEqual(snip.criteria, SNIPPET_LEVELS);
+    }
+  });
+
+  it('invalid retrieval time is omitted from the state while page dates remain', async () => {
+    seen.length = 0;
+    await filterLlmContext(
+      payload(),
+      { ...request, retrievalTime: 'not a date' },
+      temporalAllConfig,
+      {
+        classify: keepClassify,
+      }
+    );
+    assert.equal(seen.length, 1);
+    const { state } = seen[0] as { state: JevAllState };
+    assert.equal('retrieval_time' in state, false, '非法值省略，绝不取系统时间冒充');
+    assert.equal(state.sources[0]?.brave_page_date, '2026-09-16T00:00:00');
+  });
+
+  it('all-fallback to single (single candidate) keeps the time anchors with legacy questions', async () => {
+    seen.length = 0;
+    const singleSource: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://search.brave.com/',
+            title: 'Brave Search',
+            snippets: ['Brave is a privacy-focused browser and search engine.'],
+          },
+        ],
+        map: [],
+      },
+      sources: {
+        'https://search.brave.com/': {
+          title: 'Brave Search',
+          hostname: 'search.brave.com',
+          age: ['2026-09-16'],
+        },
+      },
+    };
+    const { stats } = await filterLlmContext(
+      singleSource,
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalAllConfig,
+      { classify: keepClassify }
+    );
+    assert.equal(seen.length, 1);
+    assert.ok('source' in seen[0].state, 'single_candidate 回退走 single 形状');
+    assert.equal(seen[0].state.retrieval_time, RETRIEVAL);
+    assert.equal(seen[0].state.source.brave_page_date, '2026-09-16');
+    assert.match(
+      seen[0].questions['snip0']?.instructions ?? '',
+      /How useful is `source\.snippets\[0\]` for `intent`\?$/
+    );
+    assert.equal(stats.jev?.requests[0]?.fallback_reason, 'single_candidate');
+  });
+
+  it('merged candidates collapse conflicting page dates to null and keep identical ones', async () => {
+    // 同一 canonical URL 的两个来源（example.com/article 与 www 变体）：日期不同 → null；
+    // 相同 → 保留。片段身份映射不受影响（mergedFrom 并入宿主片段序列）
+    const mergedPayload = (): BraveLlmContextResponse => ({
+      grounding: {
+        generic: [
+          {
+            url: 'https://example.com/article',
+            title: 'Article',
+            snippets: ['A body snippet about brave with enough words to survive. '.repeat(3)],
+          },
+          {
+            url: 'https://www.example.com/article',
+            title: 'Article (www)',
+            snippets: ['A merged snippet about brave with enough words to survive. '.repeat(3)],
+          },
+        ],
+        map: [],
+      },
+      sources: {
+        'https://example.com/article': { title: 'Article', age: ['2026-09-16'] },
+        'https://www.example.com/article': { title: 'Article (www)', age: ['2023-04-18'] },
+      },
+    });
+    seen.length = 0;
+    await filterLlmContext(
+      mergedPayload(),
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalAllConfig,
+      {
+        classify: keepClassify,
+      }
+    );
+    assert.equal(seen.length, 1);
+    const { state } = seen[0];
+    assert.ok('source' in state, '步 2 归并后单候选回退 single');
+    assert.equal(state.source.brave_page_date, null, 'A、B 日期不同 → null，不把 A 的日期贴到 B');
+
+    // 相同日期保留
+    const samePayload = mergedPayload();
+    samePayload.sources['https://www.example.com/article'] = {
+      title: 'Article (www)',
+      age: ['2026-09-16'],
+    };
+    seen.length = 0;
+    await filterLlmContext(
+      samePayload,
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalAllConfig,
+      {
+        classify: keepClassify,
+      }
+    );
+    assert.ok('source' in seen[0].state);
+    assert.equal(seen[0].state.source.brave_page_date, '2026-09-16');
+
+    delete samePayload.sources['https://www.example.com/article'].age;
+    seen.length = 0;
+    await filterLlmContext(
+      samePayload,
+      { ...request, retrievalTime: RETRIEVAL },
+      temporalAllConfig,
+      {
+        classify: keepClassify,
+      }
+    );
+    assert.ok('source' in seen[0].state);
+    assert.equal(seen[0].state.source.brave_page_date, null, '部分未知不能冒用宿主日期');
   });
 });

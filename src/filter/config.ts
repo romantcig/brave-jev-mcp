@@ -183,6 +183,8 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
  * @example parseFilterConfigObject({ jev: { context_mode: 'all' } }).jev.contextMode === 'all'
  * @example parseFilterConfigObject({ jev: { context_mode: 'ALL' } }).jev.contextMode === 'all'
  * @example parseFilterConfigObject({ jev: { context_mode: 'groups' } }).jev.contextMode === 'single'
+ * @example parseFilterConfigObject({ jev: { temporal_context: true } }).jev.temporalContext === true
+ * @example parseFilterConfigObject({ jev: { temporal_context: 'yes' } }).jev.temporalContext === false
  * @example parseFilterConfigObject({ thresholds: { snippet_min: 2.01 } }).thresholds.snippetMin === 1.0
  */
 export function parseFilterConfigObject(
@@ -258,6 +260,16 @@ export function parseFilterConfigObject(
     else warn(ignored('jev.context_mode', value, 'single'));
   }
 
+  // temporal_context：布尔开关（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §3），默认
+  // false 精确保留旧请求形态与旧评分题；非布尔回落 false 并告警（0 / "true" 等
+  // JSON 类型错误不猜意图）
+  let temporalContext = false;
+  if (Object.hasOwn(jevRecord, 'temporal_context')) {
+    const value = jevRecord.temporal_context;
+    if (typeof value === 'boolean') temporalContext = value;
+    else warn(ignored('jev.temporal_context', value, false));
+  }
+
   // thresholds 组：逐键校验，坏值只回落该项
   let thresholdRecord: Record<string, unknown> = {};
   if (Object.hasOwn(file, 'thresholds')) {
@@ -303,7 +315,7 @@ export function parseFilterConfigObject(
     overfetchFactor,
     blocklist: DEFAULT_BLOCKLIST,
     thresholds: Object.freeze(thresholds),
-    jev: { model, timeoutMs, concurrency, contextMode },
+    jev: { model, timeoutMs, concurrency, contextMode, temporalContext },
     logDir,
     ...(toolDescriptionFile !== undefined ? { toolDescriptionFile } : {}),
   };

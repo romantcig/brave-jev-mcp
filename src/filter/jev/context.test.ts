@@ -15,7 +15,12 @@ import {
   projectSourceAnswers,
   snippetCountOfState,
 } from './context.js';
-import { buildQuestions, GLOBAL_INSTRUCTION, SNIPPET_LEVELS } from './questions.js';
+import {
+  buildQuestions,
+  GLOBAL_INSTRUCTION,
+  SNIPPET_LEVELS,
+  TEMPORAL_SNIPPET_CRITERIA,
+} from './questions.js';
 import { estimateTokens } from '../tokens.js';
 import type { JevCandidateDetailed, JevQuestion, JevState } from '../types.js';
 
@@ -123,6 +128,124 @@ describe('planAllRequest: state / questions / mapping', () => {
     const frozen = structuredClone(candidates);
     planAllRequest(candidates, 'q', 'i');
     assert.deepEqual(candidates, frozen);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 时间上下文规划（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§5/§7.5）：开关开启时
+// state 携带时间字段、片段题换冻结新题，预算在完整载荷加入后才算。
+// ---------------------------------------------------------------------------
+
+describe('planAllRequest: temporal context', () => {
+  it('adds brave_page_date (always present) per source and retrieval_time after sources', () => {
+    const candidates = [
+      { ...candidateOf('s0', ['a']), bravePageDate: '2026-10-01T13:00:00Z' },
+      { ...candidateOf('s7', ['b', 'c'], ['2', '5']), bravePageDate: null },
+    ];
+    const result = planAllRequest(candidates, 'q', 'i', {
+      retrievalTime: '2026-10-02T04:26:27.787+08:00',
+    });
+    assert.ok(result.ok);
+    const { plan } = result;
+    // 键序：brave_page_date 在片段之后；retrieval_time 在 sources 之后（冻结请求同序）
+    assert.deepEqual(Object.keys(plan.state), ['query', 'intent', 'sources', 'retrieval_time']);
+    assert.equal(plan.state.retrieval_time, '2026-10-02T04:26:27.787+08:00');
+    assert.deepEqual(Object.keys(plan.state.sources[0] ?? {}), [
+      'id',
+      'url',
+      'title',
+      'snippets',
+      'brave_page_date',
+    ]);
+    assert.equal(plan.state.sources[0]?.brave_page_date, '2026-10-01T13:00:00Z');
+    assert.equal(plan.state.sources[1]?.brave_page_date, null, '键恒在，无日期为 null');
+  });
+
+  it('omits retrieval_time when the normalized value is missing but keeps page dates', () => {
+    const candidates = [{ ...candidateOf('s0', ['a']), bravePageDate: '2026-10-01' }];
+    const result = planAllRequest(candidates, 'q', 'i', {});
+    assert.ok(result.ok);
+    assert.equal('retrieval_time' in result.plan.state, false);
+    assert.equal(result.plan.state.sources[0]?.brave_page_date, '2026-10-01');
+  });
+
+  it('uses the frozen score question for snip keys while source questions keep the namespace conversion', () => {
+    const candidates = [candidateOf('s0', ['a']), candidateOf('s7', ['b', 'c'], ['2', '5'])];
+    const result = planAllRequest(candidates, 'q', 'i', {
+      retrievalTime: '2026-10-02T04:26:27.787+08:00',
+    });
+    assert.ok(result.ok);
+    const { plan } = result;
+
+    // snip 题：冻结新题干按实际数组位置生成（s7 在位置 1），criteria 换新三档，
+    // 不带总指令前缀（附录 A 逐字）
+    const s7snip1 = plan.questions['s7__snip1'];
+    assert.ok(s7snip1);
+    assert.equal(s7snip1.type, 'score');
+    assert.ok(
+      s7snip1.instructions.startsWith(
+        'How useful is `sources[1].snippets[1]` for answering `intent`?'
+      )
+    );
+    assert.equal(s7snip1.instructions.includes(GLOBAL_INSTRUCTION), false);
+    assert.ok(s7snip1.instructions.includes("A source's `brave_page_date`"));
+    assert.deepEqual(s7snip1.criteria, TEMPORAL_SNIPPET_CRITERIA);
+    assert.equal(plan.localQuestions.s7.snip1, s7snip1, '局部表与实发评分题共用同一对象');
+
+    // 来源题：沿用 `\bsource\b` → `sources[i]` 旧转换（总指令 + 原题意）
+    assert.equal(
+      plan.questions['s7__is_off_topic']?.instructions,
+      GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[1]') +
+        ' `sources[1]` is not about the subject of `query`.'
+    );
+    assert.equal(plan.questions['s7__is_off_topic']?.type, 'noul');
+
+    // 题键与键序不变：每来源 4 道来源题 + 逐片段 snip，键结构与非 temporal 完全一致
+    assert.deepEqual(
+      Object.keys(plan.questions).filter((key) => key.startsWith('s7__')),
+      [
+        's7__has_original_reasoning',
+        's7__is_template_filler',
+        's7__is_off_topic',
+        's7__is_listing',
+        's7__snip0',
+        's7__snip1',
+      ]
+    );
+    // 映射键结构同源：投影不依赖题干
+    assert.deepEqual(Object.keys(plan.entries[1]?.question_keys ?? {}), [
+      'has_original_reasoning',
+      'is_template_filler',
+      'is_off_topic',
+      'is_listing',
+      'snip0',
+      'snip1',
+    ]);
+  });
+
+  it('estimates the budget on the final payload: dates and new questions included before the 32k/64k check', () => {
+    // 记账不变式：planned_estimates 必须等于对最终 state + questions 重算的结果
+    // ——若预算先按旧短题估算、临发替换长题，这里就会不相等
+    const candidates = [
+      { ...candidateOf('s0', ['a'.repeat(500)]), bravePageDate: '2026-10-01' },
+      candidateOf('s7', ['b'.repeat(500), 'c'.repeat(500)]),
+    ];
+    const result = planAllRequest(candidates, 'q', 'i', {
+      retrievalTime: '2026-10-02T04:26:27.787+08:00',
+    });
+    assert.ok(result.ok);
+    const { plan } = result;
+    const recomputed = allBudgetEstimatesOf(plan.state, plan.questions);
+    assert.deepEqual(plan.estimates, recomputed);
+
+    // 冻结新题比旧短题长得多：state 里两个 500 字片段 + 4 道新题的估算显著高于
+    // 旧题版本——估算对象确实是完整载荷（旧题单题 ≈ 30 token，新题 ≈ 190 token）
+    const legacy = planAllRequest(candidates, 'q', 'i');
+    assert.ok(legacy.ok);
+    assert.ok(
+      plan.estimates.longest_question_tokens > legacy.plan.estimates.longest_question_tokens
+    );
+    assert.ok(plan.estimates.state_tokens > legacy.plan.estimates.state_tokens);
   });
 });
 

@@ -45,15 +45,16 @@ import { buildStatusLine } from './statusline.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
 import { createFilterStats, createNoKeyJevStats } from './stats.js';
+import { mergePageDates, normalizeRetrievalTime, selectPageDate } from './temporal.js';
 import type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,
   ClassifyDeps,
   ClassifyOutcome,
+  FilterCallContext,
   FilterConfig,
   FilterDeps,
   FilteredResponse,
-  FilterRequest,
   FilterResult,
   FilterStats,
   GitHubCleanupAction,
@@ -186,7 +187,7 @@ const PAYWALL_MARKERS: readonly string[] = [...PAYWALL_MARKERS_EN, ...PAYWALL_MA
  * 重复判定按原序只与同来源内**已幸存**片段比，保留先出现者。`snippets_prefiltered`
  * 记空片段（nav）与 boilerplate 两类之和，`dup_removed` 单独记，`paywall_truncated`
  * 只记截断后保留的，`github_cleanup_actions` 记 GitHub 清洗动作数（清洗后为空的片段
- * 整片删走 boilerplate 语义）。「短且无实词」预筛已随 filter-rules-13 退役——第二十
+ * Topics 整片删走 boilerplate 语义，About 回声走 dup）。「短且无实词」预筛已随 filter-rules-13 退役——第二十
  * 四轮消融实证该条件误伤真实内容，片段级质量判断交 Jev 评分。
  */
 const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub: boolean): void => {
@@ -443,7 +444,7 @@ const finalizeStats = (stats: FilterStats, table: WorkSource[]): void => {
 
 /** 把适配行传入的请求归一成统计表的 `request` 摘要，上限缺省填 Brave 默认值。 */
 const toStatsRequest = (
-  request: { params: FilterRequest; intent: string },
+  request: FilterCallContext,
   config: FilterConfig
 ): FilterStats['request'] => {
   const { params } = request;
@@ -478,14 +479,17 @@ const toStatsRequest = (
  * 报类型错——tsx 不查类型，`npm run build` 是唯一漏改闸（Pitfall 1）。
  *
  * @param data Brave LLM Context 响应（已过上游 zod 校验）
- * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带
+ * @param request `params` 是 `RequestParamsSchema.parse` 的结果，`intent` 单独携带；
+ *   `retrievalTime`（可选）是宿主发起 Brave 请求前捕获的检索时间——时间上下文开关
+ *   开启时进入 Jev state（`retrieval_time`），同一搜索的 all、single 回退与重试
+ *   共用该值；未提供或非法时省略字段，绝不读取系统时间冒充
  * @param config 过滤配置；省略时为全默认配置（mode off）
  * @param deps Phase 2 注入点：`classify` 缺省时 on/test 记 no_key
  * @returns `{ result, stats }` 的 Promise；`result` 与输入同形，`stats` 是本次调用新建的对象
  */
 export async function filterLlmContext(
   data: BraveLlmContextResponse,
-  request: { params: FilterRequest; intent: string },
+  request: FilterCallContext,
   config: FilterConfig = parseFilterConfigObject({}),
   deps?: FilterDeps
 ): Promise<FilterResult> {
@@ -559,11 +563,12 @@ const snippetKeyOf = (snippet: WorkSnippet): string =>
 
 /** 带身份候选 → 纯文本候选（探测/重录与步 5 派发的既有消费形状）。 */
 const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
-  detailed.map(({ id, url, title, snippets }) => ({
+  detailed.map(({ id, url, title, snippets, bravePageDate }) => ({
     id,
     url,
     title,
     snippets: snippets.map((snippet) => snippet.text),
+    ...(bravePageDate !== undefined ? { brave_page_date: bravePageDate } : {}),
   }));
 
 /**
@@ -571,16 +576,45 @@ const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
  * `s{source.index}`（与探测脚本 `s0..s11` 约定一致），`url` / `title` 用工作表
  * 原值，`snippets` 取幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段）
  * 及其配对身份，顺序即表序（Brave 原序）。只读表，不翻标记、不重排（RULES-08）。
+ *
+ * 页面日期（时间上下文，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：按
+ * `s{braveIndex}` 与原 URL 的映射从各来源**原 Brave 元数据** `age` 选出（selectPageDate），
+ * 绑定来源身份——绝不在候选数组压缩后按下标读原始元数据。步 2 归并的候选统计
+ * 全部贡献原来源（宿主索引 ∪ 幸存片段的 mergedFrom），日期不同或部分未知统一
+ * null（mergePageDates），不把 A 的日期贴到 B 的事实上。开关关闭时也保留原候选
+ * 结构，不添加日期字段。
  */
-const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => {
+const jevCandidatesFromTable = (
+  table: WorkSource[],
+  temporalContext: boolean
+): JevCandidateDetailed[] => {
+  const pageDateByIndex = new Map<number, string | null>(
+    temporalContext ? table.map((source) => [source.index, selectPageDate(source.meta)]) : []
+  );
   const candidates: JevCandidateDetailed[] = [];
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
-    const snippets = source.snippets
-      .filter((snippet) => snippet.kept)
-      .map((snippet) => ({ key: snippetKeyOf(snippet), text: snippet.text }));
-    if (snippets.length < 1) continue;
-    candidates.push({ id: `s${source.index}`, url: source.url, title: source.title, snippets });
+    const surviving = source.snippets.filter((snippet) => snippet.kept);
+    if (surviving.length < 1) continue;
+    const snippets = surviving.map((snippet) => ({
+      key: snippetKeyOf(snippet),
+      text: snippet.text,
+    }));
+    // 贡献原来源 = 宿主本身（候选身份即它的 URL / 标题）∪ 并入片段的原索引
+    const contributorIndexes = new Set<number>([source.index]);
+    for (const snippet of surviving) {
+      if (snippet.mergedFrom !== undefined) contributorIndexes.add(snippet.mergedFrom);
+    }
+    const bravePageDate = mergePageDates(
+      [...contributorIndexes].map((index) => pageDateByIndex.get(index) ?? null)
+    );
+    candidates.push({
+      id: `s${source.index}`,
+      url: source.url,
+      title: source.title,
+      snippets,
+      ...(temporalContext ? { bravePageDate } : {}),
+    });
   }
   return candidates;
 };
@@ -618,7 +652,7 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => 
  */
 const runJevStage = async (
   table: WorkSource[],
-  request: { params: FilterRequest; intent: string },
+  request: FilterCallContext,
   classify: ClassifyDeps['classify'],
   stats: FilterStats,
   config: FilterConfig
@@ -627,6 +661,13 @@ const runJevStage = async (
   dispatches: JevDispatchRecord[];
   requests: JevRequestRecord[];
 }> => {
+  // 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：开关关闭恒 undefined
+  // ——state 不加时间字段、题目保持旧形态（完整功能回退）。开关开启时归一检索时间
+  // 一次，all、single 回退与重试共用同一值；值非法时 state 省略 retrieval_time 但
+  // 页面日期照常携带。绝不隐式读取系统时间（回放必须显式携带日志原 ts）。
+  const temporal = config.jev.temporalContext
+    ? { retrievalTime: normalizeRetrievalTime(request.retrievalTime) }
+    : undefined;
   const jev: JevStats = {
     n_requests: 0,
     input_tokens: 0,
@@ -637,7 +678,7 @@ const runJevStage = async (
     requests: [],
   };
   // 带身份候选（04-04 R1）：派发记录需要片段配对身份与候选口径文本，plain 形状给不出
-  const candidates = jevCandidatesFromTable(table);
+  const candidates = jevCandidatesFromTable(table, config.jev.temporalContext);
 
   // 先按表序给每个 keep 来源立 skipped 占位行，候选来源派发后覆盖——per_source
   // 天然保持 Brave 原序（RULES-08），顺序由 Map 的插入序保证；无候选的来源
@@ -746,7 +787,9 @@ const runJevStage = async (
 
   // —— all 组织（计划 §3 表格）：仅多候选且规划通过才发一次全量请求 ——
   if (requestedMode === 'all' && candidates.length > 1) {
-    const planResult = planAllRequest(candidates, request.params.query, request.intent);
+    // temporal 开启时：state 携带时间字段、片段用冻结新题；完整日期与新题加入后
+    // 才做双限额预算检查（planAllRequest 内部顺序，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §7.5）
+    const planResult = planAllRequest(candidates, request.params.query, request.intent, temporal);
     if (planResult.ok) {
       useAll = true;
       const plan = planResult.plan;
@@ -867,13 +910,22 @@ const runJevStage = async (
   // —— single 组织：requested=single，或 all 的单候选 / 超限 / 防御回退 ——
   if (!useAll) {
     const dispatch = async (candidate: JevCandidateDetailed): Promise<void> => {
+      // single（含 all 回退）的时间输入（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §3）：
+      // 开关开启时 state 也携带检索时间与页面日期，但评分题沿用旧模板——真实内容
+      // 验证的是 all 新题，不能机械改字段名就宣称单来源等效
       const state = buildState(
         candidate.id,
         candidate.url,
         candidate.title,
         candidate.snippets.map((snippet) => snippet.text),
         request.params.query,
-        request.intent
+        request.intent,
+        temporal !== undefined
+          ? {
+              retrievalTime: temporal.retrievalTime,
+              bravePageDate: candidate.bravePageDate ?? null,
+            }
+          : undefined
       );
       const questions = buildQuestions(state.source.snippets);
       const record: JevRequestRecord = {
@@ -1062,7 +1114,7 @@ const runOffChain = (
  */
 export function collectJevCandidates(
   data: BraveLlmContextResponse,
-  request: { params: FilterRequest; intent: string },
+  request: FilterCallContext,
   config: FilterConfig
 ): JevCandidate[] {
   return toPlainCandidates(collectJevCandidatesDetailed(data, request, config));
@@ -1078,12 +1130,12 @@ export function collectJevCandidates(
  */
 export function collectJevCandidatesDetailed(
   data: BraveLlmContextResponse,
-  request: { params: FilterRequest; intent: string },
+  request: FilterCallContext,
   config: FilterConfig
 ): JevCandidateDetailed[] {
   const table = buildWorkTable(data);
   const stats = createFilterStats('off', toStatsRequest(request, config), data);
   runLocalRules(table, stats, config);
 
-  return jevCandidatesFromTable(table);
+  return jevCandidatesFromTable(table, config.jev.temporalContext);
 }

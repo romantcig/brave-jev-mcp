@@ -22,6 +22,7 @@ import type {
   FilterRequest,
   JevAllState,
   JevQuestion,
+  JevSingleState,
 } from '../types.js';
 import { buildRequest, createJevClassifier, hasJevKey, JEVI_ENDPOINT } from './client.js';
 import { parseJevResponse } from './client.js';
@@ -405,6 +406,7 @@ const jevConfig = {
   timeoutMs: 15000,
   concurrency: 12,
   contextMode: 'single' as const,
+  temporalContext: false as const,
 };
 
 /** 轮询直到条件成立（并发闸用例的挂起计数同步）；超时失败。 */
@@ -1102,6 +1104,51 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 // ---------------------------------------------------------------------------
 
 describe('createJevClassifier oversize ladder (JEV-05)', () => {
+  for (const scenario of ['cut_tail', 'source_only_questions'] as const) {
+    it(`时间字段经过 ${scenario} 和 HTTP 重试后保持原值`, async () => {
+      const retrievalTime = '2026-10-03T23:59:59.900+08:00';
+      const bravePageDate = '2024-01-01T12:00:00Z';
+      const snippets =
+        scenario === 'cut_tail'
+          ? ['useful text', 'word '.repeat(34000)]
+          : Array.from({ length: 500 }, (_, i) => `small snippet ${i}, measured in 2024.`);
+      const state = buildState('s0', 'https://a.example/', 'Title', snippets, 'q', 'i', {
+        retrievalTime,
+        bravePageDate,
+      });
+      const seen: Array<{ state: JevSingleState; questions: Record<string, JevQuestion> }> = [];
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = async (_input, init) => {
+        seen.push(JSON.parse(String(init?.body)));
+        return seen.length === 1
+          ? new Response('retry', { status: 503 })
+          : okResponseOf(defaultRecording.results.s0);
+      };
+      try {
+        const classifier = createJevClassifier(
+          jevConfig,
+          { TYPESAFE_API_KEY: 'k' },
+          { sleep: async () => {}, random: () => 0 }
+        );
+        const outcome = await classifier.classify({ state, questions: buildQuestions(snippets) });
+        assert.equal(outcome.status, 'answered');
+        assert.equal(outcome.ladder, scenario);
+        assert.equal(seen.length, 2);
+        assert.deepEqual(seen[0], seen[1], '重试必须复用完整实发载荷');
+        assert.equal(seen[0].state.retrieval_time, retrievalTime);
+        assert.equal(seen[0].state.source.brave_page_date, bravePageDate);
+        assert.equal(seen[0].state.source.snippets.length, scenario === 'cut_tail' ? 1 : 500);
+        assert.ok(
+          Object.values(seen[0].questions).every((q) => !q.instructions.includes('`sources'))
+        );
+        assert.equal(seen[0].questions.snip0?.type, scenario === 'cut_tail' ? 'score' : undefined);
+        assert.deepEqual(outcome.dispatch, { state: seen[0].state, questions: seen[0].questions });
+        assert.equal(state.source.snippets.length, snippets.length);
+      } finally {
+        globalThis.fetch = savedFetch;
+      }
+    });
+  }
   it('cuts tail snippets and their snip questions when the 32k limit is exceeded (cut_tail)', async () => {
     // 尾片段 34000 个词 ≈ 34000 tokens：(estState + max estQ) × 1.15 远超 32000，
     // 砍掉尾部大片段后余下 4 个小片段满足限额

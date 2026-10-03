@@ -20,6 +20,7 @@ import {
   filterLlmContext,
   hasJevKey,
   loadFilterConfig,
+  localIsoWithOffset,
   logRaisedToStderr,
   resolveToolDescription,
   withAdjustments,
@@ -158,6 +159,15 @@ export const execute = async (params: QueryParams) => {
   // ts 与目录日期（B-01）。
   const samplePath: AllocatedSamplePath | undefined = samples?.allocatePath(requestId);
 
+  // 检索时间捕获（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：发起 Brave 请求前取
+  // 一次——test 模式复用样本锚点 Date（样本 ts 与 retrieval_time 同源，回放可复现），
+  // 其他模式同位置取一次；`localIsoWithOffset` 口径得到带时区 ISO 字符串。时间上下文
+  // 开关关闭时管道忽略该值（state 不加字段）；同一搜索的 all、single 回退与重试
+  // 共用同一值。只进过滤内部上下文，不进公开 MCP schema、不混入 Brave 查询参数。
+  const retrievalTime = localIsoWithOffset(
+    samplePath !== undefined ? samplePath.capturedAt : new Date()
+  );
+
   // Brave 请求计时（D-10）：计时点在适配行——API.issueRequest 前后，差值回填进
   // stats.brave.latency_ms；Brave 报错时不回填（无 stats，走错误记录）。
   const braveStartedAt = Date.now();
@@ -208,7 +218,7 @@ export const execute = async (params: QueryParams) => {
   if (success) {
     filtered = await filterLlmContext(
       data,
-      { params: parsedParams, intent: params.intent },
+      { params: parsedParams, intent: params.intent, retrievalTime },
       config,
       jevDepsFor(config)
     );

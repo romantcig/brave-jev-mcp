@@ -27,6 +27,7 @@ export { QUESTION_SET_ID } from './jev/questions.js';
 export { resolveToolDescription } from './description.js';
 export { createLogWriter } from './logging.js';
 export type { LogErrorStage, LogSamplePointer, LogWriteMeta, LogWriter } from './logging.js';
+export { localIsoWithOffset } from './logging.js';
 export { filterLlmContext, trimSourceMeta } from './pipeline.js';
 export { createSampleWriter } from './sample.js';
 export { FILTER_RULES_VERSION } from './version.js';
@@ -52,6 +53,7 @@ export type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,
   ClassifyDeps,
+  FilterCallContext,
   FilterConfig,
   FilterDeps,
   FilteredResponse,

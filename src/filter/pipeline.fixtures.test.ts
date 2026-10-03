@@ -451,7 +451,13 @@ describe('budget trimming on a real fixture', () => {
         overfetchFactor: 2,
         blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
+        jev: {
+          model: DEFAULT_JEV_MODEL,
+          timeoutMs: 15000,
+          concurrency: 12,
+          contextMode: 'single',
+          temporalContext: false,
+        },
         logDir: join(homedir(), '.brave-jev', 'logs'),
       }
     );

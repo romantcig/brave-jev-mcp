@@ -249,8 +249,18 @@ export type SampleJev = {
 export type SampleConfigSnapshot = {
   /** 九项生效阈值（THRESHOLD_SPECS 投影 snake_case） */
   thresholds: Record<string, number>;
-  /** Jev 客户端配置（v4 加 context_mode——请求组织，FULL_CONTEXT_ROLLOUT_PLAN §3） */
-  jev: { model: string; timeout_ms: number; concurrency: number; context_mode: JevRequestMode };
+  /**
+   * Jev 客户端配置（v4 加 context_mode——请求组织，FULL_CONTEXT_ROLLOUT_PLAN §3；
+   * temporal_context——时间上下文开关，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §3）。
+   * 键为可选面新增：旧 v4 样本无 temporal_context 键，读取按缺省 false 理解。
+   */
+  jev: {
+    model: string;
+    timeout_ms: number;
+    concurrency: number;
+    context_mode: JevRequestMode;
+    temporal_context?: boolean;
+  };
   overfetch_factor: number;
   mode: FilterMode;
   /** 结构性黑名单 host 集（排序稳定） */
@@ -566,6 +576,7 @@ const buildRecord = (
       timeout_ms: config.jev.timeoutMs,
       concurrency: config.jev.concurrency,
       context_mode: config.jev.contextMode,
+      temporal_context: config.jev.temporalContext,
     },
     overfetch_factor: config.overfetchFactor,
     mode: config.mode,
@@ -607,6 +618,7 @@ const buildErrorRecord = (
       timeout_ms: config.jev.timeoutMs,
       concurrency: config.jev.concurrency,
       context_mode: config.jev.contextMode,
+      temporal_context: config.jev.temporalContext,
     },
     overfetch_factor: config.overfetchFactor,
     mode: config.mode,

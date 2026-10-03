@@ -123,6 +123,8 @@ Searches for points of interest (POIs) in a specified geographic area using Brav
 - `user-agent` (string, optional): User agent originating the request
 
 ### LLM Context (`brave_llm_context`)
+
+This fork includes an optional Jev page filter. See [filter configuration and temporal-context rollout](FILTERING.md) for configuration, sample records, and rollback behavior.
 Retrieves pre-extracted web content optimized for AI agents, LLM grounding, and RAG pipelines.
 
 **Parameters:**

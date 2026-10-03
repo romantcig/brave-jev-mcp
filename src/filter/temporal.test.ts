@@ -1,0 +1,129 @@
+/**
+ * 时间上下文纯数据帮助函数单测（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§7.2）：
+ * 页面日期选择（绝对 ISO 优先、纯日期次选、相对时间不倒推）、归并冲突消解
+ * （相同保留、不同或部分未知置 null）、检索时间归一（非法一律省略，绝不读系统时间）。
+ * 合法输入与冻结请求保持一致；非法输入额外拒绝，不把格式前缀当成日期证据。
+ */
+
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { mergePageDates, normalizeRetrievalTime, selectPageDate } from './temporal.js';
+
+describe('selectPageDate', () => {
+  it('拒绝不存在的日期和残缺时间，并继续寻找合法日期', () => {
+    for (const bad of [
+      '2026-02-29',
+      '2026-04-31',
+      '2026-13-01',
+      '2026-00-01',
+      '2026-01-00',
+      '2026-02-30T12:00:00Z',
+      '2026-10-01T',
+      '2026-10-01T25:00:00Z',
+      '2026-10-01T12:60:00Z',
+      '2026-10-01T12:00:00+99:00',
+      '2026-10-01\n',
+      '2026-10-01T12:00:00Z\n',
+    ]) {
+      assert.equal(selectPageDate({ age: [bad] }), null, bad);
+      assert.equal(selectPageDate({ age: [bad, '2026-10-01'] }), '2026-10-01', bad);
+    }
+    assert.equal(selectPageDate({ age: ['2024-02-29'] }), '2024-02-29');
+    assert.equal(selectPageDate({ age: ['1900-02-29'] }), null);
+    assert.equal(selectPageDate({ age: ['2000-02-29'] }), '2000-02-29');
+    assert.equal(selectPageDate({ age: ['2026-10-01T00:00:00'] }), '2026-10-01T00:00:00');
+  });
+  it('prefers the first absolute ISO time element and keeps the original string', () => {
+    assert.equal(
+      selectPageDate({ age: ['2026-10-01', '2026-10-01T13:00:00Z'] }),
+      '2026-10-01T13:00:00Z'
+    );
+    assert.equal(
+      selectPageDate({ age: ['Wed', '2026-09-16T00:00:00Z', '1 week ago'] }),
+      '2026-09-16T00:00:00Z'
+    );
+  });
+
+  it('falls back to the first plain YYYY-MM-DD element when no absolute time exists', () => {
+    assert.equal(selectPageDate({ age: ['Wed', '2026-09-16', '1 week ago'] }), '2026-09-16');
+    assert.equal(selectPageDate({ age: ['3 days ago', '2024-01-12'] }), '2024-01-12');
+  });
+
+  it('returns null for relative-only ages: no day-counting, no today substitution', () => {
+    assert.equal(selectPageDate({ age: ['3 days ago'] }), null);
+    assert.equal(selectPageDate({ age: [] }), null);
+    assert.equal(selectPageDate({ age: ['Wednesday, September 16, 2026'] }), null);
+  });
+
+  it('returns null for missing or malformed metadata without throwing', () => {
+    assert.equal(selectPageDate(undefined), null);
+    assert.equal(selectPageDate({}), null);
+    assert.equal(selectPageDate({ age: '2026-09-16' } as unknown as { age: string[] }), null);
+    assert.equal(selectPageDate({ age: [42, null] } as unknown as { age: string[] }), null);
+  });
+
+  it('does not let a date-only string match the absolute pattern or vice versa', () => {
+    // 纯日期不满足绝对时间判定（要求 T 开头的时间部分）；带时间的字串也不会
+    // 落进纯日期分支——优先级由两个独立模式保证
+    assert.equal(selectPageDate({ age: ['2026-09-16T00:00:00Z'] }), '2026-09-16T00:00:00Z');
+    assert.equal(selectPageDate({ age: ['2026-09-16'] }), '2026-09-16');
+  });
+});
+
+describe('mergePageDates', () => {
+  it('keeps a single known date and identical dates across contributors', () => {
+    assert.equal(mergePageDates(['2026-10-01']), '2026-10-01');
+    assert.equal(
+      mergePageDates(['2026-10-01T13:00:00Z', '2026-10-01T13:00:00Z']),
+      '2026-10-01T13:00:00Z'
+    );
+  });
+
+  it('collapses to null when contributor dates differ', () => {
+    assert.equal(mergePageDates(['2026-10-01', '2026-10-02']), null);
+    assert.equal(mergePageDates(['2026-10-01', '2026-10-01T13:00:00Z']), null);
+  });
+
+  it('collapses to null when dates are partially unknown (no partial attribution)', () => {
+    assert.equal(mergePageDates(['2026-10-01', null]), null);
+    assert.equal(mergePageDates([null, '2026-10-01']), null);
+  });
+
+  it('returns null for all-unknown contributors and the empty list', () => {
+    assert.equal(mergePageDates([null]), null);
+    assert.equal(mergePageDates([null, null]), null);
+    assert.equal(mergePageDates([]), null);
+  });
+});
+
+describe('normalizeRetrievalTime', () => {
+  it('拒绝伪日期、缺少时区和宽松 Date.parse 接受的非 ISO 值', () => {
+    for (const value of [
+      '2026-02-30T12:00:00Z',
+      '2026-10-01',
+      '2026-10-01T00:00:00',
+      '10/01/2026',
+      '42',
+      '2026-10-01T24:00:00Z',
+      '2026-10-01T12:00:00+99:00',
+    ]) {
+      assert.equal(normalizeRetrievalTime(value), undefined, value);
+    }
+  });
+  it('passes through valid ISO timestamps verbatim (replay uses the log ts unchanged)', () => {
+    assert.equal(
+      normalizeRetrievalTime('2026-10-02T04:26:27.787+08:00'),
+      '2026-10-02T04:26:27.787+08:00'
+    );
+    assert.equal(normalizeRetrievalTime('2026-10-02T04:26:27Z'), '2026-10-02T04:26:27Z');
+  });
+
+  it('rejects blank, garbage, and non-string values so the field is omitted', () => {
+    assert.equal(normalizeRetrievalTime(''), undefined);
+    assert.equal(normalizeRetrievalTime('   '), undefined);
+    assert.equal(normalizeRetrievalTime('not a date'), undefined);
+    assert.equal(normalizeRetrievalTime(42), undefined);
+    assert.equal(normalizeRetrievalTime(null), undefined);
+    assert.equal(normalizeRetrievalTime(undefined), undefined);
+  });
+});

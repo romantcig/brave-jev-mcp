@@ -302,7 +302,13 @@ describe('filterLlmContext step 2', () => {
     overfetchFactor: 1,
     blocklist: new Set(),
     thresholds: { ...DEFAULT_THRESHOLDS },
-    jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency: 12, contextMode: 'single' },
+    jev: {
+      model: DEFAULT_JEV_MODEL,
+      timeoutMs: 15000,
+      concurrency: 12,
+      contextMode: 'single',
+      temporalContext: false,
+    },
     logDir: join(homedir(), '.brave-jev', 'logs'),
   };
   const request = { params: { query: 'jev release' }, intent: 'What TypeSafe released' };

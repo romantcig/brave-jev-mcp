@@ -16,10 +16,24 @@
 export type FilterMode = 'off' | 'test' | 'on';
 
 /**
+ * 过滤调用的内部上下文：`params` + `intent` + 可选检索时间。`retrievalTime` 由
+ * 宿主在发起 Brave 请求前捕获一次（带时区 ISO 字符串，`localIsoWithOffset` 口径），
+ * 经内部形状传入——不进公开 MCP schema、不混入发给 Brave 的查询参数；同一搜索的
+ * all、single 回退与 HTTP 重试必须共用同一个值。时间上下文开关关闭、字段未提供
+ * 或值非法时，管道省略 state 的时间字段（temporal.ts 的归一口径）。
+ */
+export type FilterCallContext = {
+  params: FilterRequest;
+  intent: string;
+  /** 宿主捕获的检索时间；开关关闭或未提供 / 非法时省略 state 字段 */
+  retrievalTime?: string;
+};
+
+/**
  * 适配行从 `RequestParamsSchema.parse` 结果里传进来的查询参数。
  * 只声明库关心的字段；调用方对象带多余字段也能赋值。`intent` 不在这里——
  * 它不属于 Brave 查询参数（不能转发给 Brave），由 `filterLlmContext` 的
- * 第二个实参 `{ params, intent }` 单独携带。
+ * 第二个实参（`FilterCallContext`）单独携带。
  */
 export type FilterRequest = {
   query: string;
@@ -47,14 +61,23 @@ export type FilterConfig = {
   blocklist: ReadonlySet<string>;
   /** 九项 Jev 阈值；坏值逐项回落 `DEFAULT_THRESHOLDS`（EMBED-05） */
   thresholds: JevThresholds;
-  /** Jev 客户端配置：钉版模型、超时纯兜底、进程级并发闸初值（02-05 消费）与
-   * 请求组织模式（四题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §3） */
+  /** Jev 客户端配置：钉版模型、超时纯兜底、进程级并发闸初值（02-05 消费）、
+   * 请求组织模式（四题全量上下文，FULL_CONTEXT_ROLLOUT_PLAN §3）与时间上下文
+   * 开关（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §3） */
   jev: {
     model: string;
     timeoutMs: number;
     concurrency: number;
     /** 请求组织：single 逐来源一次请求（默认）；all 全候选共享一次请求 */
     contextMode: JevRequestMode;
+    /**
+     * 时间上下文开关（配置键 `jev.temporal_context`，默认 false）：true 时 state
+     * 携带 `retrieval_time` 与每来源 `brave_page_date`，all 模式片段改用冻结的
+     * 时间上下文评分新题；false 精确保留旧请求形态与旧评分题（完整功能回退，
+     * 关闭即恢复旧题与旧 state）。single（含 all 回退）沿用旧评分题，仅添加
+     * 时间字段——单来源新题不在本次试运行范围。
+     */
+    temporalContext: boolean;
   };
   /** JSONL 日志目录；开头的 `~` 已在解析时展开为本机 home */
   logDir: string;
@@ -72,12 +95,18 @@ export type FilterDeps = {
  * `id` 用探测约定 `s{braveIndex}`（与 `.jev.json` 回放夹具的 `results` 键同源）；
  * `snippets` 是幸存片段的当前文本（含步 1 转出的多段与步 2 并入的片段），顺序即表序。
  * 重录 dump 与管道步 5 共用同一口径（02-01）。
+ *
+ * `brave_page_date`（时间上下文，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：该候选
+ * 的统一页级日期——从原 Brave 元数据 `age` 选出的合法绝对日期字串；步 2 归并候选
+ * 的多个贡献原来源日期不同或部分未知时为 null。开关关闭时不进 state（键省略）。
  */
 export type JevCandidate = {
   id: string;
   url: string;
   title: string;
   snippets: string[];
+  /** 统一页级日期线索；开关关闭时不进 state，归并冲突或无日期为 null */
+  brave_page_date?: string | null;
 };
 
 /**
@@ -89,13 +118,17 @@ export type JevCandidateSnippetIdentity = { key: string; text: string };
 
 /**
  * 候选集的带身份形状（04-02）：JevCandidate 口径 + 片段配对身份。全量请求规划
- * （jev/context.ts）用它保留片段身份映射。
+ * （jev/context.ts）用它保留片段身份映射。`bravePageDate` 是库内部 camelCase 的
+ * 统一页级日期（与 JevCandidate 的 `brave_page_date` state 字段同值，命名规则见
+ * 文件头）——由管道从原 Brave 元数据选出并在归并冲突时置 null（temporal.ts）。
  */
 export type JevCandidateDetailed = {
   id: string;
   url: string;
   title: string;
   snippets: JevCandidateSnippetIdentity[];
+  /** 统一页级日期线索；无日期或归并冲突为 null，未提取时省略 */
+  bravePageDate?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -111,6 +144,11 @@ export type JevQuestion = {
 
 /**
  * 单来源 state：官方"context rot"规则——只放问题需要的东西，不放元数据与被删片段。
+ *
+ * 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：开关开启时 `source` 携带
+ * `brave_page_date`（string | null，键恒在），state 顶层携带 `retrieval_time`（值
+ * 非法 / 未提供时省略）；片段评分题沿用旧模板（single 新题不在试运行范围）。开关
+ * 关闭时两个键都不出现——哪怕内部调用携带了时间（完整功能回退）。
  */
 export type JevSingleState = {
   query: string;
@@ -120,7 +158,11 @@ export type JevSingleState = {
     url: string;
     title: string;
     snippets: string[];
+    /** 页面日期线索（开关开启时键恒在，无日期 / 归并冲突为 null） */
+    brave_page_date?: string | null;
   };
+  /** 检索时间（开关开启且提供了合法值时出现；同一搜索全路径同值） */
+  retrieval_time?: string;
 };
 
 /**
@@ -129,11 +171,18 @@ export type JevSingleState = {
  * 来源 ID 继续用 `s{braveIndex}` 不重编号——`sources[i]` 的 i 是当前数组位置，**不
  * 等于来源 ID 的数字**（前面来源被删不重排）。元素形状与 `JevCandidate` 同构
  * （id / url / title / 幸存片段文本），不放原始响应、被预筛删除的段落或其他字段。
+ *
+ * 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4）：开关开启时每个来源带
+ * `brave_page_date`（string | null，键恒在，与冻结请求一致）、state 顶层带
+ * `retrieval_time`（合法值才有）；片段 score 题改用冻结的时间上下文新题（§5）。
+ * 预算检查在完整日期与新题全部加入后才做——不能先按旧短题估预算、临发时替换。
  */
 export type JevAllState = {
   query: string;
   intent: string;
   sources: JevCandidate[];
+  /** 检索时间（开关开启且提供了合法值时出现；同一搜索全路径同值） */
+  retrieval_time?: string;
 };
 
 /**

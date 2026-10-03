@@ -36,7 +36,10 @@ import {
   QUESTION_SET_ID,
   SNIPPET_LEVELS,
   SOURCE_QUESTIONS,
+  TEMPORAL_SNIPPET_CRITERIA,
   buildState,
+  singleScoreInstructions,
+  temporalScoreInstructions,
 } from './jev/questions.js';
 import { createJevClassifier } from './jev/client.js';
 import { filterLlmContext } from './pipeline.js';
@@ -63,7 +66,13 @@ const configOf = (logDir: string, concurrency = 12): FilterConfig => ({
   overfetchFactor: 1,
   blocklist: new Set(['farm.example', 'a.farm.example']),
   thresholds: { ...DEFAULT_THRESHOLDS },
-  jev: { model: DEFAULT_JEV_MODEL, timeoutMs: 15000, concurrency, contextMode: 'single' },
+  jev: {
+    model: DEFAULT_JEV_MODEL,
+    timeoutMs: 15000,
+    concurrency,
+    contextMode: 'single',
+    temporalContext: false,
+  },
   logDir,
 });
 
@@ -223,10 +232,20 @@ const answeredText = (body: CapturedRequest): string => {
 describe('QUESTION_SET_ID', () => {
   it('is 12 lowercase hex chars derived from the normalized question bank (recipe pinned)', () => {
     assert.match(QUESTION_SET_ID, /^[0-9a-f]{12}$/);
-    // 食谱镜像：总指令、来源题与片段评分 legend 的规范化 JSON SHA-256 前 12 位——
-    // 意外改配方（键序、包裹方式）会在这里红
+    // 食谱镜像：总指令、来源题、旧 score 完整模板、旧三档 legend、时间上下文新题
+    // 完整模板及其 criteria 的规范化 JSON SHA-256 前 12 位——意外改配方（键序、
+    // 包裹方式、漏掉新题干）会在这里红（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5）
     const expected = createHash('sha256')
-      .update(JSON.stringify([GLOBAL_INSTRUCTION, SOURCE_QUESTIONS, SNIPPET_LEVELS]))
+      .update(
+        JSON.stringify([
+          GLOBAL_INSTRUCTION,
+          SOURCE_QUESTIONS,
+          SNIPPET_LEVELS,
+          singleScoreInstructions(0),
+          temporalScoreInstructions(0, 0),
+          TEMPORAL_SNIPPET_CRITERIA,
+        ])
+      )
       .digest('hex')
       .slice(0, 12);
     assert.equal(QUESTION_SET_ID, expected);
@@ -488,7 +507,8 @@ describe('createSampleWriter', () => {
     // final_return 原样回放
     assert.deepEqual(sample.final_return, { payload, status_line: statusLine });
 
-    // config_snapshot：九项阈值 snake_case 投影 + jev 组（v4 加 context_mode）+ 黑名单 + mode
+    // config_snapshot：九项阈值 snake_case 投影 + jev 组（v4 加 context_mode，时间
+    // 上下文接入加 temporal_context）+ 黑名单 + mode
     const snapshot = sample.config_snapshot as Record<string, unknown>;
     assert.deepEqual(Object.keys(snapshot), [
       'thresholds',
@@ -513,6 +533,7 @@ describe('createSampleWriter', () => {
       timeout_ms: 15000,
       concurrency: 12,
       context_mode: 'single',
+      temporal_context: false,
     });
     assert.equal(snapshot.overfetch_factor, 1);
     assert.equal(snapshot.mode, 'test');

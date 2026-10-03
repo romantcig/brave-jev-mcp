@@ -8,6 +8,8 @@
  * 套局部题目，再做命名空间转换——题干引用 `\bsource\b` → `sources[i]`（i 是该
  * 来源在全量 state.sources 里的数组位置，不是来源 ID 数字），与第十六 / 十九轮
  * A 阶段的转换口径逐字一致（dev/filter-round16-quality.ts、filter-round19-retest.ts）。
+ * 时间上下文开关开启时（`temporal` 参数），片段 score 题改由冻结新题构造器按实际
+ * 数组位置直接生成（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5），来源题转换不变。
  *
  * 预算口径（计划 §5.1）：复用 `../tokens.js` 的 `estimateTokens` 与 1.15 余量，
  * 两条限额都要检查、边界含等号：
@@ -22,7 +24,7 @@
 
 import { estimateTokens } from '../tokens.js';
 import { isUsableSnippetScore } from './verdict.js';
-import { buildQuestions, SOURCE_QUESTIONS } from './questions.js';
+import { buildQuestions, buildTemporalScoreQuestion, SOURCE_QUESTIONS } from './questions.js';
 import type {
   AllBudgetEstimates,
   JevAllState,
@@ -36,6 +38,14 @@ import type {
 } from '../types.js';
 
 export type { AllBudgetEstimates } from '../types.js';
+
+/**
+ * 时间上下文参数（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§5）：提供本参数（非
+ * undefined）即开关开启——state 携带 `retrieval_time` 与每来源 `brave_page_date`，
+ * 片段 score 题改用冻结新题。`retrievalTime` 由调用方归一（合法值才有，缺失时
+ * state 省略该字段但页面日期照常携带）；页面日期已在候选上按归并冲突消解。
+ */
+export type AllTemporalContext = { retrievalTime?: string };
 
 /** 32k 限额：state + 最长单题（token；官方模型页 jev-1.13.0）。 */
 export const ALL_LIMIT_32K = 32000;
@@ -60,7 +70,7 @@ export type AllRequestPlan = {
   questions: Record<string, JevQuestion>;
   /** 显式身份映射（FULL_CONTEXT_ROLLOUT_PLAN §4.2），按候选 Brave 原序 */
   entries: JevRequestMappingEntry[];
-  /** 每来源的局部题集（sourceId → buildQuestions 原样输出），投影时用 */
+  /** 每来源的局部题集；时间评分题与实发题共用同一个构造结果。 */
   localQuestions: Record<string, Record<string, JevQuestion>>;
   estimates: AllBudgetEstimates;
 };
@@ -142,6 +152,18 @@ export function checkAllBudget(
  * （Brave 原序、来源 ID 不重编号），每候选拨同一套局部题目做命名空间转换，建立
  * 显式映射，最后做双限额预检——超限就不构造可发请求（调用方整批回退 single）。
  *
+ * 时间上下文（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §4/§5）：`temporal` 提供时
+ * （开关开启）state 携带时间字段——每来源 `brave_page_date` 键恒在（无日期 / 归并
+ * 冲突为 null，与冻结请求一致，取自候选上的统一页级日期），`retrieval_time` 仅在
+ * 传入合法值时出现、键序在 `sources` 之后；片段 score 题改用冻结新题——由
+ * `buildTemporalScoreQuestion` 直接接收**实际数组位置**与片段位置生成题干，不走
+ * `\bsource\b` 全局替换（新题干里 "A source's ..." 是普通英语）；四道来源题沿用
+ * 原有转换。完整日期与新题全部加入 state / questions **之后**才做双限额预算检查
+ * ——不能先按旧短题估算、临发时替换成长题。
+ *
+ * `localQuestions` 与实发题目同源；时间评分题直接使用实际数组位置构造，局部表
+ * 与命名空间表保存同一题对象，防止映射记录仍带旧题。
+ *
  * 纯函数：不修改入参候选；state.sources 是候选数组的新引用（元素原样），题目全部
  * 新建。入参是带配对身份的候选（片段身份键进映射条目，文本进 state）。调用方保证
  * `candidates.length >= 2`——零候选不构造空题目请求，单候选直接走 single
@@ -150,7 +172,8 @@ export function checkAllBudget(
 export function planAllRequest(
   candidates: readonly JevCandidateDetailed[],
   query: string,
-  intent: string
+  intent: string,
+  temporal?: AllTemporalContext
 ): AllPlanResult {
   const state: JevAllState = {
     query,
@@ -160,7 +183,13 @@ export function planAllRequest(
       url: candidate.url,
       title: candidate.title,
       snippets: candidate.snippets.map((snippet) => snippet.text),
+      // 开关开启时键恒在（string | null，与冻结请求逐字一致）；关闭时不出现
+      ...(temporal !== undefined ? { brave_page_date: candidate.bravePageDate ?? null } : {}),
     })),
+    // 开关开启且调用方传入合法检索时间时出现；键序在 sources 之后（冻结请求同序）
+    ...(temporal !== undefined && temporal.retrievalTime !== undefined
+      ? { retrieval_time: temporal.retrievalTime }
+      : {}),
   };
 
   const questions: Record<string, JevQuestion> = {};
@@ -169,14 +198,22 @@ export function planAllRequest(
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     const local = buildQuestions(candidate.snippets.map((snippet) => snippet.text));
+    if (temporal !== undefined) {
+      for (let snippetIndex = 0; snippetIndex < candidate.snippets.length; snippetIndex += 1) {
+        local[`snip${snippetIndex}`] = buildTemporalScoreQuestion(index, snippetIndex);
+      }
+    }
     localQuestions[candidate.id] = local;
     const questionKeys: Record<string, string> = {};
     for (const [localKey, question] of Object.entries(local)) {
       const globalKey = allQuestionKey(candidate.id, localKey);
-      questions[globalKey] = {
-        ...question,
-        instructions: toNamespaceInstructions(question.instructions, index),
-      };
+      questions[globalKey] =
+        temporal !== undefined && localKey.startsWith('snip')
+          ? question
+          : {
+              ...question,
+              instructions: toNamespaceInstructions(question.instructions, index),
+            };
       questionKeys[localKey] = globalKey;
     }
     entries.push({

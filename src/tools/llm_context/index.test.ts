@@ -5,6 +5,10 @@ import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { connectTestClient, useTestClient } from '../../testUtils/mcpTestHarness.js';
 import { JEV_CONFIG_FILE_ENV } from '../../filter/config.js';
+import { localIsoWithOffset } from '../../filter/logging.js';
+import { FILTER_RULES_VERSION } from '../../filter/version.js';
+import type { SampleRecord } from '../../filter/sample.js';
+import type { JevAllState, JevQuestion } from '../../filter/types.js';
 import { name, resetFilterStateForTest } from './index.js';
 import { LlmContextInputSchema, RequestParamsSchema } from './schemas/input.js';
 
@@ -623,6 +627,90 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     // 信封记相对 log_dir 路径：samples/<日期>/<8位十六进制摘要>.json（正斜杠口径）
     const relativePath = `samples/${basename(dirname(sampleAbsPath))}/${basename(sampleAbsPath)}`;
     assert.deepEqual(record.sample, { path: relativePath, status: 'saved' });
+  });
+
+  it('跨午夜仍复用 Brave 请求前的检索时间，test/on 同链且样本等于实发与实际返回', async (t) => {
+    const start = new Date(2026, 9, 3, 23, 59, 59, 900);
+    const anchor = localIsoWithOffset(start);
+    t.mock.timers.enable({ apis: ['Date'], now: start });
+    const savedFetch = globalThis.fetch;
+    const returns: unknown[] = [];
+    try {
+      for (const mode of ['test', 'on'] as const) {
+        t.mock.timers.setTime(start.getTime());
+        const logDir = newLogDir();
+        useFilterConfig({
+          mode,
+          log_dir: logDir,
+          jev: { context_mode: 'all', temporal_context: true },
+        });
+        const sent: Array<{ state: JevAllState; questions: Record<string, JevQuestion> }> = [];
+        globalThis.fetch = async (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          if (url.pathname === '/res/v1/llm/context') {
+            assert.equal(url.searchParams.has('retrieval_time'), false);
+            assert.equal(url.searchParams.has('retrievalTime'), false);
+            assert.equal(url.searchParams.has('temporal_context'), false);
+            assert.equal(Date.now(), start.getTime(), '捕获发生在 Brave 出站之前');
+            t.mock.timers.setTime(start.getTime() + 200);
+            return new Response(JSON.stringify(braveResponse));
+          }
+          assert.equal(url.pathname, '/v1/systemone');
+          const body = JSON.parse(String(init?.body));
+          sent.push(body);
+          const answers = Object.fromEntries(
+            Object.entries(body.questions as Record<string, JevQuestion>).map(([key, q]) => [
+              key,
+              q.type === 'score'
+                ? { type: 'score', score: key === 's1__snip0' ? 0.5 : 2 }
+                : { type: 'noul', noul: key.endsWith('has_original_reasoning') ? 0.9 : 0.1 },
+            ])
+          );
+          return new Response(
+            JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 42 } })
+          );
+        };
+        const result = await getClient().callTool({
+          name,
+          arguments: { query: 'brave browser', intent: INTENT },
+        });
+        assert.equal(result.isError ?? false, false);
+        assert.equal(result.structuredContent, undefined);
+        const content = result.content as { text: string }[];
+        assert.equal(content.length, 2);
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].state.retrieval_time, anchor);
+        assert.equal(sent[0].state.sources[0].brave_page_date, '2026-09-16T00:00:00');
+        assert.equal(sent[0].state.sources[1].brave_page_date, null);
+        assert.match(sent[0].questions.s1__snip0.instructions, /^How useful is `sources\[1\]/);
+        returns.push(JSON.parse(content[0].text));
+        if (mode === 'test') {
+          const { sample: raw } = readSingleSample(logDir);
+          const sample = raw as unknown as SampleRecord;
+          assert.equal(sample.ts, anchor);
+          assert.equal(sample.config_snapshot.jev.temporal_context, true);
+          assert.deepEqual(sample.pre_filter, braveResponse);
+          assert.deepEqual(sample.final_return, {
+            payload: JSON.parse(content[0].text),
+            status_line: content[1].text,
+          });
+          assert.equal(sample.jev?.requests.length, 1);
+          const recorded = sample.jev!.requests[0];
+          assert.deepEqual(JSON.parse(recorded.state!), sent[0].state);
+          assert.deepEqual(recorded.questions, sent[0].questions);
+          assert.equal(recorded.effective, 'all');
+          assert.equal(sample.context_layout_id, 'jev-context-2');
+          assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
+          // v4 兼容面：旧记录缺少可选开关时仍可读取，无需迁移或回写。
+          const historical: SampleRecord = structuredClone(sample);
+          delete historical.config_snapshot.jev.temporal_context;
+          assert.equal(historical.config_snapshot.jev.temporal_context ?? false, false);
+        }
+      }
+      assert.deepEqual(returns[0], returns[1]);
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
   });
 
   it('test and on tool returns are field-identical once the sample location metadata is stripped', async () => {

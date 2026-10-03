@@ -17,7 +17,16 @@
  * 包版本号冒充实现标识。
  */
 
-/** 13 = 步 3「短且无实词」nav 预筛退役（2026-10-03）：长度 < 200 且不含
+/** 14 = 时间上下文试运行接入（2026-10-03，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN）：
+ *  新增开关 `jev.temporal_context`（默认 false 精确保留旧行为，关闭即完整回退）——
+ *  开启时 Jev state 携带 `retrieval_time`（宿主在 Brave 请求前捕获一次，同一次搜索
+ *  的 all、single 回退与重试共用）与每来源 `brave_page_date`（原 Brave 元数据 age
+ *  选出、归并冲突置 null），all 模式片段评分题换用第二十五轮实测、第二十六轮冻结的
+ *  时间上下文新题（QUESTION_SET_ID 随题库哈希自动更新）；single（含 all 回退）沿用
+ *  旧评分题、仅加时间字段。预算检查在完整日期与新题加入后才做（32k/64k、15% 余量
+ *  不变）；不恢复 stale/self_deprecated/time_snip{i}/年份选择器/0.85 时间门槛，不
+ *  新建"超过多少天就删"规则，删除原因仍是 score。
+ *  13 = 步 3「短且无实词」nav 预筛退役（2026-10-03）：长度 < 200 且不含
  *  query ∪ intent 实词的片段不再在本地删除——第二十四轮消融实证该条件误伤参数、
  *  功能与硬件支持四段真实内容（撤条件后四段均获 Jev 高于删除线评分并完整保留）；
  *  空片段删除与步 8 一句话来源的 query 实词兜底保留，片段级质量判断交 Jev 评分。
@@ -49,7 +58,10 @@
  *  检查），样板前缀表增补 CTA 条目；乱码碎词原型经审核证实误删真实代码（审核 F1）
  *  撤下未接入。5 = 来源题精简为六道并取消当事方播种排序（去重与输出统一 Brave
  *  原序）；4 = 带年份片段的时间判断；3 = 明确非一手组稳定排序及页面/栏目名单。 */
-export const FILTER_RULES_VERSION = 'filter-rules-13';
+export const FILTER_RULES_VERSION = 'filter-rules-14';
 
-/** 单来源 source / 全量 sources[i] 与 s{id}__题键的首版布局；题意另由题库 ID 标识。 */
-export const CONTEXT_LAYOUT_ID = 'jev-context-1';
+/** 单来源 source / 全量 sources[i] 与 s{id}__题键的首版布局；题意另由题库 ID 标识。
+ *  2 = 时间上下文字段进入 state（`retrieval_time` 顶层、每来源 `brave_page_date`），
+ *  all 模式片段评分题换用冻结新题（TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN §5）；题键
+ *  与数组位置语义不变。 */
+export const CONTEXT_LAYOUT_ID = 'jev-context-2';
