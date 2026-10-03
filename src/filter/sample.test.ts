@@ -1621,6 +1621,8 @@ describe('createSampleWriter', () => {
             title: 'redlib-loti',
             snippets: [
               '## Repository files navigation\n# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
+              '## About\n### Topics\nbrowser-extension privacy typescript',
+              '## About\nPrivate front-end for Reddit, a brave browser project.',
             ],
           },
           {
@@ -1673,13 +1675,17 @@ describe('createSampleWriter', () => {
     };
 
     // 计数与逐片段动作进 outcome（v4 可选键，format_version 不因增补递增）
-    assert.equal(sample.outcome?.local.github_cleanup_actions, 5);
+    assert.equal(sample.outcome?.local.github_cleanup_actions, 7);
     const repoRow = sample.outcome?.sources[0].snippets[0];
-    assert.deepEqual(repoRow?.github_cleanup, [
-      { rule: 'repo_nav', line: 1 },
-      { rule: 'search_block', line: 2 },
-      { rule: 'search_block', line: 3 },
-      { rule: 'search_block', line: 5 },
+    assert.deepEqual(repoRow?.github_cleanup, [{ rule: 'repo_nav', line: 1 }]);
+    assert.deepEqual(sample.outcome?.sources[0].snippets[1].github_cleanup, [
+      { rule: 'repo_topics', line: 1 },
+      { rule: 'repo_topics', line: 2 },
+      { rule: 'repo_topics', line: 3 },
+    ]);
+    assert.deepEqual(sample.outcome?.sources[0].snippets[2].github_cleanup, [
+      { rule: 'about_echo', line: 1 },
+      { rule: 'about_echo', line: 2 },
     ]);
     assert.deepEqual(sample.outcome?.sources[1].snippets[0].github_cleanup, [
       { rule: 'copy_branch_button', line: 1, partial: true },
@@ -1697,7 +1703,7 @@ describe('createSampleWriter', () => {
 
     // 最终返回来自同一份清洗后文本
     assert.deepEqual(sample.final_return?.payload.grounding.generic[0].snippets, [
-      'Private front-end for Reddit, a brave browser project.',
+      '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
     ]);
   });
 });

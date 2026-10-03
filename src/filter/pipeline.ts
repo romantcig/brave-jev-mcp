@@ -195,6 +195,7 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
     if (source.verdict !== 'keep') continue;
 
     const survivorShingles: Set<string>[] = [];
+    const survivorTexts: string[] = [];
     for (const snippet of source.snippets) {
       if (!snippet.kept) continue;
 
@@ -218,18 +219,20 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
         stats.local.paywall_truncated += 1;
       }
 
-      // GitHub 平台界面行清洗（filter-rules-9）：样板行剥离阶段内的专门子步，
+      // GitHub 清洗：样板行剥离阶段内的专门子步，
       // 位于通用前缀/标题/引用剥离之前——先剥平台专属界面行，剩余文本再走通用
-      // 子步。清洗后为空按既有 boilerplate 整片删语义处理；动作明细进统计表。
+      // 子步。清空的 About 回声记 dup，其余记 boilerplate；动作明细进统计表。
       if (cleanGitHub) {
-        const github = cleanGitHubBoilerplate(snippet.text, source.url);
+        const github = cleanGitHubBoilerplate(snippet.text, source.url, survivorTexts);
         if (github.actions.length > 0) {
           snippet.githubCleanup = github.actions;
           stats.local.github_cleanup_actions += github.actions.length;
           if (github.text === '') {
             snippet.kept = false;
-            snippet.reason = 'boilerplate';
-            stats.local.snippets_prefiltered += 1;
+            const duplicate = github.actions.some((action) => action.rule === 'about_echo');
+            snippet.reason = duplicate ? 'dup' : 'boilerplate';
+            if (duplicate) stats.local.dup_removed += 1;
+            else stats.local.snippets_prefiltered += 1;
             continue;
           }
           snippet.text = github.text;
@@ -253,6 +256,7 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
         continue;
       }
       survivorShingles.push(shingleSet);
+      survivorTexts.push(snippet.text);
     }
   }
 };

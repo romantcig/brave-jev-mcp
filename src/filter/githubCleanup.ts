@@ -1,42 +1,12 @@
 /**
- * GitHub 平台界面文字局部清洗（filter-rules-9）：在送入 Jev 前，对确定的 GitHub
- * 平台界面行做**行级剥离**——片段正文保持原文，幸存行保持 Brave 原序。清洗后的
- * 文本同时用于 Jev 判断与最终实际返回（管道内同一份片段文本）。
+ * GitHub 局部清洗：仓库导航、PR 分支复制按钮及 Uh oh!、Release 成对比较提示，
+ * 以及仓库首页独立 Topics 标签卡片和已有简介的完整包含回声。
+ * search_block / reactions_unavailable 已退役；Conversation 保留。
  *
- * 范围（GITHUB_CLEANUP_PLAN 首批五条，较离线实验版收窄）：
- * 1. `repo_nav`——仓库首页独立行 `Repository files navigation`（去 Markdown 标题
- *    标记后精确等于）；
- * 2. `copy_branch_button`——PR 页行尾按钮后缀 ` Copy head branch name to clipboard`，
- *    要求行内含当前仓库限定的分支引用 `owner/repo:分支`（冒号后必须有分支名），
- *    只剥后缀、分支文本完整保留；
- * 3. `search_block`——仓库首页同一连续界面块（允许空行）中出现 `Saved searches`、
- *    `Search code, repositories, users, issues, pull requests...`、`Provide feedback`
- *    三个独立标记时仅删这三个标记行；实质正文（或代码/引用行）打断即不成块；
- * 4. `tag_compare`——Release tag 页 `Choose a tag to compare` 与紧随（允许空行）的
- *    `No results found` 成对出现时仅删这两行；单独出现一律保留；
- * 5. `reactions_unavailable`——Issue / PR / Discussion 详情页独立行精确等于
- *    `Reactions are currently unavailable`。
- *
- * 明确不做（计划的暂缓清单）：`Uh oh!`、`owner / **repo** Public` 面包屑、注册邀请
- * 后缀、`Awesome Jev Awesome` 重复尾词消除——这些规则一律不实现。
- *
- * 保护（GITHUB_CLEANUP_PLAN 第 4 点；filter-rules-9 返修补全）：围栏代码（反引号/
- * 波浪线，开闭长度匹配；未闭合保护到末尾）、缩进代码与跨行内联代码跨度复用
- * prefilter 的 `codeRegionFlags`；引用行与引用段落的懒续行由本模块叠加——引用行
- * 后不带 `>` 的非空行（ATX 标题等明确新块除外）仍属引用内容。保护行既不作为命中
- * 行，也作为连续块 / 成对扫描的**打断**（代码或引用内出现的标记不能触发外部删除）。
- *
- * 幂等（filter-rules-9 返修）：判定全部基于当次输入快照、一次性应用；应用后在新
- * 文本上重新判定，若仍有命中——即本轮删除会让原本不连续的标记接壤成新块（审查
- * R2 的同规则嵌套与跨规则接壤）——则**整轮保守放弃**、原样返回，绝不循环清洗到
- * 固定点（那会扩大已授权的结构匹配范围）。由此保证 `clean(clean(x)) === clean(x)`。
- *
- * 纯函数约束：不读环境变量、不联网、不改入参；未命中时原样返回传入文本（同一
- * 引用）；命中时仅删除命中行与按钮后缀，不做全文 trim、空白折叠、重排或改写，
- * 不额外清理空行。
- *
- * 依据：GITHUB_CLEANUP_PLAN.md（五条首批规则、收窄边界与保护要求）、
- * notes 私有实验产物（2026-09-30..10-02 三天 68 份现场样本的离线回放）。
+ * 在 Jev 前处理，幸存正文与行尾逐字保留；代码、引用及懒续行受保护。
+ * 全部判定基于输入快照。删除产生新匹配时整轮保守放弃，保证幂等，不递归扩删。
+ * earlierSnippets 仅由宿主提供同来源、当前本地步骤已保留的前序片段；
+ * 简介只压缩空白后做完整包含，不降低全局 shingle 门槛，不推断语义相似。
  */
 
 import { codeRegionFlags } from './prefilter.js';
@@ -48,22 +18,12 @@ const REPO_NAV_LINE = 'Repository files navigation';
 /** 规则 2 的行尾按钮后缀：剥离时连同前导空格一起剥，前面的分支文本逐字保留。 */
 const COPY_BUTTON_SUFFIX = ' Copy head branch name to clipboard';
 
-/** 规则 3 的三个界面标记（去 Markdown 标题标记后精确比较的目标全集）。 */
-const SEARCH_BLOCK_LINES: readonly string[] = [
-  'Saved searches',
-  'Search code, repositories, users, issues, pull requests...',
-  'Provide feedback',
-];
-
 /** 规则 4 的成对提示行。 */
 const TAG_COMPARE_PROMPT = 'Choose a tag to compare';
 const TAG_COMPARE_EMPTY = 'No results found';
 
-/** 规则 5 的独立行文本（trim 后精确比较，不去标题标记——样本只有裸行证据）。 */
-const REACTIONS_UNAVAILABLE = 'Reactions are currently unavailable';
-
 /**
- * 规则 1/3/4 用的行归一化：只剥 CommonMark ATX 标题标记（最多 3 空格缩进、
+ * 界面文字使用的行归一化：只剥 CommonMark ATX 标题标记（最多 3 空格缩进、
  * 1–6 个 `#` 后必须跟空格/制表符——`#tag` 不是标题）再 trim。**不复用**
  * `normalizeLine`：它把 `*` / `-` 列表符也当标记剥掉，会把列表行误纳入精确
  * 等于的命中面，超出计划"去除 Markdown 标题标记"的授权范围。
@@ -73,8 +33,7 @@ const stripAtxHeading = (line: string): string => line.replace(/^ {0,3}#{1,6}[ \
 /**
  * 引用区域标记（引用行 + 引用段落的懒续行）：引用行（`>` 起头）之后的非空行即使
  * 不带 `>` 也可能仍是同一段引用的懒续行（CommonMark lazy continuation）——审查 R1
- * 实证 issue 页 "> GitHub displays this message:" 的下一行被误删为
- * reactions_unavailable。空行结束引用段落；ATX 标题行是明确的新块开始，不视为续行；
+ * 引用内的界面文字不得当作页面控件。空行结束引用段落；ATX 标题开始新块；
  * 围栏/缩进代码行（`codeFlags`）不改变开放状态，其自身已由代码保护覆盖。列表项、
  * HTML 块等其余可能打断段落的形态按续行保守保护——多留可接受，不追求完整解析。
  * @returns 与行数组等长的标记：true = 引用行或引用续行，不参与删除判定
@@ -119,7 +78,7 @@ const referenceGuardFlags = (
  * `releases/latest` 等）都返回 `null`。
  */
 type GitHubCleanPage = {
-  kind: 'repo_root' | 'pull' | 'issue_thread' | 'discussion' | 'release_tag';
+  kind: 'repo_root' | 'pull' | 'release';
   owner: string;
   repo: string;
 };
@@ -127,7 +86,7 @@ type GitHubCleanPage = {
 /**
  * GitHub 全局命名空间一级路径：`/topics/redlib` 这类页面与 `/owner/repo` 同为两段
  * 形态，仅凭段数无法区分，按保留名排除（GitHub 保留用户名不可注册，仓库不会误
- * 伤——黑名单漏项的最坏后果只是对全局页应用仓库规则，五条规则在那些页面没有
+ * 伤——黑名单漏项的最坏后果只是对全局页应用仓库规则，局部规则在那些页面没有
  * 独立界面行证据，实际命中≈0）。
  */
 const GITHUB_GLOBAL_NAMESPACES: readonly string[] = [
@@ -179,10 +138,9 @@ const parseGitHubPage = (url: string): GitHubCleanPage | null => {
       : { kind: 'repo_root', owner, repo };
   }
   if (numberedThread && third === 'pull') return { kind: 'pull', owner, repo };
-  if (numberedThread && third === 'issues') return { kind: 'issue_thread', owner, repo };
-  if (numberedThread && third === 'discussions') return { kind: 'discussion', owner, repo };
+  if (segments.length === 3 && third === 'releases') return { kind: 'release', owner, repo };
   if (segments.length >= 5 && third === 'releases' && segments[3] === 'tag' && segments[4] !== '') {
-    return { kind: 'release_tag', owner, repo };
+    return { kind: 'release', owner, repo };
   }
   return null;
 };
@@ -209,13 +167,14 @@ const containsRepoBranchRef = (head: string, owner: string, repo: string): boole
 };
 
 /**
- * 五条规则的纯判定：输入片段文本与页面类别，输出删除/剥后缀计划与逐动作清单。
+ * 当前规则的纯判定：输入片段文本与页面类别，输出删除/剥后缀计划与逐动作清单。
  * 所有规则都在**同一份输入快照**上判定——规则之间不互相"腾位置"，判定的连续块 /
  * 成对 / 保护结果全部相对该快照，与最终删什么无关。
  */
 const judgeCleanup = (
   text: string,
-  page: GitHubCleanPage
+  page: GitHubCleanPage,
+  earlierSnippets: readonly string[]
 ): {
   lines: string[];
   contents: string[];
@@ -260,40 +219,18 @@ const judgeCleanup = (
     }
   }
 
-  // —— 规则 3：搜索界面连续块（repo_root）——
-  if (page.kind === 'repo_root') {
-    const isMarker = (index: number): boolean =>
-      !guarded[index] && SEARCH_BLOCK_LINES.includes(normalized[index]);
-    let blockOpen = false;
-    const seen = new Set<string>();
-    const blockLines: number[] = [];
-    // 块收口：三个标记在同一连续块内才删标记行。主循环保证连续性——标记行之间
-    // 只可能隔着普通空行（非空非标记行与保护行都直接打断），无需回扫间隔行。
-    const flush = (): void => {
-      if (blockOpen && seen.size === SEARCH_BLOCK_LINES.length) {
-        for (const index of blockLines) {
-          deleteLine[index] = true;
-          actions.push({ rule: 'search_block', line: index + 1 });
-        }
-      }
-      blockOpen = false;
-      seen.clear();
-      blockLines.length = 0;
-    };
+  // PR 页面精确界面词：只剥离独立行，不删除后面的提交说明或流程图。
+  if (page.kind === 'pull') {
     for (let index = 0; index < contents.length; index += 1) {
-      if (isMarker(index)) {
-        if (!blockOpen) blockOpen = true;
-        seen.add(normalized[index]);
-        blockLines.push(index);
-      } else if (guarded[index] || contents[index].trim() !== '') {
-        flush(); // 非标记行里，保护行或实质正文打断；普通空行不打断
+      if (!guarded[index] && normalized[index] === 'Uh oh!') {
+        deleteLine[index] = true;
+        actions.push({ rule: 'pr_uh_oh', line: index + 1 });
       }
     }
-    flush();
   }
 
-  // —— 规则 4：版本比较成对提示（Release tag 详情页）——
-  if (page.kind === 'release_tag') {
+  // —— 规则 4：版本比较成对提示（Release 列表与 tag 详情页）——
+  if (page.kind === 'release') {
     for (let index = 0; index < contents.length; index += 1) {
       if (guarded[index] || normalized[index] !== TAG_COMPARE_PROMPT) continue;
       // 紧随（允许普通空行）的最近非空行必须恰是 `No results found`；保护行、
@@ -312,13 +249,53 @@ const judgeCleanup = (
     }
   }
 
-  // —— 规则 5：反应按钮状态行（Issue / PR / Discussion 详情页）——
-  if (page.kind === 'issue_thread' || page.kind === 'pull' || page.kind === 'discussion') {
-    for (let index = 0; index < contents.length; index += 1) {
-      if (!guarded[index] && contents[index].trim() === REACTIONS_UNAVAILABLE) {
-        deleteLine[index] = true;
-        actions.push({ rule: 'reactions_unavailable', line: index + 1 });
+  if (page.kind === 'repo_root' && !guarded.some(Boolean)) {
+    const nonempty = contents
+      .map((text, index) => ({ text, index }))
+      .filter(({ text }) => text.trim() !== '');
+    const heading = (at: number, value: string): boolean => {
+      const row = nonempty[at];
+      return (
+        row !== undefined && /^ {0,3}#{1,6}[ 	]+/.test(row.text) && normalized[row.index] === value
+      );
+    };
+    // 只接受完整独立卡片；标签是 GitHub slug，不把自然语言段落按短文本删掉。
+    const topics =
+      nonempty.length === 3 &&
+      heading(0, 'About') &&
+      heading(1, 'Topics') &&
+      /^[a-z0-9][a-z0-9-]*(?:[ 	]+[a-z0-9][a-z0-9-]*){2,}$/.test(nonempty[2].text.trim());
+    let aboutEcho = false;
+    const aboutAt = nonempty.findIndex((_, index) => heading(index, 'About'));
+    if (
+      aboutAt >= 0 &&
+      nonempty.length === aboutAt + 2 &&
+      nonempty
+        .slice(0, aboutAt)
+        .every((_, index) => heading(index, 'License') || heading(index, 'Configuration'))
+    ) {
+      const body = nonempty[aboutAt + 1].text.trim();
+      // 链接、代码、表格和列表不属于单行简介；不剥数字、标点、否定或限定条件。
+      if (body.length >= 20 && !/^[#>*~-]|[`~\[\]|]|https?:\/\//.test(body)) {
+        const needle = body.replace(/\s+/g, ' ');
+        aboutEcho = earlierSnippets.some((previous) => {
+          const haystack = previous.replace(/\s+/g, ' ').trim();
+          let at = haystack.indexOf(needle);
+          while (at >= 0) {
+            // 防止把名称或单词的子串当成整句覆盖。
+            const before = haystack[at - 1] ?? '';
+            const after = haystack[at + needle.length] ?? '';
+            if (!/[\p{L}\p{N}_]/u.test(before) && !/[\p{L}\p{N}_]/u.test(after)) return true;
+            at = haystack.indexOf(needle, at + 1);
+          }
+          return false;
+        });
       }
+    }
+    if (topics || aboutEcho) {
+      deleteLine.fill(true);
+      for (const { index } of nonempty)
+        actions.push({ rule: topics ? 'repo_topics' : 'about_echo', line: index + 1 });
     }
   }
 
@@ -350,15 +327,19 @@ const applyCleanup = (plan: ReturnType<typeof judgeCleanup>): string => {
  * 幂等保证（见文件头）：首判无命中原样返回；有命中则应用后在新文本上重判，
  * 重判仍有命中说明本轮删除制造了原本不成立的接壤块——整轮保守放弃、原样返回。
  */
-export function cleanGitHubBoilerplate(text: string, url: string): GitHubCleanupResult {
+export function cleanGitHubBoilerplate(
+  text: string,
+  url: string,
+  earlierSnippets: readonly string[] = []
+): GitHubCleanupResult {
   const page = parseGitHubPage(url);
   if (page === null || text === '') return { text, actions: [] };
 
-  const plan = judgeCleanup(text, page);
+  const plan = judgeCleanup(text, page, earlierSnippets);
   if (plan.actions.length === 0) return { text, actions: plan.actions };
 
   const cleaned = applyCleanup(plan);
-  const verify = judgeCleanup(cleaned, page);
+  const verify = judgeCleanup(cleaned, page, earlierSnippets);
   if (verify.actions.length > 0) return { text, actions: [] };
 
   return { text: cleaned, actions: plan.actions };

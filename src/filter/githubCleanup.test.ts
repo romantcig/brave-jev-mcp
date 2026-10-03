@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 
 /**
- * githubCleanup 的行为锁定（GITHUB_CLEANUP_PLAN「必须覆盖的行为」）：五条首批规则
+ * githubCleanup 当前规则与退役行为的回归锁定：
  * 的正例与边界、页面类型与 URL 边界、成对/连续块的打断保留、保护区域、暂缓规则
  * 逐字保留、幂等与原序。测试文本以 2026-09-30..10-02 现场样本的真实形态为原型。
  */
@@ -44,14 +44,14 @@ describe('页面类别与 URL 边界', () => {
     assert.equal(cleanGitHubBoilerplate(snippet, 'https://www.github.com/a/b').actions.length, 1);
   });
 
-  it('仅支持明确页面路径：Topics、releases 列表、tree、未知路径均原样返回', () => {
+  it('仅支持明确页面路径：Topics、tree、未知路径不清洗，其他页面不误用仓库首页规则', () => {
     const snippet = '## Repository files navigation';
     for (const url of [
       'https://github.com/topics/redlib',
       'https://github.com/a/b/tree/main/docs',
       'https://github.com/a/b/blob/main/README.md',
       'https://github.com/a/b/wiki/Page',
-      'https://github.com/a/b/releases', // release 列表页（非 tag 详情）
+      'https://github.com/a/b/releases', // Release 列表不套用仓库导航规则
       'https://github.com/a/b/releases/latest',
       'https://github.com/a/b/issues', // Issue 列表页（无编号）
       'https://github.com/a/b/pull/abc', // 非数字编号
@@ -135,42 +135,18 @@ describe('规则 2：分支复制按钮后缀（PR）', () => {
   });
 });
 
-describe('规则 3：搜索界面连续块', () => {
-  it('三个标记同块（允许空行）时仅删三个标记行，块前面包屑与尾部正文保留', () => {
+describe('退役规则不再应用', () => {
+  it('搜索块原样保留，只清掉现有导航行', () => {
     const cleaned = cleanGitHubBoilerplate(REPO_SNIPPET, REPO_ROOT);
-    assert.deepEqual(
-      cleaned.actions.map((action) => [action.rule, action.line]),
-      [
-        ['repo_nav', 1],
-        ['search_block', 2],
-        ['search_block', 3],
-        ['search_block', 5],
-      ]
-    );
-    assert.equal(
-      cleaned.text,
-      '\n\nlotillc / **redlib-loti** Public\n\nPrivate front-end for Reddit'
-    );
+    assert.deepEqual(cleaned.actions, [{ rule: 'repo_nav', line: 1 }]);
+    assert.equal(cleaned.text, REPO_SNIPPET.slice(REPO_SNIPPET.indexOf('\n') + 1));
   });
 
-  it('缺少任一标记的不完整块保留', () => {
-    const snippet = '# Saved searches\n\n# Provide feedback\n\n正文说明';
-    const cleaned = cleanGitHubBoilerplate(snippet, REPO_ROOT);
-    assert.deepEqual(cleaned.actions, []);
-    assert.equal(cleaned.text, snippet);
-  });
-
-  it('实质正文打断连续块时整块保留', () => {
-    const snippet = [
-      '# Saved searches',
-      '这里有一段实质性说明文字',
-      '# Search code, repositories, users, issues, pull requests...',
-      '',
-      '# Provide feedback',
-    ].join('\n');
-    const cleaned = cleanGitHubBoilerplate(snippet, REPO_ROOT);
-    assert.deepEqual(cleaned.actions, []);
-    assert.equal(cleaned.text, snippet);
+  it('反应状态行在所有页面原样保留', () => {
+    for (const url of [REPO_ROOT, PR, ISSUE, DISCUSSION, RELEASE]) {
+      const text = '报告正文\nReactions are currently unavailable';
+      assert.deepEqual(cleanGitHubBoilerplate(text, url), { text, actions: [] });
+    }
   });
 });
 
@@ -218,30 +194,6 @@ describe('规则 4：版本比较成对提示（Release tag）', () => {
     const cleaned = cleanGitHubBoilerplate(snippet, RELEASE);
     assert.deepEqual(cleaned.actions, []);
     assert.equal(cleaned.text, snippet);
-  });
-});
-
-describe('规则 5：反应按钮状态行（Issue / PR / Discussion）', () => {
-  it('独立行精确等于时仅删该行，三种详情页都生效', () => {
-    for (const url of [ISSUE, PR, DISCUSSION]) {
-      const cleaned = cleanGitHubBoilerplate('报告正文\nReactions are currently unavailable', url);
-      assert.deepEqual(cleaned.actions, [{ rule: 'reactions_unavailable', line: 2 }], url);
-      assert.equal(cleaned.text, '报告正文\n', url);
-    }
-  });
-
-  it('行内包含同词的正文句子保留', () => {
-    const body = 'The banner said: Reactions are currently unavailable on this instance.';
-    const cleaned = cleanGitHubBoilerplate(body, ISSUE);
-    assert.deepEqual(cleaned.actions, []);
-    assert.equal(cleaned.text, body);
-  });
-
-  it('仓库首页与 Release 页不触发本规则', () => {
-    for (const url of [REPO_ROOT, RELEASE]) {
-      const cleaned = cleanGitHubBoilerplate('Reactions are currently unavailable', url);
-      assert.deepEqual(cleaned.actions, [], url);
-    }
   });
 });
 
@@ -324,15 +276,15 @@ describe('保护区域', () => {
   });
 
   it('引用段落的懒续行受保护（审查 R1）；空行或 ATX 标题打断后续行照常判定', () => {
-    const lazy = '> GitHub displays this message:\nReactions are currently unavailable';
-    const lazyCleaned = cleanGitHubBoilerplate(lazy, ISSUE);
+    const lazy = '> GitHub displays this message:\nUh oh!';
+    const lazyCleaned = cleanGitHubBoilerplate(lazy, PR);
     assert.deepEqual(lazyCleaned.actions, []);
     assert.equal(lazyCleaned.text, lazy);
 
     // 空行结束引用段落，其后的独立行不受续行保护
-    const blank = '> 引用说明\n\nReactions are currently unavailable';
-    const blankCleaned = cleanGitHubBoilerplate(blank, ISSUE);
-    assert.deepEqual(blankCleaned.actions, [{ rule: 'reactions_unavailable', line: 3 }]);
+    const blank = '> 引用说明\n\nUh oh!';
+    const blankCleaned = cleanGitHubBoilerplate(blank, PR);
+    assert.deepEqual(blankCleaned.actions, [{ rule: 'pr_uh_oh', line: 3 }]);
     assert.equal(blankCleaned.text, '> 引用说明\n\n');
 
     // ATX 标题是明确的新块开始，不是引用续行
@@ -353,7 +305,8 @@ describe('保护区域', () => {
 describe('暂缓规则逐字保留', () => {
   it('Uh oh!、Public 面包屑、注册邀请后缀、Awesome 重复尾词、许可证、归档与 fork 信息全部不动', () => {
     for (const [url, snippet] of [
-      [PR, '### Uh oh!\nThis error means a timeout.'],
+      [ISSUE, '### Uh oh!\nThis error means a timeout.'],
+      [PR, '## Conversation\n讨论正文'],
       [REPO_ROOT, 'a / **b** Public'],
       [REPO_ROOT, 'a / **b** Public archive'],
       [
@@ -384,7 +337,7 @@ describe('幂等验证（审查 R2：删除不得制造原本不成立的匹配�
     assert.equal(cleaned.text, snippet);
   });
 
-  it('search_block 跨规则接壤：导航行打断搜索块时，删导航行会让三标记连续，整轮保守放弃', () => {
+  it('搜索块退役后不再阻止独立导航行清理', () => {
     const snippet = [
       'Saved searches',
       'Repository files navigation',
@@ -392,8 +345,8 @@ describe('幂等验证（审查 R2：删除不得制造原本不成立的匹配�
       'Provide feedback',
     ].join('\n');
     const cleaned = cleanGitHubBoilerplate(snippet, REPO_ROOT);
-    assert.deepEqual(cleaned.actions, []);
-    assert.equal(cleaned.text, snippet);
+    assert.deepEqual(cleaned.actions, [{ rule: 'repo_nav', line: 2 }]);
+    assert.equal(cleaned.text, snippet.replace('Repository files navigation\n', ''));
   });
 
   it('放弃场景重复清洗不变（clean(clean(x)) 深相等 clean(x)）', () => {
@@ -466,5 +419,134 @@ describe('幂等与未命中原样', () => {
 
   it('空文本原样返回', () => {
     assert.deepEqual(cleanGitHubBoilerplate('', REPO_ROOT), { text: '', actions: [] });
+  });
+});
+describe('新增 GitHub 清洗边界', () => {
+  it('PR 的 Uh oh! 独立行被剥离，提交信息与流程图逐字保留', () => {
+    const body = '@author merged commit abc123\r\n```mermaid\r\nflowchart TD\r\nA --> B\r\n```';
+    assert.deepEqual(cleanGitHubBoilerplate('### Uh oh!\r\n' + body, PR), {
+      text: body,
+      actions: [{ rule: 'pr_uh_oh', line: 1 }],
+    });
+    for (const text of [
+      'Uh oh! means a timeout.',
+      '    Uh oh!',
+      '> Uh oh!',
+      '`Uh oh!`',
+      '```\nUh oh!\n```',
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate(text, PR), { text, actions: [] });
+    }
+    for (const url of [
+      REPO_ROOT,
+      ISSUE,
+      RELEASE,
+      PR + '/files',
+      'https://example.com/a/b/pull/8',
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate('### Uh oh!', url), {
+        text: '### Uh oh!',
+        actions: [],
+      });
+    }
+  });
+
+  it('Release 列表复用成对规则，单独提示、正文隔断和真实提交表格保留', () => {
+    const url = 'https://github.com/team/project/releases/?page=2';
+    const body =
+      'v8.3.0\nreleased Sep 3\n| Author | Message | Commit |\n| a | fix: keep field | abc123 |';
+    assert.equal(
+      cleanGitHubBoilerplate('# Choose a tag to compare\n\n## No results found\n' + body, url).text,
+      '\n' + body
+    );
+    for (const text of [
+      'No results found\n' + body,
+      'Choose a tag to compare\nPre-release\nNo results found',
+      '```\nChoose a tag to compare\nNo results found\n```',
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate(text, url), { text, actions: [] });
+    }
+  });
+
+  const topics = '## About\n### Topics\nbrowser-extension privacy typescript';
+  it('仓库首页只清理完整独立 Topics 卡片，混有正文或许可证的片段保留', () => {
+    const cleaned = cleanGitHubBoilerplate(topics, REPO_ROOT);
+    assert.equal(cleaned.text, '');
+    assert.deepEqual(
+      cleaned.actions,
+      [1, 2, 3].map((line) => ({ rule: 'repo_topics', line }))
+    );
+    for (const text of [
+      topics + '\nSupports offline mode.',
+      '## License\nMIT\n' + topics,
+      '项目说明\n' + topics,
+      '## About\n### Topics\nThis is a full sentence.',
+      '```\n' + topics + '\n```',
+      topics.replace('browser-extension', '    browser-extension'),
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate(text, REPO_ROOT), { text, actions: [] });
+    }
+    for (const url of [
+      PR,
+      'https://github.com/topics/privacy',
+      REPO_ROOT + '/blob/main/README.md',
+      'https://github.com.evil.test/a/b',
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate(topics, url), { text: topics, actions: [] });
+    }
+  });
+
+  const intro = 'Private front-end for Reddit';
+  it('About 回声不受 shingle 短文本门槛限制，但要求前序完整覆盖', () => {
+    for (const text of [
+      '## About\n' + intro,
+      '# Configuration\n## About\n' + intro,
+      '## License\n\n## About\n' + intro,
+    ]) {
+      const before = [intro + ' .'];
+      assert.equal(cleanGitHubBoilerplate(text, REPO_ROOT, before).text, '');
+      assert.ok(
+        cleanGitHubBoilerplate(text, REPO_ROOT, before).actions.every(
+          (a) => a.rule === 'about_echo'
+        )
+      );
+      assert.deepEqual(before, [intro + ' .']);
+      assert.deepEqual(cleanGitHubBoilerplate(text, REPO_ROOT), { text, actions: [] });
+    }
+  });
+
+  it('About 的许可证、链接、新增限制、数字、代码与正文扩展不被包含比较吞掉', () => {
+    for (const text of [
+      '## License\nCC0 1.0\n## About\n' + intro,
+      '## About\n' + intro + '\nhttps://example.com',
+      '## About\n' + intro + ' for non-commercial use only',
+      '## About\nNot ' + intro,
+      '## About\n' + intro + ' version 2',
+      '## About\n' + intro + '\nAdditional functionality.',
+      '> ## About\n> ' + intro,
+      '```\n## About\n' + intro + '\n```',
+      '## About\n    ' + intro,
+    ])
+      assert.deepEqual(cleanGitHubBoilerplate(text, REPO_ROOT, [intro]), { text, actions: [] });
+    const text = '## About\n' + intro;
+    assert.deepEqual(cleanGitHubBoilerplate(text, REPO_ROOT, ['X' + intro, intro + 'Extra']), {
+      text,
+      actions: [],
+    });
+    assert.deepEqual(cleanGitHubBoilerplate(text, PR, [intro]), { text, actions: [] });
+  });
+
+  it('新增规则保持幂等，删除导航不得制造新的整片卡片匹配', () => {
+    for (const [text, url] of [
+      [topics, REPO_ROOT],
+      ['## About\n' + intro, REPO_ROOT],
+      ['### Uh oh!\n正文', PR],
+      ['Repository files navigation\n' + topics, REPO_ROOT],
+    ]) {
+      const first = cleanGitHubBoilerplate(text, url, [intro]);
+      assert.equal(cleanGitHubBoilerplate(first.text, url, [intro]).text, first.text);
+    }
+    const text = 'Repository files navigation\n' + topics;
+    assert.deepEqual(cleanGitHubBoilerplate(text, REPO_ROOT), { text, actions: [] });
   });
 });

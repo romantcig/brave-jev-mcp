@@ -2251,7 +2251,7 @@ describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
       const repoState = stateOf(captured, 's0');
       assert.ok('source' in repoState);
       assert.deepEqual(repoState.source.snippets, [
-        'Private front-end for Reddit, a brave browser project.',
+        '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
       ]);
       const prState = stateOf(captured, 's1');
       assert.ok('source' in prState);
@@ -2265,7 +2265,9 @@ describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
         [
           [
             'https://github.com/lotillc/redlib-loti',
-            ['Private front-end for Reddit, a brave browser project.'],
+            [
+              '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
+            ],
           ],
           [
             'https://github.com/HexRaysSA/ida-mcp/pull/8',
@@ -2275,16 +2277,15 @@ describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
         ]
       );
 
-      // 计数与逐片段动作（4 = repo_nav + search_block×3；1 = copy_branch_button）
-      assert.equal(stats.local.github_cleanup_actions, 5);
+      // 计数与逐片段动作（1 = repo_nav；1 = copy_branch_button）
+      assert.equal(stats.local.github_cleanup_actions, 2);
       const repoRow = stats.sources[0].snippets[0];
-      assert.deepEqual(repoRow.github_cleanup, [
-        { rule: 'repo_nav', line: 1 },
-        { rule: 'search_block', line: 2 },
-        { rule: 'search_block', line: 3 },
-        { rule: 'search_block', line: 5 },
-      ]);
-      assert.equal(repoRow.chars, 'Private front-end for Reddit, a brave browser project.'.length);
+      assert.deepEqual(repoRow.github_cleanup, [{ rule: 'repo_nav', line: 1 }]);
+      assert.equal(
+        repoRow.chars,
+        '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.'
+          .length
+      );
       assert.deepEqual(stats.sources[1].snippets[0].github_cleanup, [
         { rule: 'copy_branch_button', line: 1, partial: true },
       ]);
@@ -2320,9 +2321,9 @@ describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
       });
 
       assert.equal(stats.jev?.status, 'no_key');
-      assert.equal(stats.local.github_cleanup_actions, 5);
+      assert.equal(stats.local.github_cleanup_actions, 2);
       assert.deepEqual(result.grounding.generic[0].snippets, [
-        'Private front-end for Reddit, a brave browser project.',
+        '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
       ]);
     }
   });
@@ -2719,5 +2720,121 @@ describe('temporal context rollout (TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN)', () 
     );
     assert.ok('source' in seen[0].state);
     assert.equal(seen[0].state.source.brave_page_date, null, '部分未知不能冒用宿主日期');
+  });
+});
+
+describe('GitHub 新规则的管道与身份映射', () => {
+  const intro = 'Private front-end for brave researchers';
+  const topics = '## About\n### Topics\nbrowser-extension privacy typescript';
+  const echo = '# Configuration\n## About\n' + intro;
+  const makeInput = (): BraveLlmContextResponse => ({
+    grounding: {
+      generic: [
+        {
+          url: 'https://github.com/example/browser',
+          title: 'Research browser',
+          snippets: [intro, topics, echo, '## License\nMIT\n## About\n' + intro],
+        },
+        {
+          url: 'https://github.com/example/tool/pull/4',
+          title: 'Patch',
+          snippets: [
+            '### Uh oh!\nBrave patch uses atomic swaps.\nReactions are currently unavailable\n## Conversation',
+          ],
+        },
+        {
+          url: 'https://github.com/example/sdk/releases',
+          title: 'SDK Releases',
+          snippets: [
+            'Choose a tag to compare\nNo results found\nBrave SDK v9 adds typed response validation.',
+          ],
+        },
+      ],
+    },
+    sources: {},
+  });
+
+  for (const mode of ['test', 'on'] as const)
+    for (const contextMode of ['single', 'all'] as const) {
+      it(`${mode}/${contextMode}：新增清理进入实际 state，原始索引与返回正文一致`, async () => {
+        const input = makeInput();
+        const original = structuredClone(input);
+        const states: JevState[] = [];
+        const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
+          states.push(structuredClone(state));
+          const answers: Record<string, JevAnswer> = {};
+          for (const [id, q] of Object.entries(questions))
+            answers[id] =
+              q.type === 'score'
+                ? { kind: 'score', score: 2 }
+                : { kind: 'noul', probability: id.endsWith('has_original_reasoning') ? 1 : 0 };
+          return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
+        };
+        const { result, stats, jev_dispatch } = await filterLlmContext(
+          input,
+          request,
+          {
+            ...offConfig,
+            mode,
+            jev: { ...offConfig.jev, contextMode },
+          },
+          { classify }
+        );
+        assert.deepEqual(input, original);
+        const sent = states.flatMap((state) =>
+          'source' in state ? [state.source] : state.sources
+        );
+        assert.deepEqual(
+          sent.map((source) => source.snippets),
+          result.grounding.generic.map((source) => source.snippets)
+        );
+        assert.deepEqual(result.grounding.generic[0].snippets, [
+          intro,
+          '## License\nMIT\n## About\n' + intro,
+        ]);
+        assert.equal(stats.sources[0].snippets[1].reason, 'boilerplate');
+        assert.equal(stats.sources[0].snippets[2].reason, 'dup');
+        assert.ok(
+          stats.sources[0].snippets[1].github_cleanup?.every((a) => a.rule === 'repo_topics')
+        );
+        assert.ok(
+          stats.sources[0].snippets[2].github_cleanup?.every((a) => a.rule === 'about_echo')
+        );
+        assert.equal(stats.local.dup_removed, 1);
+        assert.equal(stats.local.github_cleanup_actions, 9);
+        assert.ok(
+          result.grounding.generic[1].snippets[0].includes('Reactions are currently unavailable')
+        );
+        assert.ok(result.grounding.generic[1].snippets[0].includes('## Conversation'));
+        assert.equal(
+          result.grounding.generic[2].snippets[0],
+          'Brave SDK v9 adds typed response validation.'
+        );
+        assert.ok(jev_dispatch.length > 0);
+        assert.deepEqual(
+          stats.sources[0].snippets.filter((s) => s.kept).map((s) => s.index),
+          [0, 3]
+        );
+      });
+    }
+
+  it('off 不应用新增规则；no_key 仍走本地清洗', async () => {
+    const off = await filterLlmContext(makeInput(), request, offConfig);
+    assert.equal(off.stats.local.github_cleanup_actions, 0);
+    assert.ok(off.result.grounding.generic[0].snippets.includes(topics));
+    assert.ok(off.result.grounding.generic[0].snippets.includes(echo));
+    const noKey = await filterLlmContext(makeInput(), request, { ...offConfig, mode: 'test' });
+    assert.equal(noKey.stats.jev?.status, 'no_key');
+    assert.equal(noKey.stats.sources[0].snippets[2].reason, 'dup');
+  });
+
+  it('About 不跨来源取参照，也不向后查找正文', async () => {
+    const input = makeInput();
+    input.grounding.generic = [
+      { url: 'https://github.com/example/first', title: 'First', snippets: [intro] },
+      { url: 'https://github.com/example/second', title: 'Second', snippets: [echo, intro] },
+    ];
+    const { stats } = await filterLlmContext(input, request, { ...offConfig, mode: 'test' });
+    assert.equal(stats.sources[1].snippets[0].github_cleanup, undefined);
   });
 });

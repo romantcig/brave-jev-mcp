@@ -17,7 +17,10 @@
  * 包版本号冒充实现标识。
  */
 
-/** 14 = 时间上下文试运行接入（2026-10-03，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN）：
+/** 15 = GitHub 本地清洗更新：撤下搜索块与反应状态行；加入 PR Uh oh!、仓库纯 Topics
+ *  卡片与 About 完整包含回声；成对比较提示扩展至 Release 列表页。管道顺序、
+ *  全局 shingle 门槛和题库不变，退役动作名只兼容读取旧样本。
+ *  14 = 时间上下文试运行接入（2026-10-03，TEMPORAL_CONTEXT_SCORING_ROLLOUT_PLAN）：
  *  新增开关 `jev.temporal_context`（默认 false 精确保留旧行为，关闭即完整回退）——
  *  开启时 Jev state 携带 `retrieval_time`（宿主在 Brave 请求前捕获一次，同一次搜索
  *  的 all、single 回退与重试共用）与每来源 `brave_page_date`（原 Brave 元数据 age
@@ -58,7 +61,7 @@
  *  检查），样板前缀表增补 CTA 条目；乱码碎词原型经审核证实误删真实代码（审核 F1）
  *  撤下未接入。5 = 来源题精简为六道并取消当事方播种排序（去重与输出统一 Brave
  *  原序）；4 = 带年份片段的时间判断；3 = 明确非一手组稳定排序及页面/栏目名单。 */
-export const FILTER_RULES_VERSION = 'filter-rules-14';
+export const FILTER_RULES_VERSION = 'filter-rules-15';
 
 /** 单来源 source / 全量 sources[i] 与 s{id}__题键的首版布局；题意另由题库 ID 标识。
  *  2 = 时间上下文字段进入 state（`retrieval_time` 顶层、每来源 `brave_page_date`），

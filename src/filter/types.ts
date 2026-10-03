@@ -610,14 +610,17 @@ export type NoveltySourceDetail = {
 };
 
 /**
- * GitHub 平台界面清洗的动作规则名（filter-rules-9 五条首批；实现见 githubCleanup.ts）。
+ * GitHub 清洗动作规则名；退役名称仅保留为旧样本兼容类型，新运行不再产出。
  */
 export type GitHubCleanupRule =
   | 'repo_nav'
   | 'copy_branch_button'
   | 'search_block'
   | 'tag_compare'
-  | 'reactions_unavailable';
+  | 'reactions_unavailable'
+  | 'pr_uh_oh'
+  | 'repo_topics'
+  | 'about_echo';
 
 /**
  * GitHub 平台界面清洗的单条动作（filter-rules-9）：只记规则与行号，绝不记正文

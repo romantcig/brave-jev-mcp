@@ -1,7 +1,7 @@
 /**
- * GitHub 界面清洗收窄版回放（GITHUB_CLEANUP_PLAN「回放要求」；filter-rules-10）。
+ * GitHub 单片段界面清洗回放（固定历史日期范围）。
  *
- * 用仓库内 cleanGitHubBoilerplate（五条首批规则）重放三天现场样本，分别报告原始
+ * 用仓库内当前 cleanGitHubBoilerplate 重放三天现场样本，分别报告原始
  * 返回（pre_filter）与历史最终返回（final_return.payload）的变化。
  *
  * 口径（审查 R3 返修）：三套分母严格分开——
@@ -17,7 +17,8 @@
  *
  * 产物（汇总 / 逐项 diff / 残留清单 / 样本 manifest）全部写显式指定的输出目录，
  * 本脚本不落任何样本内容进仓库。只是本地文本清洗回放——没有重跑 Jev，
- * 不能据此推断清洗后模型裁决的变化。
+ * 不能据此推断清洗后模型裁决的变化。此脚本没有构造页内幸存参照，
+ * 不测试 About 回声规则；该规则需通过管道或带前序参照的回放验证。
  *
  * 运行：npx tsx dev/replay_github_cleanup.ts <输出目录>（输出目录必填，不写死路径）
  */
@@ -26,6 +27,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanGitHubBoilerplate } from '../src/filter/githubCleanup.js';
+import { FILTER_RULES_VERSION } from '../src/filter/version.js';
 
 const OUT_DIR = process.argv[2];
 if (!OUT_DIR) {
@@ -333,11 +335,10 @@ const main = (): void => {
 
   const summary = {
     说明:
-      'filter-rules-10 收窄版回放（仓库内 cleanGitHubBoilerplate；filter-rules-8 的返修：' +
-      'Tab/混合缩进列数保护、跨行内联代码跨度保护、引用懒续行保护、清洗幂等验证、' +
-      '分支引用冒号后非空检查）。未重跑 Jev——清洗对模型裁决的影响未验证。' +
-      '规则较 2026-10-02 实验版收窄：无 Uh oh!、无 Public 面包屑、无注册邀请后缀、' +
-      '无 Awesome 改写。口径：全体来源 / GitHub 仓库 / Topics 三套分母分开，' +
+      FILTER_RULES_VERSION +
+      ' 单片段回放（仓库内 cleanGitHubBoilerplate）。' +
+      '未提供前序幸存参照，不测试 About 回声；未重跑 Jev，不推断裁决变化。' +
+      '口径：全体来源 / GitHub 仓库 / Topics 三套分母分开，' +
       '仓库去重、来源次数、片段与字符同一范围；Topics 单列不进仓库分母。',
     样本分组说明:
       'baseline = 2026-09-30 + 2026-10-01（与计划实验依据同批）；oct02 = 2026-10-02 全部' +
