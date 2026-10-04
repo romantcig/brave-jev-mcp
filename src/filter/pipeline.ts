@@ -13,7 +13,6 @@ import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { cleanXBoilerplate } from './xCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
-import { applyCrossSourceDedup } from './dedup.js';
 import { buildStatusLine } from './statusline.js';
 import { contentTerms } from './tokenize.js';
 import {
@@ -235,14 +234,12 @@ const prefilterSnippets = (
 /**
  * 阶段 6 删除空来源和不含 query 实词的一句话来源；intent 不参与本阶段。
  * 删除只更新工作表标记，不移除行。
- * 若来源删空且包含跨源去重删除，归因为 rewrite；否则为 empty。
- * empty_dropped 只统计 empty，rewrite 由来源裁决表计数。
+ * 删除归因为 empty，并计入 empty_dropped。
  */
 const dropEmptySources = (
   table: WorkSource[],
   stats: FilterStats,
-  queryTerms: ReadonlySet<string>,
-  crossSourceDeletions?: ReadonlySet<number>
+  queryTerms: ReadonlySet<string>
 ): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
@@ -250,12 +247,9 @@ const dropEmptySources = (
     const surviving = source.snippets.filter((snippet) => snippet.kept);
     if (!isEmptySource(surviving) && !isOneLiner(surviving, queryTerms)) continue;
 
-    const emptiedByCrossSource = crossSourceDeletions?.has(source.index) ?? false;
     source.verdict = 'drop';
-    source.reason = emptiedByCrossSource ? 'rewrite' : 'empty';
-    if (!emptiedByCrossSource) {
-      stats.local.empty_dropped += 1;
-    }
+    source.reason = 'empty';
+    stats.local.empty_dropped += 1;
   }
 };
 
@@ -728,7 +722,7 @@ const runJevStage = async (
 };
 
 /**
- * test/on 共用：阶段 4 来源裁决 → 阶段 5 评分与跨源完整文本去重 → 阶段 6 删除空来源。
+ * test/on 共用：阶段 4 来源裁决 → 阶段 5 评分 → 阶段 6 删除空来源。
  * 裁决实际修改工作表，统计同步回写。
  */
 const runOnChain = (
@@ -740,18 +734,16 @@ const runOnChain = (
 ): void => {
   applySourceVerdicts(table, judged, thresholds, stats);
   applySnippetScores(table, judged, thresholds, stats);
-  const crossSourceDeletions = applyCrossSourceDedup(table, stats);
-  dropEmptySources(table, stats, queryTerms, crossSourceDeletions);
+  dropEmptySources(table, stats, queryTerms);
 };
 
-/** off 或缺少 classify 时：按 Brave 原序执行跨源完整文本去重和阶段 6 删除空来源。 */
+/** off 或缺少 classify 时：执行阶段 6 删除空来源。 */
 const runOffChain = (
   table: WorkSource[],
   stats: FilterStats,
   queryTerms: ReadonlySet<string>
 ): void => {
-  const crossSourceDeletions = applyCrossSourceDedup(table, stats);
-  dropEmptySources(table, stats, queryTerms, crossSourceDeletions);
+  dropEmptySources(table, stats, queryTerms);
 };
 
 /**

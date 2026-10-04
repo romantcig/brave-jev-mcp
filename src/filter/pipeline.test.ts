@@ -561,7 +561,7 @@ describe('trimSourceMeta', () => {
 
 describe('verdicts and drops in step 8', () => {
   it('marks a source whose snippets are all score-removed as empty in step 8', async () => {
-    // 只有 score 或本地删除时归为 empty；新颖度和跨源重复由其他用例检查。
+    // 片段被评分或本地清理删空时，来源归为 empty。
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -727,7 +727,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     assert.equal(rowOf('s1')?.reason, 'off_topic');
     assert.equal(rowOf('s0')?.verdict, 'keep');
     assert.equal(rowOf('s3')?.verdict, 'keep');
-    // score 删光清空的来源按 'empty' 记账（无新颖度/跨源 dup 标记，不记 rewrite）
+    // score 删光清空的来源按 'empty' 记账。
     assert.equal(testRun.stats.local.empty_dropped, 1);
   });
 
@@ -901,9 +901,9 @@ describe('jev status aggregation and breaker open trim-back', () => {
   });
 });
 
-// 新颖度、跨源逐字去重与 rewrite 归因。
+// 跨来源文本保留与来源顺序。
 
-describe('cross-source dedup and verbatim match', () => {
+describe('跨来源内容独立保留', () => {
   // s0 原文，s1 改写（词序不同，非严格相等），s2 独有事实
   const S0_TEXT = 'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency';
   const S1_TEXT =
@@ -930,7 +930,6 @@ describe('cross-source dedup and verbatim match', () => {
       ['https://origin.example/', 'https://rewrite.example/', 'https://unique.example/']
     );
     assert.equal(result.grounding.generic[1].snippets[0], S1_TEXT);
-    assert.equal(stats.local.cross_source_dup_removed, 0);
     assert.equal(stats.local.empty_dropped, 0);
   });
 
@@ -961,8 +960,8 @@ describe('cross-source dedup and verbatim match', () => {
     assert.equal(result.grounding.generic[1].snippets[0], S1_TEXT);
   });
 
-  it('跨来源逐字完全相同的内容作为 dup 删除，清空来源归因为 rewrite', async () => {
-    // 通稿转载：s1 逐字复制 s0 的长片段 → 跨源严格 dup，清空来源记 rewrite
+  it('跨来源完全相同的内容与证据出处均保留', async () => {
+    // 同样的正文来自不同来源，保持两个出处及原序。
     const dupLong =
       'the brave model ships with a streaming api and costs $4.2m per month for scale';
     const data: BraveLlmContextResponse = {
@@ -976,17 +975,40 @@ describe('cross-source dedup and verbatim match', () => {
       sources: {},
     };
 
-    const { result, stats } = await filterLlmContext(data, request, offConfig);
-
-    assert.deepEqual(
-      result.grounding.generic.map((item) => item.url),
-      ['https://wire.example/']
-    );
-    assert.equal(stats.local.cross_source_dup_removed, 1);
-    const syndicated = stats.sources.find((entry) => entry.url === 'https://syndicated.example/');
-    assert.equal(syndicated?.verdict, 'drop');
-    assert.equal(syndicated?.reason, 'rewrite');
-    assert.equal(stats.local.empty_dropped, 0);
+    for (const mode of ['off', 'test', 'on'] as const) {
+      const { result, stats } = await filterLlmContext(
+        data,
+        request,
+        { ...offConfig, mode },
+        {
+          classify: async ({ questions }) => ({
+            status: 'answered',
+            model: DEFAULT_JEV_MODEL,
+            input_tokens: 10,
+            answers: Object.fromEntries(
+              Object.entries(questions).map(([key, question]) => [
+                key,
+                question.type === 'score'
+                  ? { kind: 'score', score: 2 }
+                  : { kind: 'noul', probability: 0 },
+              ])
+            ),
+          }),
+        }
+      );
+      assert.deepEqual(
+        result.grounding.generic.map((item) => item.url),
+        ['https://wire.example/', 'https://syndicated.example/']
+      );
+      assert.deepEqual(
+        result.grounding.generic.map((item) => item.snippets),
+        [[dupLong], [dupLong]]
+      );
+      const syndicated = stats.sources.find((entry) => entry.url === 'https://syndicated.example/');
+      assert.equal(syndicated?.verdict, 'keep');
+      assert.equal(syndicated?.reason, undefined);
+      assert.equal(stats.local.empty_dropped, 0);
+    }
   });
 });
 
@@ -1833,7 +1855,6 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
     const { result, stats } = await filterLlmContext(data, regressionRequest, offConfig);
 
     assert.equal(result.grounding.generic.length, 3);
-    assert.equal(stats.local.cross_source_dup_removed, 0);
     assert.ok(result.grounding.generic[0].snippets[0].includes('开放注册'));
     assert.ok(result.grounding.generic[1].snippets[0].includes('权限绕过漏洞'));
     assert.ok(result.grounding.generic[2].snippets[0].includes('1.14'));
@@ -1866,11 +1887,10 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
     const { result, stats } = await filterLlmContext(data, regressionRequest, offConfig);
 
     assert.equal(result.grounding.generic.length, 2);
-    assert.equal(stats.local.cross_source_dup_removed, 0);
     assert.ok(result.grounding.generic[1].snippets[0].includes('does not cost $4.2m'));
   });
 
-  it('近似不等于重复：高度重复正文加关键短句在页内与跨来源两个调用位置均保留', async () => {
+  it('近似不等于重复：高度重复正文加关键短句在页内与不同来源之间均保留', async () => {
     const base =
       'Brave browser ships with native ad blocking, fingerprinting protection, and multi-threaded script execution.';
     const pageWithBonus = `${base} 启动前必须关闭硬件加速才能启用实验模式。`;
@@ -1905,7 +1925,6 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
     assert.equal(result.grounding.generic[1].snippets.length, 1);
     assert.ok(result.grounding.generic[1].snippets[0].includes('严禁直接开放未授权公网访问'));
     assert.equal(stats.local.dup_removed, 0);
-    assert.equal(stats.local.cross_source_dup_removed, 0);
   });
 
   it('文本区别：代码大小写、缩进不同与负号不同不因去重合并', async () => {
@@ -1945,10 +1964,9 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
     const { result, stats } = await filterLlmContext(data, codeRequest, offConfig);
 
     assert.equal(result.grounding.generic.length, 4);
-    assert.equal(stats.local.cross_source_dup_removed, 0);
   });
 
-  it('完整重复：页内与跨来源严格全等删除后者，覆盖短片段，归因与计数正确', async () => {
+  it('完整重复只在页内删除，跨来源短片段保留', async () => {
     const textA = 'Brave browser official release announcement.';
     const shortText = 'Release v1.14';
 
@@ -1977,12 +1995,11 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
     assert.equal(result.grounding.generic[0].snippets.length, 2);
     assert.equal(stats.local.dup_removed, 1);
 
-    // s1 跨来源短片段 shortText 被删（cross_source_dup_removed = 1），s1 成为空来源被删且归因为 rewrite
-    assert.equal(stats.local.cross_source_dup_removed, 1);
-    assert.equal(result.grounding.generic.length, 1);
+    // s1 保留独立来源的相同短片段。
+    assert.equal(result.grounding.generic.length, 2);
     const mirror = stats.sources.find((s) => s.url === 'https://mirror.example/s1');
-    assert.equal(mirror?.verdict, 'drop');
-    assert.equal(mirror?.reason, 'rewrite');
+    assert.equal(mirror?.verdict, 'keep');
+    assert.equal(mirror?.reason, undefined);
   });
 
   it('参照与顺序：被来源裁决删除的内容不影响后续来源参照，Brave 顺序保持', async () => {
@@ -2034,7 +2051,6 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
     assert.equal(result.grounding.generic.length, 1);
     assert.equal(result.grounding.generic[0].url, 'https://legit.example/s1');
     assert.equal(result.grounding.generic[0].snippets[0], commonText);
-    assert.equal(stats.local.cross_source_dup_removed, 0);
   });
 
   it('Jev 集成：模拟最高分 2、原创论证为 0 的新事实完整保留', async () => {
@@ -2116,8 +2132,7 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
 
     const { result, stats } = await filterLlmContext(data, regressionRequest, legacyConfig);
 
-    // 完全相同文本依然正常去重，不受旧 min_facts=1000000000 影响
-    assert.equal(result.grounding.generic.length, 1);
-    assert.equal(stats.local.cross_source_dup_removed, 1);
+    // 退役配置不会重新启用跨来源删除。
+    assert.equal(result.grounding.generic.length, 2);
   });
 });

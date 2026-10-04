@@ -23,7 +23,8 @@ AGENTS.md
 AGENT_LEARNINGS.md
 .zcode/
 .zcodeignore
-dev/filter-*.ts
+# 本地实验默认不入库；已跟踪的开发工具继续维护
+/dev/
 
 # 历史实验与已执行计划的归档（2026-10-04）：整目录本地保留、不入版本库，
 # 说明见 archive/README.md

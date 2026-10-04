@@ -297,7 +297,7 @@ export type ShadowDiff = {
   would_restore_snippets: number;
 };
 
-/** 整源删除原因；self_deprecated / stale 仅为读取旧记录保留，当前不产生。 */
+/** 整源删除原因；self_deprecated / stale / rewrite 仅为读取旧记录保留，当前不产生。 */
 export type SourceDropReason =
   | 'empty'
   | 'off_topic'
@@ -360,8 +360,6 @@ export type LocalStats = {
   snippets_prefiltered: number;
   dup_removed: number;
   empty_dropped: number;
-  /** 因跨来源完整文本重复删除的片段数。 */
-  cross_source_dup_removed: number;
   /** GitHub 清洗动作总数，包含清空片段的动作；与逐片段 github_cleanup 明细对应。 */
   github_cleanup_actions: number;
   /** X 清洗动作总数，包含清空片段的动作；与逐片段 x_cleanup 明细对应。 */

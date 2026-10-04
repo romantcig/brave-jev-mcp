@@ -27,7 +27,6 @@ export const zeroLocal: Readonly<LocalStats> = Object.freeze({
   snippets_prefiltered: 0,
   dup_removed: 0,
   empty_dropped: 0,
-  cross_source_dup_removed: 0,
   github_cleanup_actions: 0,
   x_cleanup_actions: 0,
 });

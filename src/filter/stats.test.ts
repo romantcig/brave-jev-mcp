@@ -12,7 +12,7 @@ const makeSource = (
 });
 
 describe('zeroLocal', () => {
-  it('包含两项去重计数且不再包含退役的 novelty 字段', () => {
+  it('保留页内去重计数，不包含退役的跨源与 novelty 字段', () => {
     assert.deepEqual(zeroLocal, {
       jsonld_converted: 0,
       jsonld_dropped: 0,
@@ -20,10 +20,10 @@ describe('zeroLocal', () => {
       snippets_prefiltered: 0,
       dup_removed: 0,
       empty_dropped: 0,
-      cross_source_dup_removed: 0,
       github_cleanup_actions: 0,
       x_cleanup_actions: 0,
     });
+    assert.equal('cross_source_dup_removed' in zeroLocal, false);
     assert.equal('novelty_removed' in zeroLocal, false);
     assert.equal('novelty' in zeroLocal, false);
   });
