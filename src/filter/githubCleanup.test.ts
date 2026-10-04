@@ -2,6 +2,87 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 
+describe('比较页菜单和 PR 加载占位清理', () => {
+  const compare = 'https://github.com/team/project/compare/main...fix';
+  const pull = 'https://github.com/team/project/pull/42';
+  const sha = 'aB12'.repeat(10);
+  const menu = `Configuration menu Copy the full SHA ${sha} View commit details Browse the repository at this point in the history`;
+  const error = 'There was an error while loading. Please reload this page.';
+
+  it('连续提交逐条剥菜单，保留说明、SHA、顺序和 CRLF', () => {
+    const text = `Fix corruption ${menu}\r\nAdd regression ${menu}\r\n`;
+    const result = cleanGitHubBoilerplate(text, compare);
+    assert.equal(result.text, `Fix corruption ${sha}\r\nAdd regression ${sha}\r\n`);
+    assert.deepEqual(
+      result.actions,
+      [1, 2].map((line) => ({ rule: 'compare_commit_menu', line, partial: true }))
+    );
+    assert.deepEqual(cleanGitHubBoilerplate(result.text, compare), {
+      text: result.text,
+      actions: [],
+    });
+    assert.equal(
+      cleanGitHubBoilerplate(menu, 'https://github.com/team/project/compare?expand=1').text,
+      sha
+    );
+  });
+
+  it('残缺菜单、未知域名、其它页面与受保护内容保留', () => {
+    for (const text of [
+      menu.replace(sha, 'abc123'),
+      menu + ' is the menu text.',
+      `> ${menu}`,
+      `    ${menu}`,
+      `\`\`\`\n${menu}\n\`\`\``,
+      `\`${menu}\``,
+      `> quoted\n${menu}`,
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate(text, compare), { text, actions: [] });
+    }
+    for (const url of [
+      pull,
+      'https://github.com/team/project',
+      'https://github.com.evil.test/team/project/compare',
+      'https://github.com/team/project//compare',
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate(menu, url), { text: menu, actions: [] });
+    }
+  });
+
+  it('PR 成对占位只删界面行，保留合并元数据、反应数、关联问题和正文', () => {
+    const before = 'alice wants to merge 2 commits into main from fix\r\n';
+    const after =
+      '👍 3\r\n### Reviewers\r\nbob\r\n### Development\r\nFixes #7\r\nActual fix details';
+    const result = cleanGitHubBoilerplate(
+      before + error + '\r\n\r\nAll reactions\r\n' + after,
+      pull
+    );
+    assert.equal(result.text, before + '\r\n' + after);
+    assert.deepEqual(
+      result.actions,
+      [2, 4].map((line) => ({ rule: 'pr_loading_placeholder', line }))
+    );
+    assert.deepEqual(cleanGitHubBoilerplate(result.text, pull), { text: result.text, actions: [] });
+  });
+
+  it('孤立提示、正文隔断、引用与代码中的提示不删', () => {
+    for (const text of [
+      error,
+      'All reactions',
+      `${error}\nExplanation\nAll reactions`,
+      `> ${error}\nAll reactions`,
+      `\`\`\`\n${error}\nAll reactions\n\`\`\``,
+      `${error}\n    All reactions`,
+    ]) {
+      assert.deepEqual(cleanGitHubBoilerplate(text, pull), { text, actions: [] });
+    }
+    for (const url of [compare, pull + '/files', 'https://github.com/team/project/issues/42']) {
+      const text = `${error}\nAll reactions`;
+      assert.deepEqual(cleanGitHubBoilerplate(text, url), { text, actions: [] });
+    }
+  });
+});
+
 /** GitHub 清洗的命中、保护区域、原序与幂等回归；也检查不应再删除的界面文字。 */
 
 const REPO_ROOT = 'https://github.com/HexRaysSA/ida-mcp';

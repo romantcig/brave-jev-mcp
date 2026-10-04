@@ -378,6 +378,8 @@ export type GitHubCleanupRule =
   | 'tag_compare'
   | 'reactions_unavailable'
   | 'pr_uh_oh'
+  | 'compare_commit_menu'
+  | 'pr_loading_placeholder'
   | 'repo_topics'
   | 'about_echo';
 
@@ -389,7 +391,7 @@ export type GitHubCleanupAction = {
   rule: GitHubCleanupRule;
   /** 命中行号（1 起） */
   line: number;
-  /** 行内局部剥除（分支复制按钮后缀，前文分支文本保留）；整行删除省略 */
+  /** 行内局部剥除（按钮或菜单后缀，保留分支与提交标识）；整行删除省略 */
   partial?: boolean;
 };
 

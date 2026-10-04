@@ -69,7 +69,7 @@ const referenceGuardFlags = (
  * `releases/latest` 等）都返回 `null`。
  */
 type GitHubCleanPage = {
-  kind: 'repo_root' | 'pull' | 'release';
+  kind: 'repo_root' | 'pull' | 'release' | 'compare';
   owner: string;
   repo: string;
 };
@@ -124,6 +124,7 @@ const parseGitHubPage = (url: string): GitHubCleanPage | null => {
       : { kind: 'repo_root', owner, repo };
   }
   if (numberedThread && third === 'pull') return { kind: 'pull', owner, repo };
+  if (third === 'compare' && segments.length >= 3) return { kind: 'compare', owner, repo };
   if (segments.length === 3 && third === 'releases') return { kind: 'release', owner, repo };
   if (segments.length >= 5 && third === 'releases' && segments[3] === 'tag' && segments[4] !== '') {
     return { kind: 'release', owner, repo };
@@ -179,6 +180,40 @@ const judgeCleanup = (
   /** 行内局部剥后缀：行号 → 剥后的行内容（行尾字节在应用时从 lines 取回）。 */
   const partialLine = new Map<number, string>();
   const actions: GitHubCleanupAction[] = [];
+
+  // 比较页只剥完整的提交菜单后缀；SHA 是提交定位信息，保留其原始大小写。
+  if (page.kind === 'compare') {
+    const menu =
+      /(?:^|[ \t]+)Configuration menu Copy the full SHA ([a-fA-F0-9]{40}) View commit details Browse the repository at this point in the history[ \t]*$/;
+    for (let index = 0; index < contents.length; index += 1) {
+      if (guarded[index]) continue;
+      const match = menu.exec(contents[index]);
+      if (match === null) continue;
+      const head = contents[index].slice(0, match.index);
+      partialLine.set(index, head + (head === '' ? '' : ' ') + match[1]);
+      actions.push({ rule: 'compare_commit_menu', line: index + 1, partial: true });
+    }
+  }
+
+  // PR 加载占位必须成对出现且中间仅有空行；不清理单独的错误描述或反应数据。
+  if (page.kind === 'pull') {
+    for (let index = 0; index < contents.length; index += 1) {
+      if (
+        guarded[index] ||
+        normalized[index] !== 'There was an error while loading. Please reload this page.'
+      )
+        continue;
+      let partner = index + 1;
+      while (partner < contents.length && contents[partner].trim() === '' && !guarded[partner])
+        partner += 1;
+      if (partner >= contents.length || guarded[partner] || normalized[partner] !== 'All reactions')
+        continue;
+      for (const line of [index, partner]) {
+        deleteLine[line] = true;
+        actions.push({ rule: 'pr_loading_placeholder', line: line + 1 });
+      }
+    }
+  }
 
   // —— 规则 1：仓库导航行（repo_root）——
   if (page.kind === 'repo_root') {

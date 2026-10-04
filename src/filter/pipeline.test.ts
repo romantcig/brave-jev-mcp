@@ -1435,6 +1435,39 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
 // ---------------------------------------------------------------------------
 
 describe('GitHub 清洗接入', () => {
+  it('比较菜单与 PR 占位在 test/on 清洗并计数，off 保留原文', async () => {
+    const sha = 'abcd'.repeat(10);
+    const body =
+      'Brave browser repository documents its rendering pipeline and benchmark methodology.';
+    const menu = `Configuration menu Copy the full SHA ${sha} View commit details Browse the repository at this point in the history`;
+    const error = 'There was an error while loading. Please reload this page.\nAll reactions';
+    for (const [url, text, expected, count] of [
+      [
+        'https://github.com/team/project/compare/main...fix',
+        `${body} ${menu}`,
+        `${body} ${sha}`,
+        1,
+      ],
+      ['https://github.com/team/project/pull/42', `${error}\n${body}`, body, 2],
+    ] as const) {
+      const input: BraveLlmContextResponse = {
+        grounding: { generic: [{ url, title: 'Change details', snippets: [text] }] },
+        sources: {},
+      };
+      for (const mode of ['off', 'test', 'on'] as const) {
+        const filtered = await filterLlmContext(input, request, { ...offConfig, mode });
+        assert.deepEqual(filtered.result.grounding.generic[0].snippets, [
+          mode === 'off' ? text : expected,
+        ]);
+        assert.equal(filtered.stats.local.github_cleanup_actions, mode === 'off' ? 0 : count);
+        assert.equal(
+          filtered.stats.sources[0].snippets[0].github_cleanup?.length ?? 0,
+          mode === 'off' ? 0 : count
+        );
+      }
+    }
+  });
+
   const url = 'https://github.com/example/brave';
   const body =
     'Brave browser repository documents its rendering pipeline and benchmark methodology.';
