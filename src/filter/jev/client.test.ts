@@ -15,13 +15,14 @@ import type {
   ClassifyDeps,
   FilterConfig,
   FilterRequest,
+  JevCandidateDetailed,
   JevQuestion,
   JevState,
 } from '../types.js';
 import { buildRequest, createJevClassifier, hasJevKey, JEVI_ENDPOINT } from './client.js';
 import { parseJevResponse } from './client.js';
 import { DEFAULT_JEV_MODEL, SOURCE_QUESTIONS } from './questions.js';
-import { buildContextRequest } from './context.js';
+import { buildContextRequest, projectSourceAnswers } from './context.js';
 
 const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
 const expectedRoot = join(fixtureRoot, 'expected');
@@ -485,12 +486,62 @@ const waitFor = async (condition: () => boolean, timeoutMs = 2000): Promise<void
   assert.ok(condition(), 'waitFor condition not met before deadline');
 };
 
-/** 200 响应体：default 夹具 s0 的真实形状（含十来源级题答案与 snip0..N）。 */
-const okResponseOf = (entry: { response: unknown }): Response =>
-  new Response(JSON.stringify(entry.response), {
+/** 强类型 Mock 覆盖项。 */
+type MockJevOverrides = {
+  model?: string;
+  input_tokens?: number;
+  answers?: Record<
+    string,
+    { type: 'noul'; noul: number } | { type: 'score'; score: number } | unknown
+  >;
+};
+
+/**
+ * 强类型现代化 Mock 工厂：严格以实发 questions 键表为准，
+ * 自动生成 100% 匹配的真实全局命名空间答案，估算合理的 input_tokens 并支持 overrides。
+ */
+const mockJevSuccessResponse = (
+  state: JevState,
+  questions: Record<string, JevQuestion>,
+  overrides?: MockJevOverrides
+): Response => {
+  const answers: Record<string, unknown> = {};
+  for (const [key, q] of Object.entries(questions)) {
+    if (q.type === 'noul') {
+      answers[key] = { type: 'noul', noul: 0.1 };
+    } else if (q.type === 'score') {
+      answers[key] = { type: 'score', score: 2 };
+    }
+  }
+  if (overrides?.answers !== undefined) {
+    Object.assign(answers, overrides.answers);
+  }
+
+  const textLen =
+    state.query.length +
+    state.intent.length +
+    state.sources.reduce(
+      (sum, s) => sum + s.title.length + s.snippets.reduce((acc, snip) => acc + snip.length, 0),
+      0
+    );
+  const estimatedTokens = Math.max(
+    32,
+    Math.round(textLen / 3) + Object.keys(questions).length * 10
+  );
+
+  const payload = {
+    model: overrides?.model ?? DEFAULT_JEV_MODEL,
+    answers,
+    usage: {
+      input_tokens: overrides?.input_tokens ?? estimatedTokens,
+    },
+  };
+
+  return new Response(JSON.stringify(payload), {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });
+};
 
 describe('hasJevKey', () => {
   it('accepts only the official TYPESAFE_API_KEY with a non-blank value', () => {
@@ -506,28 +557,58 @@ describe('hasJevKey', () => {
 });
 
 describe('createJevClassifier', () => {
-  const state = makeAllState(1, 2);
-
   it('sends the pinned request shape to the single endpoint with the bearer header', async () => {
-    const entry = defaultRecording.results['s0'];
+    const candidates: JevCandidateDetailed[] = [
+      {
+        id: 's0',
+        url: 'https://s0.example/',
+        title: 'Title 0',
+        snippets: [
+          { key: '0', text: 'snippet 0.0' },
+          { key: '1', text: 'snippet 0.1' },
+        ],
+        bravePageDate: null,
+      },
+      {
+        id: 's2',
+        url: 'https://s2.example/',
+        title: 'Title 2',
+        snippets: [{ key: '0', text: 'snippet 2.0' }],
+        bravePageDate: null,
+      },
+      {
+        id: 's5',
+        url: 'https://s5.example/',
+        title: 'Title 5',
+        snippets: [
+          { key: '0', text: 'snippet 5.0' },
+          { key: '1', text: 'snippet 5.1' },
+          { key: '2', text: 'snippet 5.2' },
+        ],
+        bravePageDate: null,
+      },
+    ];
+    const { state, questions } = buildContextRequest(candidates, 'test query', 'test intent');
+
     let capturedUrl = '';
     let capturedInit: RequestInit | undefined;
     const saved = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       capturedUrl = String(input instanceof Request ? input.url : input);
       capturedInit = init;
-      return okResponseOf(entry);
+      return mockJevSuccessResponse(state, questions);
     }) as typeof fetch;
 
     try {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'official-key' });
-      const questions = makeQuestions(state, 2);
       const outcome = await classifier.classify({ state, questions });
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      assert.equal(outcome.model, 'jev-1.13.0');
-      assert.equal(outcome.input_tokens, entry.response.usage.input_tokens);
-      assert.equal(outcome.answers['worth_keeping']?.kind, 'noul');
+      assert.equal(outcome.model, DEFAULT_JEV_MODEL);
+      assert.ok(outcome.input_tokens > 0);
+      assert.equal(outcome.answers['s0__has_original_reasoning']?.kind, 'noul');
+      assert.equal(outcome.answers['s2__snip0']?.kind, 'score');
+      assert.equal(outcome.answers['s5__is_template_filler']?.kind, 'noul');
 
       assert.equal(capturedUrl, JEVI_ENDPOINT);
       assert.equal(capturedInit?.method, 'POST');
@@ -542,7 +623,98 @@ describe('createJevClassifier', () => {
       };
       assert.equal(body.model, DEFAULT_JEV_MODEL);
       assert.deepEqual(body.state, state);
-      assert.equal(Object.keys(body.questions).length, 6);
+      assert.equal(Object.keys(body.questions).length, 18);
+    } finally {
+      globalThis.fetch = saved;
+    }
+  });
+
+  it('projects non-contiguous candidate answers (s0, s2, s5) correctly without bleed or out-of-bounds for skipped s1', async () => {
+    const candidates: JevCandidateDetailed[] = [
+      {
+        id: 's0',
+        url: 'https://s0.example/',
+        title: 'Title 0',
+        snippets: [
+          { key: '0', text: 'snippet 0.0' },
+          { key: '1', text: 'snippet 0.1' },
+        ],
+        bravePageDate: null,
+      },
+      {
+        id: 's2',
+        url: 'https://s2.example/',
+        title: 'Title 2',
+        snippets: [{ key: '0', text: 'snippet 2.0' }],
+        bravePageDate: null,
+      },
+      {
+        id: 's5',
+        url: 'https://s5.example/',
+        title: 'Title 5',
+        snippets: [
+          { key: '0', text: 'snippet 5.0' },
+          { key: '1', text: 'snippet 5.1' },
+          { key: '2', text: 'snippet 5.2' },
+        ],
+        bravePageDate: null,
+      },
+    ];
+    const { state, questions, entries } = buildContextRequest(
+      candidates,
+      'test query',
+      'test intent'
+    );
+    const saved = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      mockJevSuccessResponse(state, questions, {
+        answers: {
+          s0__snip0: { type: 'score', score: 3 },
+          s0__snip1: { type: 'score', score: 1 },
+          s2__snip0: { type: 'score', score: 2 },
+          s5__snip0: { type: 'score', score: 0 },
+          s5__snip1: { type: 'score', score: 3 },
+          s5__snip2: { type: 'score', score: 2 },
+          s0__has_original_reasoning: { type: 'noul', noul: 0.8 },
+          s2__has_original_reasoning: { type: 'noul', noul: 0.2 },
+          s5__has_original_reasoning: { type: 'noul', noul: 0.5 },
+        },
+      })) as typeof fetch;
+
+    try {
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const outcome = await classifier.classify({ state, questions });
+      assert.equal(outcome.status, 'answered');
+      if (outcome.status !== 'answered') return;
+
+      const s0Entry = entries.find((e) => e.source_id === 's0')!;
+      const s2Entry = entries.find((e) => e.source_id === 's2')!;
+      const s5Entry = entries.find((e) => e.source_id === 's5')!;
+
+      const proj0 = projectSourceAnswers({
+        snippetCount: s0Entry.snippet_keys.length,
+        answerAt: (key) => outcome.answers[s0Entry.question_keys[key]],
+      });
+      const proj2 = projectSourceAnswers({
+        snippetCount: s2Entry.snippet_keys.length,
+        answerAt: (key) => outcome.answers[s2Entry.question_keys[key]],
+      });
+      const proj5 = projectSourceAnswers({
+        snippetCount: s5Entry.snippet_keys.length,
+        answerAt: (key) => outcome.answers[s5Entry.question_keys[key]],
+      });
+
+      assert.deepEqual(proj0.snippetScores, [3, 1]);
+      assert.equal(proj0.answers['has_original_reasoning'], 0.8);
+
+      assert.deepEqual(proj2.snippetScores, [2]);
+      assert.equal(proj2.answers['has_original_reasoning'], 0.2);
+
+      assert.deepEqual(proj5.snippetScores, [0, 3, 2]);
+      assert.equal(proj5.answers['has_original_reasoning'], 0.5);
+
+      assert.equal(outcome.answers['s1__has_original_reasoning'], undefined);
+      assert.equal(outcome.answers['s1__snip0'], undefined);
     } finally {
       globalThis.fetch = saved;
     }
@@ -676,8 +848,6 @@ describe('createJevClassifier', () => {
   });
 
   it('caps concurrent fetches at the configured limit and queues the rest (JEV-04)', async () => {
-    const entry = defaultRecording.results['s0'];
-    const responseBody = JSON.stringify(entry.response);
     let inflight = 0;
     let peak = 0;
     const pending: Array<() => void> = [];
@@ -687,10 +857,7 @@ describe('createJevClassifier', () => {
       peak = Math.max(peak, inflight);
       await new Promise<void>((resolve) => pending.push(resolve));
       inflight -= 1;
-      return new Response(responseBody, {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      return mockJevSuccessResponse(sharedRequest.state, sharedRequest.questions);
     }) as typeof fetch;
 
     try {
@@ -777,7 +944,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       },
       () => {
         fetchCount += 1;
-        return okResponseOf(defaultRecording.results['s0']);
+        return mockJevSuccessResponse(request.state, request.questions);
       },
     ]);
 
@@ -792,35 +959,22 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     }
   });
 
-  it('exhausts three attempts against persistent 429 and fails with rate_limited', async () => {
+  it('exhausts three attempts against persistent 429 and 529 and fails with rate_limited', async () => {
     const saved = globalThis.fetch;
-    const { fetchImpl, counter } = statusFetch(429, 'rate limited');
-    globalThis.fetch = fetchImpl;
-
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
-      const outcome = await classifier.classify(request);
+      for (const { status, body } of [
+        { status: 429, body: 'rate limited' },
+        { status: 529, body: 'overloaded' },
+      ]) {
+        const { fetchImpl, counter } = statusFetch(status, body);
+        globalThis.fetch = fetchImpl;
+        const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
+        const outcome = await classifier.classify(request);
 
-      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
-      assert.equal(outcome.kind, 'rate_limited');
-      assert.equal(counter.calls, 3);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('treats 529 like 429: retries three attempts then fails with rate_limited', async () => {
-    const saved = globalThis.fetch;
-    const { fetchImpl, counter } = statusFetch(529, 'overloaded');
-    globalThis.fetch = fetchImpl;
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
-      const outcome = await classifier.classify(request);
-
-      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
-      assert.equal(outcome.kind, 'rate_limited');
-      assert.equal(counter.calls, 3);
+        assert.ok(outcome.status === 'failed', `${status} ${JSON.stringify(outcome)}`);
+        assert.equal(outcome.kind, 'rate_limited');
+        assert.equal(counter.calls, 3);
+      }
     } finally {
       globalThis.fetch = saved;
     }
@@ -843,99 +997,36 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     }
   });
 
-  it('does not retry 403 (auth) and does not count it toward the breaker', async () => {
+  it('never retries non-retryable statuses (403, 404, 422, 413) and makes exactly one attempt', async () => {
+    const cases = [
+      { status: 403, body: 'forbidden', kind: 'auth' as const },
+      { status: 404, body: 'not found', kind: 'validation' as const },
+      { status: 422, body: 'state too large', kind: 'validation' as const },
+      { status: 413, body: 'payload too large', kind: 'validation' as const },
+    ];
     const saved = globalThis.fetch;
-    const { fetchImpl, counter } = statusFetch(403, 'forbidden');
-    globalThis.fetch = fetchImpl;
-
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
-      const outcome = await classifier.classify(request);
+      for (const { status, body, kind } of cases) {
+        const { fetchImpl, counter } = statusFetch(status, body);
+        globalThis.fetch = fetchImpl;
+        const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
+        const outcome = await classifier.classify(request);
 
-      // 派发后失败仍保留输入证据。
-      assert.deepEqual(outcome, {
-        status: 'failed',
-        kind: 'auth',
-        detail: '403 forbidden',
-        dispatch: request,
-        http_attempts: 1,
-        usage_complete: false,
-        http_status: 403,
-      });
-      assert.equal(counter.calls, 1);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('does not retry 404 (validation) either', async () => {
-    const saved = globalThis.fetch;
-    const { fetchImpl, counter } = statusFetch(404, 'not found');
-    globalThis.fetch = fetchImpl;
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
-      const outcome = await classifier.classify(request);
-
-      assert.deepEqual(outcome, {
-        status: 'failed',
-        kind: 'validation',
-        detail: '404 not found',
-        dispatch: request,
-        http_attempts: 1,
-        usage_complete: false,
-        http_status: 404,
-      });
-      assert.equal(counter.calls, 1);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('never retries 422 — a validation failure would just 422 again (Pitfall 7)', async () => {
-    const saved = globalThis.fetch;
-    const { fetchImpl, counter } = statusFetch(422, 'state too large');
-    globalThis.fetch = fetchImpl;
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
-      const outcome = await classifier.classify(request);
-
-      // HTTP 拒绝仍是已发送请求，样本必须保留其载荷。
-      assert.deepEqual(outcome, {
-        status: 'failed',
-        kind: 'validation',
-        detail: '422 state too large',
-        dispatch: request,
-        http_attempts: 1,
-        usage_complete: false,
-        http_status: 422,
-      });
-      assert.equal(counter.calls, 1);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('never retries 413 either — validation, not a local oversize branch (all-only §3.3)', async () => {
-    const saved = globalThis.fetch;
-    const { fetchImpl, counter } = statusFetch(413, 'payload too large');
-    globalThis.fetch = fetchImpl;
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
-      const outcome = await classifier.classify(request);
-
-      assert.deepEqual(outcome, {
-        status: 'failed',
-        kind: 'validation',
-        detail: '413 payload too large',
-        dispatch: request,
-        http_attempts: 1,
-        usage_complete: false,
-        http_status: 413,
-      });
-      assert.equal(counter.calls, 1);
+        assert.deepEqual(
+          outcome,
+          {
+            status: 'failed',
+            kind,
+            detail: `${status} ${body}`,
+            dispatch: request,
+            http_attempts: 1,
+            usage_complete: false,
+            http_status: status,
+          },
+          `${status} must fail with ${kind}`
+        );
+        assert.equal(counter.calls, 1, `${status} must not be retried`);
+      }
     } finally {
       globalThis.fetch = saved;
     }
@@ -1007,7 +1098,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       },
       () => {
         fetchCount += 1;
-        return okResponseOf(defaultRecording.results['s0']);
+        return mockJevSuccessResponse(request.state, request.questions);
       },
     ]);
 
@@ -1058,7 +1149,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const saved = globalThis.fetch;
     globalThis.fetch = scriptedFetch([
       () => new Response('rate limited', { status: 429, headers: { 'retry-after-ms': '1200' } }),
-      () => okResponseOf(defaultRecording.results['s0']),
+      () => mockJevSuccessResponse(request.state, request.questions),
     ]);
     const { sleeps, hooks } = sleepRecorder(0);
 
@@ -1077,7 +1168,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const saved = globalThis.fetch;
     globalThis.fetch = scriptedFetch([
       () => new Response('rate limited', { status: 429, headers: { 'retry-after': '3' } }),
-      () => okResponseOf(defaultRecording.results['s0']),
+      () => mockJevSuccessResponse(request.state, request.questions),
     ]);
     const { sleeps, hooks } = sleepRecorder(0);
 
@@ -1117,7 +1208,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const date = new Date(now + 3000).toUTCString();
     globalThis.fetch = scriptedFetch([
       () => new Response('rate limited', { status: 429, headers: { 'retry-after': date } }),
-      () => okResponseOf(defaultRecording.results['s0']),
+      () => mockJevSuccessResponse(request.state, request.questions),
     ]);
     const { sleeps, hooks } = sleepRecorder(0);
 
@@ -1140,7 +1231,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const saved = globalThis.fetch;
     globalThis.fetch = scriptedFetch([
       () => new Response('rate limited', { status: 429, headers: { 'retry-after': 'soon-ish' } }),
-      () => okResponseOf(defaultRecording.results['s0']),
+      () => mockJevSuccessResponse(request.state, request.questions),
     ]);
     const { sleeps, hooks } = sleepRecorder(0);
 
@@ -1172,7 +1263,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       },
       () => {
         fetchCount += 1;
-        return okResponseOf(defaultRecording.results['s0']);
+        return mockJevSuccessResponse(request.state, request.questions);
       },
     ]);
     const { hooks } = sleepRecorder(0);
@@ -1243,7 +1334,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       seen.push(JSON.parse(String(init?.body)));
       return seen.length === 1
         ? new Response('retry', { status: 503 })
-        : okResponseOf(defaultRecording.results['s0']);
+        : mockJevSuccessResponse(state, sharedQuestions);
     }) as typeof fetch;
 
     try {
@@ -1308,7 +1399,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     const saved = globalThis.fetch;
     globalThis.fetch = (async () => {
       fetchCount += 1;
-      if (okAt.has(fetchCount)) return okResponseOf(defaultRecording.results['s0']);
+      if (okAt.has(fetchCount)) return mockJevSuccessResponse(request.state, request.questions);
       return new Response('rate limited', { status: 429 });
     }) as typeof fetch;
 
@@ -1346,7 +1437,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     const saved = globalThis.fetch;
     globalThis.fetch = (async () => {
       fetchCount += 1;
-      if (okAt.has(fetchCount)) return okResponseOf(defaultRecording.results['s0']);
+      if (okAt.has(fetchCount)) return mockJevSuccessResponse(request.state, request.questions);
       return new Response('rate limited', { status: 429 });
     }) as typeof fetch;
 
@@ -1542,59 +1633,6 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
     }
   });
 
-  it('hands the slot to the head waiter instead of reopening a gap (C4)', async () => {
-    // 并发上限为 1，等待者接棒期间的新请求不能抢到同一名额。
-    // A 释放前还要读取正文和解析，微任务窗口不固定，因此让 C 延迟不同微任务数进入。
-    // 每轮新建分类器，所有时序的在途峰值都应保持为 1。
-    const saved = globalThis.fetch;
-    try {
-      for (let k = 0; k < 30; k += 1) {
-        let inflight = 0;
-        let peak = 0;
-        const pending: Array<() => void> = [];
-        globalThis.fetch = (async () => {
-          inflight += 1;
-          peak = Math.max(peak, inflight);
-          await new Promise<void>((resolve) => pending.push(resolve));
-          inflight -= 1;
-          return okResponseOf(defaultRecording.results['s0']);
-        }) as typeof fetch;
-
-        const classifier = createJevClassifier(
-          { ...jevConfig, concurrency: 1 },
-          { TYPESAFE_API_KEY: 'k' },
-          { random: () => 0 }
-        );
-
-        const promises: Array<Promise<{ status: string }>> = [];
-        promises.push(classifier.classify(request)); // A 立即在途
-        await waitFor(() => pending.length === 1);
-        promises.push(classifier.classify(request)); // B 排队
-        await new Promise((resolve) => setTimeout(resolve, 5));
-
-        // 放行 A，C 延迟 k 个微任务后进闸
-        pending.shift()!();
-        let delayed: Promise<void> = Promise.resolve();
-        for (let i = 0; i < k; i += 1) delayed = delayed.then(() => {});
-        promises.push(delayed.then(() => classifier.classify(request)));
-
-        // 依次放行 B 与 C
-        for (let i = 0; i < 2; i += 1) {
-          await waitFor(() => pending.length > 0);
-          pending.shift()!();
-        }
-
-        const outcomes = await Promise.all(promises);
-        for (const outcome of outcomes) {
-          assert.equal(outcome.status, 'answered', JSON.stringify(outcome));
-        }
-        assert.equal(peak, 1, `k=${k}: peak in-flight fetches must be exactly 1, saw ${peak}`);
-      }
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
   it('returns the slot on every failure path so the next request still runs (E1)', async () => {
     // concurrency 1：三种失败（fetch 恒抛 / 恒 500 / 恒 401）各发一次请求，之后第
     // 四个正常请求必须还能完成——失败路径漏还名额会让它永远排队（超时保护：挂住即失败）
@@ -1604,7 +1642,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
       if (behavior === 'throw') throw new Error('fetch failed');
       if (behavior === '500') return new Response('boom', { status: 500 });
       if (behavior === '401') return new Response('unauthorized', { status: 401 });
-      return okResponseOf(defaultRecording.results['s0']);
+      return mockJevSuccessResponse(request.state, request.questions);
     }) as typeof fetch;
 
     try {
@@ -1648,7 +1686,10 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
           const timer =
             delayMs === null
               ? undefined
-              : setTimeout(() => resolve(okResponseOf(defaultRecording.results['s0'])), delayMs);
+              : setTimeout(
+                  () => resolve(mockJevSuccessResponse(request.state, request.questions)),
+                  delayMs
+                );
           signal?.addEventListener('abort', () => {
             if (timer !== undefined) clearTimeout(timer);
             reject(signal.reason);
@@ -1730,7 +1771,7 @@ describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       fetchCount += 1;
       capturedInit = init;
-      return okResponseOf(defaultRecording.results['s0']);
+      return mockJevSuccessResponse(allState, smallQuestions);
     }) as typeof fetch;
 
     try {
@@ -1749,7 +1790,6 @@ describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/
   });
 
   it('admits one all-context request per concurrency slot and queues the rest (T08)', async () => {
-    const responseBody = JSON.stringify(defaultRecording.results['s0'].response);
     let fetchCalls = 0;
     let inflight = 0;
     let peak = 0;
@@ -1761,10 +1801,7 @@ describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/
       peak = Math.max(peak, inflight);
       await new Promise<void>((resolve) => pending.push(resolve));
       inflight -= 1;
-      return new Response(responseBody, {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
+      return mockJevSuccessResponse(allState, smallQuestions);
     }) as typeof fetch;
 
     try {

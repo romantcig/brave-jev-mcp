@@ -299,33 +299,6 @@ export type ShadowDiff = {
   would_restore_snippets: number;
 };
 
-/**
- * 旧 shadow 日志的删除证据，仅含身份、原因与计数。
- * would 链解释 would_drop / would_remove_snippets；actual 链是当时的 off 正本，
- * 解释 would_restore / would_restore_snippets。当前运行不产生这些条目。
- */
-export type WouldActionEvidence = {
-  /** 证据所属链：would = on 链拷贝；actual = shadow 的 off 正本链 */
-  chain: 'would' | 'actual';
-  /** 探测约定 id：`s{braveIndex}` */
-  src: string;
-  /**
-   * 片段配对身份，与管道 snippetKey 同格式：`{index}`，JSON-LD 多段加 `.{part}`；
-   * 来源级动作（整源丢弃）省略本键
-   */
-  snippet?: string;
-  /** 触发阶段：actual 链只可能是后三种（off 链无 Jev 来源裁决与 score 删除） */
-  stage: 'source_verdict' | 'snippet_score' | 'novelty' | 'cross_source_dup' | 'empty_source';
-  /** 原因词：来源级 SourceDropReason 或片段级 SnippetRemovalReason，键原样不变形 */
-  reason: string;
-  /**
-   * 仅 novelty 删除携带判定当时的逐片段数值，用于与阈值快照核对。
-   * 来源级聚合不能代入逐片段条件。
-   */
-  fp_count?: number;
-  novel_count?: number;
-};
-
 /** 整源删除原因；self_deprecated / stale 仅为读取旧记录保留，当前不产生。 */
 export type SourceDropReason =
   | 'empty'
@@ -508,8 +481,6 @@ export type FilterStats = {
   output: OutputStats;
   /** 旧影子差异，读取语义见 ShadowDiff；当前恒为 null。 */
   shadow_diff: ShadowDiff | null;
-  /** 旧影子链删除证据，当前省略此键；旧记录缺键表示证据不足。 */
-  shadow_evidence?: WouldActionEvidence[];
 };
 
 /** `filterLlmContext` 的返回：过滤后的响应加统计对象。 */

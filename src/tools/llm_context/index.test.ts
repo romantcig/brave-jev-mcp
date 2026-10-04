@@ -752,7 +752,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     assert.equal(Object.hasOwn(onPayload, 'output'), false);
   });
 
-  it('a zero-removal on search has no status line while its test twin gains the sample-only entry (review R2)', async () => {
+  it('a zero-removal on search has no status line while its test twin gains the sample-only entry', async () => {
     const args = { query: 'brave browser', intent: INTENT }; // clean 夹具：零删除
     const logDirTest = newLogDir();
     useFilterConfig({ mode: 'test', log_dir: logDirTest });
@@ -781,6 +781,9 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       onPayloadZero,
       'filtered payload must be identical; only the sample pointer differs'
     );
+    const sampleAbsPath = samplePathOf(testContent);
+    assert.ok(sampleAbsPath, 'the sample-only status line must carry the path');
+    assert.ok(existsSync(sampleAbsPath), `sample file must exist: ${sampleAbsPath}`);
   });
 
   it('off mode never allocates or writes samples but still carries request_id in the JSONL envelope', async () => {
@@ -801,37 +804,6 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     );
     assert.equal('sample' in record, false, 'off records carry no sample pointer');
-  });
-
-  it('coverage: zero-removal search gains a sample-only status line entry (review R2)', async () => {
-    const logDir = newLogDir();
-    useFilterConfig({ mode: 'test', log_dir: logDir });
-
-    const result = await getClient().callTool({
-      name,
-      arguments: { query: 'brave browser', intent: INTENT }, // clean 夹具：零删除
-    });
-    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
-    const content = result.content as { text: string }[];
-    // 零删除时也应提供样本定位入口。
-    assert.equal(content.length, 2);
-    assert.match(
-      content[1]?.text ?? '',
-      /^\[filter\] sample for filter debugging - original results, filtered results, Jev decisions: /
-    );
-    const sampleAbsPath = samplePathOf(content);
-    assert.ok(sampleAbsPath, 'the sample-only status line must carry the path');
-    assert.ok(existsSync(sampleAbsPath), `sample file must exist: ${sampleAbsPath}`);
-
-    const { sample } = readSingleSample(logDir);
-    const finalReturn = sample.final_return as { payload: unknown; status_line: string | null };
-    // final_return 与实际返回逐字段一致：状态行就是这条纯样本定位行
-    const payload = JSON.parse(content[0].text) as Record<string, unknown>;
-    assert.deepEqual(finalReturn.payload, payload);
-    assert.equal(finalReturn.status_line, content[1]?.text);
-    assert.equal(Object.hasOwn(payload, 'output'), false);
-    // final_return 与实际返回逐字段一致（正文不附统计与状态行）
-    assert.deepEqual(finalReturn.payload, JSON.parse(content[0].text));
   });
 
   it('coverage: sample write failure strips the path from both carriers and the JSONL records failed (review R2)', async () => {

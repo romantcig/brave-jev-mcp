@@ -128,7 +128,6 @@ describe('filterLlmContext', () => {
         assert.deepEqual(stats.jev, createNoKeyJevStats());
         assert.equal(stats.jev?.n_requests, 0);
       }
-      assert.equal(stats.shadow_diff, null);
       assert.deepEqual(
         result.grounding.generic.map((item) => item.snippets),
         data.grounding.generic.map((item) => item.snippets)
@@ -851,7 +850,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
       };
     };
 
-  it('off: no classify call, stats.jev null, shadow_diff null, full local output', async () => {
+  it('off: no classify call, stats.jev null, full local output', async () => {
     const data = matrixPayload();
     const counter = { calls: 0 };
 
@@ -861,7 +860,6 @@ describe('three-mode semantic matrix (off / test / on)', () => {
 
     assert.equal(counter.calls, 0);
     assert.equal(stats.jev, null);
-    assert.equal(stats.shadow_diff, null);
     // 本地规则结果：4 源 8 片段全留
     assert.deepEqual(
       result.grounding.generic.map((item) => [item.url, item.snippets.length]),
@@ -902,10 +900,6 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     assert.equal(rowOf('s1')?.reason, 'off_topic');
     assert.equal(rowOf('s0')?.verdict, 'keep');
     assert.equal(rowOf('s3')?.verdict, 'keep');
-    // 新记录不再产生 would 层字段（shadow_diff 恒 null、shadow_evidence 键省略，
-    // 历史字段仅为读旧记录保留）
-    assert.equal(testRun.stats.shadow_diff, null);
-    assert.equal(testRun.stats.shadow_evidence, undefined);
     // score 删光清空的来源按 'empty' 记账（无新颖度/跨源 dup 标记，不记 rewrite）
     assert.equal(testRun.stats.local.empty_dropped, 1);
   });
@@ -931,7 +925,6 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     assert.deepEqual(testRun.result, onRun.result);
     assert.deepEqual(testRun.stats.sources, onRun.stats.sources);
     assert.deepEqual(testRun.stats.local, onRun.stats.local);
-    assert.equal(onRun.stats.shadow_diff, null);
     // 具体形状：s0 两段全留、s1 整源丢、s2 剩第一条、s3 整源丢
     assert.deepEqual(
       testRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
@@ -952,13 +945,14 @@ describe('three-mode semantic matrix (off / test / on)', () => {
   });
 });
 
-describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
+describe('jev status aggregation and breaker open trim-back', () => {
   // 全量共享请求下状态聚合只有三种路径：answered（ok）、已派发失败（degraded）、
   // 熔断短路（breaker_open）——来源行来自同一 outcome 的投影。
   const breakerOpen: ClassifyOutcome = {
     status: 'failed',
     kind: 'breaker_open',
     detail: 'circuit open after consecutive transient failures',
+    http_attempts: 0,
   };
 
   /** 全保留 answered 桩：四题概率全 0.1 + 实发载荷（生产客户端形状）。 */
@@ -994,52 +988,80 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
   });
 
   it('aggregates status degraded when the dispatched shared request fails', async () => {
-    const { stats } = await filterLlmContext(
+    let calls = 0;
+    const { result, stats } = await filterLlmContext(
       payload(),
       request,
       { ...offConfig, mode: 'on' },
       {
-        classify: async ({ state, questions }) => ({
-          status: 'failed',
-          kind: 'network',
-          detail: 'connection reset',
-          dispatch: { state, questions },
-          http_attempts: 3,
-        }),
+        classify: async ({ state, questions }) => {
+          calls += 1;
+          assert.ok('sources' in state);
+          return {
+            status: 'failed',
+            kind: 'network',
+            detail: 'connection reset',
+            dispatch: { state, questions },
+            http_attempts: 3,
+          };
+        },
       }
     );
 
+    // 派发后失败仍计一次逻辑请求，HTTP 尝试含重试，不拆成逐来源请求
+    assert.equal(calls, 1);
     assert.equal(stats.jev?.status, 'degraded');
-    // 派发后失败仍计一次逻辑请求，HTTP 尝试含重试。
     assert.equal(stats.jev?.n_requests, 1);
     assert.equal(stats.jev?.n_http_attempts, 3);
     assert.equal(stats.jev?.requests.length, 1);
-    assert.equal(stats.jev?.requests[0]?.fail_kind, 'network');
-    assert.equal(stats.jev?.requests[0]?.usage_complete, false);
-  });
-
-  it('aggregates status breaker_open when the shared request is short-circuited (SAFE-02)', async () => {
-    const { stats } = await filterLlmContext(
-      payload(),
-      request,
-      { ...offConfig, mode: 'on' },
-      {
-        classify: async () => breakerOpen,
-      }
+    const record = (stats.jev?.requests ?? [])[0];
+    assert.equal(record?.dispatched, true);
+    assert.equal(record?.fail_kind, 'network');
+    assert.equal(record?.http_attempts, 3);
+    assert.equal(record?.usage_complete, false);
+    assert.equal(record?.input_tokens, null);
+    assert.deepEqual(
+      (stats.jev?.per_source ?? []).map((row) => [row.src, row.status, row.fail_kind]),
+      [
+        ['s0', 'failed', 'network'],
+        ['s1', 'failed', 'network'],
+      ]
     );
-
-    assert.equal(stats.jev?.status, 'breaker_open');
-    // 熔断短路不计请求。
-    assert.equal(stats.jev?.n_requests, 0);
+    // 失败来源应保守保留。
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://search.brave.com/', 'https://example.com/post']
+    );
   });
 
-  it('SAFE-02: with an all-breaker_open classify the output deep-equals the off run', async () => {
+  it('aggregates status breaker_open when the shared request is short-circuited', async () => {
+    let calls = 0;
+    const classify: ClassifyDeps['classify'] = async ({ state }) => {
+      calls += 1;
+      assert.ok('sources' in state);
+      return breakerOpen;
+    };
+
     const offRun = await filterLlmContext(payload(), request, { ...offConfig, mode: 'off' });
     const onRun = await filterLlmContext(
       payload(),
       request,
       { ...offConfig, mode: 'on' },
-      { classify: async () => breakerOpen }
+      { classify }
+    );
+
+    // 熔断短路不计逻辑请求与 HTTP 尝试
+    assert.equal(calls, 1);
+    assert.equal(onRun.stats.jev?.status, 'breaker_open');
+    assert.equal(onRun.stats.jev?.n_requests, 0);
+    assert.equal(onRun.stats.jev?.n_http_attempts, 0);
+    const record = (onRun.stats.jev?.requests ?? [])[0];
+    assert.equal(record?.dispatched, false);
+    assert.equal(record?.fail_kind, 'breaker_open');
+    assert.equal(record?.http_attempts, 0);
+    assert.deepEqual(
+      (onRun.stats.jev?.per_source ?? []).map((row) => row.status),
+      ['breaker_open', 'breaker_open']
     );
 
     // 熔断期只跑本地规则，输出与同参数 off 模式 deepEqual
@@ -1049,8 +1071,6 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
       onRun.result.grounding.generic.map((item) => item.url),
       ['https://search.brave.com/', 'https://example.com/post']
     );
-    assert.equal(onRun.stats.jev?.status, 'breaker_open');
-    assert.equal(onRun.stats.jev?.n_requests, 0);
   });
 });
 
@@ -1133,7 +1153,6 @@ describe('novelty and cross-source dup (02-04)', () => {
     }
     // test 与 on 共用同一链：输出逐字段一致
     assert.deepEqual(testRun.result, onRun.result);
-    assert.equal(testRun.stats.shadow_diff, null);
     // 三模式输出都是 Brave 序子序列（幸存者不重排）
     const inputUrls = noveltyPayload().grounding.generic.map((item) => item.url);
     for (const outputUrls of [
@@ -1241,9 +1260,8 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
       testRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
       false
     );
-    // test 与 on 共用同一链：输出逐字段一致；新记录不再产生 would 层字段
+    // test 与 on 共用同一链：输出逐字段一致
     assert.deepEqual(testRun.result, onRun.result);
-    assert.equal(testRun.stats.shadow_diff, null);
   });
 });
 
@@ -1590,71 +1608,6 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     );
   });
 
-  it('a dispatched all-request failure keeps one record and marks every source failed (T07)', async () => {
-    let calls = 0;
-    const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
-      calls += 1;
-      assert.ok('sources' in state);
-      return {
-        status: 'failed',
-        kind: 'network',
-        detail: 'connection reset',
-        dispatch: { state, questions },
-        http_attempts: 3,
-      };
-    };
-
-    const { result, stats } = await filterLlmContext(payload(), request, allConfig, { classify });
-
-    // 一次已派发失败记一次逻辑请求，HTTP 尝试如实累加；不拆成逐来源请求
-    assert.equal(calls, 1);
-    assert.equal(stats.jev?.status, 'degraded');
-    assert.equal(stats.jev?.n_requests, 1);
-    assert.equal(stats.jev?.n_http_attempts, 3);
-    const record = (stats.jev?.requests ?? [])[0];
-    assert.equal(record?.dispatched, true);
-    assert.equal(record?.fail_kind, 'network');
-    assert.equal(record?.http_attempts, 3);
-    assert.equal(record?.usage_complete, false);
-    assert.equal(record?.input_tokens, null);
-    assert.deepEqual(
-      (stats.jev?.per_source ?? []).map((row) => [row.src, row.status, row.fail_kind]),
-      [
-        ['s0', 'failed', 'network'],
-        ['s1', 'failed', 'network'],
-      ]
-    );
-    // 失败来源应保守保留。
-    assert.deepEqual(
-      result.grounding.generic.map((item) => item.url),
-      ['https://search.brave.com/', 'https://example.com/post']
-    );
-  });
-
-  it('a breaker short-circuit issues zero HTTP and never falls back (T07)', async () => {
-    let calls = 0;
-    const classify: ClassifyDeps['classify'] = async ({ state }) => {
-      calls += 1;
-      assert.ok('sources' in state);
-      return { status: 'failed', kind: 'breaker_open', detail: 'circuit open', http_attempts: 0 };
-    };
-
-    const { stats } = await filterLlmContext(payload(), request, allConfig, { classify });
-
-    assert.equal(calls, 1);
-    assert.equal(stats.jev?.status, 'breaker_open');
-    assert.equal(stats.jev?.n_requests, 0);
-    assert.equal(stats.jev?.n_http_attempts, 0);
-    const record = (stats.jev?.requests ?? [])[0];
-    assert.equal(record?.dispatched, false);
-    assert.equal(record?.fail_kind, 'breaker_open');
-    assert.equal(record?.http_attempts, 0);
-    assert.deepEqual(
-      (stats.jev?.per_source ?? []).map((row) => row.status),
-      ['breaker_open', 'breaker_open']
-    );
-  });
-
   it('counts usage once per logical request and keeps HTTP attempts separate (T09)', async () => {
     const { stats } = await filterLlmContext(payload(), request, allConfig, {
       classify: allClassify(
@@ -1709,8 +1662,6 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     assert.deepEqual(testRun.result, onRun.result);
     assert.deepEqual(testRun.stats.sources, onRun.stats.sources);
     assert.deepEqual(testRun.stats.local, onRun.stats.local);
-    assert.equal(testRun.stats.shadow_diff, null);
-    assert.equal(onRun.stats.shadow_diff, null);
     assert.deepEqual(
       onRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
       [
