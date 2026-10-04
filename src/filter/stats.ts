@@ -1,6 +1,5 @@
 /** 每次调用新建统计对象，隔离请求间状态；统计不存片段正文。 */
 
-import { canonicalizeUrl } from './url.js';
 import { estimateTokens } from './tokens.js';
 import type {
   BraveLlmContextResponse,
@@ -12,6 +11,13 @@ import type {
 } from './types.js';
 
 /**
+ * Brave 文档给的缺省上限：模型未传 `maximum_number_of_*` 时按它们理解预算。
+ * 统计表的 request 摘要使用这一份。
+ */
+export const BRAVE_DEFAULT_MAX_URLS = 20;
+export const BRAVE_DEFAULT_MAX_TOKENS = 8192;
+
+/**
  * 本地计数器的零值。冻结成常量，供夹具测试用 `{ ...zeroLocal, ...expected }` 合并；
  * 库内部只做浅拷贝后再递增，不会改到这份常量。`novelty` 数组在工厂里另行新建——
  * 浅拷贝载体不共享这份空数组引用（替换式写回也绝不会 mutate 它）。
@@ -20,15 +26,9 @@ export const zeroLocal: Readonly<LocalStats> = Object.freeze({
   jsonld_converted: 0,
   jsonld_dropped: 0,
   jsonld_kept_raw: 0,
-  url_merged: 0,
   snippets_prefiltered: 0,
   dup_removed: 0,
-  paywall_truncated: 0,
-  feed_hits: 0,
-  blocklist_hits: 0,
   empty_dropped: 0,
-  budget_dropped_sources: 0,
-  budget_trimmed_snippets: 0,
   novelty_removed: 0,
   cross_source_dup_removed: 0,
   github_cleanup_actions: 0,
@@ -71,7 +71,7 @@ const metaOf = (
 };
 
 /**
- * 按 Brave 原序建立来源和片段统计，初始均为保留；canonical_url 只作归并键。
+ * 按 Brave 原序建立来源和片段统计，初始均为保留。
  * 输出规模初始为 0，由管道结束时填入；jev 与兼容字段 shadow_diff 初始为 null。
  */
 export function createFilterStats(
@@ -106,7 +106,6 @@ export function createFilterStats(
       index,
       url,
       title,
-      canonical_url: canonicalizeUrl(url),
       ...(hostname !== undefined ? { hostname } : {}),
       verdict: 'keep' as const,
       snippets,
@@ -130,4 +129,40 @@ export function createFilterStats(
     output: { n_sources: 0, n_snippets: 0, chars: 0, est_tokens: 0 },
     shadow_diff: null,
   };
+}
+
+export type SummarizeSnippetRow = {
+  text: string;
+  kept: boolean;
+};
+
+export type SummarizeSourceRow = {
+  snippets: SummarizeSnippetRow[];
+  verdict: 'keep' | 'drop';
+};
+
+/**
+ * 输出规模只统计幸存内容；chars 使用 String.length，est_tokens 将估算总和向上取整。
+ */
+export function summarizeOutput(
+  table: SummarizeSourceRow[],
+  estimate: (text: string) => number
+): { n_sources: number; n_snippets: number; chars: number; est_tokens: number } {
+  let nSources = 0;
+  let nSnippets = 0;
+  let chars = 0;
+  let estimateSum = 0;
+
+  for (const source of table) {
+    if (source.verdict !== 'keep') continue;
+    nSources += 1;
+    for (const snippet of source.snippets) {
+      if (!snippet.kept) continue;
+      nSnippets += 1;
+      chars += snippet.text.length;
+      estimateSum += estimate(snippet.text);
+    }
+  }
+
+  return { n_sources: nSources, n_snippets: nSnippets, chars, est_tokens: Math.ceil(estimateSum) };
 }

@@ -169,7 +169,7 @@ const judgeCleanup = (
   const lines = text.split(/(?<=\n)/);
   const contents = lines.map((line) => line.replace(/\r?\n$/, ''));
   const normalized = contents.map(stripAtxHeading);
-  // 保护区域：围栏/缩进/跨行内联代码（复用步 3 的统一识别）+ 引用行及其懒续行
+  // 保护区域：围栏/缩进/跨行内联代码（复用片段预筛阶段的统一识别）+ 引用行及其懒续行
   // （本模块叠加）。识别上下文标记（块成员、配对伙伴）与命中行用同一份保护结果
   const codeFlags = codeRegionFlags(contents);
   const referenceFlags = referenceGuardFlags(contents, codeFlags);

@@ -36,14 +36,10 @@ export type FilterRequest = {
 
 /**
  * 单一配置文件的解析结果，校验规则见 config.ts。
- * blocklist 包含规范 host 或页面/栏目 URL，toolDescriptionFile 指向仓库外描述覆盖文件。
+ * toolDescriptionFile 指向仓库外描述覆盖文件。
  */
 export type FilterConfig = {
   mode: FilterMode;
-  /** 超量倍数，默认 1；>1 时只放大来源数与总 token */
-  overfetchFactor: number;
-  /** 步 4 的结构性农场黑名单；条目命中自身与全部子域（内置表与配置文件的并集） */
-  blocklist: ReadonlySet<string>;
   /** 生效的 Jev 阈值；坏值逐项回落 DEFAULT_THRESHOLDS。 */
   thresholds: JevThresholds;
   /** Jev 模型、单次尝试超时与实例并发上限；请求组织和时间上下文没有开关。 */
@@ -64,20 +60,20 @@ export type FilterDeps = {
 };
 
 /**
- * 本地步骤 1–4 后的候选来源，ID 保留 s{Brave 原始索引}，片段取当前幸存文本。
- * brave_page_date 始终存在；归并来源日期冲突或部分未知时为 null。
+ * 本地阶段 1–2 后的候选来源，ID 保留 s{Brave 原始索引}，片段取当前幸存文本。
+ * brave_page_date 始终存在；来源无合法日期时为 null。
  */
 export type JevCandidate = {
   id: string;
   url: string;
   title: string;
   snippets: string[];
-  /** 统一页级日期线索；归并冲突或无日期为 null，键恒在 */
+  /** 统一页级日期线索；无日期时为 null，键恒在 */
   brave_page_date: string | null;
 };
 
 /**
- * 片段配对身份：可选 merged_from 前缀、原始 index 和可选 JSON-LD part。
+ * 片段配对身份：原始 index 和可选 JSON-LD part（格式：`{index}[.{part}]`）。
  * 与统计表的同名字段对应。
  */
 export type JevCandidateSnippetIdentity = { key: string; text: string };
@@ -91,7 +87,7 @@ export type JevCandidateDetailed = {
   url: string;
   title: string;
   snippets: JevCandidateSnippetIdentity[];
-  /** 统一页级日期线索；无日期或归并冲突为 null，键恒在 */
+  /** 统一页级日期线索；无日期时为 null，键恒在 */
   bravePageDate: string | null;
 };
 
@@ -314,8 +310,8 @@ export type WouldActionEvidence = {
   /** 探测约定 id：`s{braveIndex}` */
   src: string;
   /**
-   * 片段配对身份，与管道 snippetKey 同格式：`{merged_from}:{index}`（无并入来源
-   * 时省略前缀），JSON-LD 多段加 `.{part}`；来源级动作（整源丢弃）省略本键
+   * 片段配对身份，与管道 snippetKey 同格式：`{index}`，JSON-LD 多段加 `.{part}`；
+   * 来源级动作（整源丢弃）省略本键
    */
   snippet?: string;
   /** 触发阶段：actual 链只可能是后三种（off 链无 Jev 来源裁决与 score 删除） */
@@ -332,11 +328,7 @@ export type WouldActionEvidence = {
 
 /** 整源删除原因；self_deprecated / stale 仅为读取旧记录保留，当前不产生。 */
 export type SourceDropReason =
-  | 'feed'
-  | 'blocklist'
   | 'empty'
-  | 'budget'
-  | 'merged'
   | 'off_topic'
   | 'listing'
   | 'self_deprecated'
@@ -350,8 +342,6 @@ export type SnippetRemovalReason =
   | 'nav'
   | 'boilerplate'
   | 'dup'
-  | 'paywall_empty'
-  | 'budget'
   | 'score'
   | 'time_mismatch'
   | 'novelty';
@@ -397,19 +387,9 @@ export type LocalStats = {
   jsonld_converted: number;
   jsonld_dropped: number;
   jsonld_kept_raw: number;
-  url_merged: number;
   snippets_prefiltered: number;
   dup_removed: number;
-  /**
-   * 步 3 截断后仍保留片段的动作数，包含后来整源删除的情况。
-   * 状态行片段删除数只统计最终幸存来源，两者不能互相换算。
-   */
-  paywall_truncated: number;
-  feed_hits: number;
-  blocklist_hits: number;
   empty_dropped: number;
-  budget_dropped_sources: number;
-  budget_trimmed_snippets: number;
   /** 因事实指纹新颖度删除的片段数。 */
   novelty_removed: number;
   /** 因跨来源 5-gram 重复删除的片段数。 */
@@ -445,7 +425,7 @@ export type GitHubCleanupRule =
 
 /**
  * GitHub 清洗动作，仅记录规则与进入清洗时的片段行号，不含正文。
- * 行号对应步 3 付费墙截断后的文本。
+ * 行号对应进入清洗时的文本。
  */
 export type GitHubCleanupAction = {
   rule: GitHubCleanupRule;
@@ -468,9 +448,6 @@ export type SnippetStats = {
   part?: number;
   kept: boolean;
   reason?: SnippetRemovalReason;
-  truncated?: boolean;
-  /** 步 2 从同页来源并入的片段：原来源的 Brave 索引；此时 `index` 是它在原来源里的片段索引 */
-  merged_from?: number;
   /**
    * test/on 的 GitHub 清洗明细；整片清空或局部剥离均可带此键。
    * 可选字段，读取旧记录时允许缺失。
@@ -484,7 +461,6 @@ export type SourceStats = {
   index: number;
   url: string;
   title: string;
-  canonical_url: string;
   hostname?: string;
   verdict: 'keep' | 'drop';
   reason?: SourceDropReason;
@@ -492,7 +468,7 @@ export type SourceStats = {
 };
 
 /**
- * 状态行与 JSONL 共用的统计对象。off 的 jev 为 null，test/on 由步 5 填充。
+ * 状态行与 JSONL 共用的统计对象。off 的 jev 为 null，test/on 由阶段 3 Jev 填充。
  * shadow_diff 仅兼容旧记录，当前恒为 null。
  */
 export type FilterStats = {
@@ -503,7 +479,6 @@ export type FilterStats = {
     max_urls: number;
     max_tokens: number;
     per_url_tokens?: number;
-    overfetch_factor: number;
     /** Brave freshness 参数；请求未带时省略。 */
     freshness?: string;
     /** Brave context_threshold_mode；请求未带时省略。 */
@@ -588,8 +563,7 @@ export type JevDispatchRecord = {
   source_verdict_valid: boolean;
   /** 未派发原因；已派发时省略。防御分支（classify 契约外 reject）也省略 */
   not_dispatched_reason?: 'skipped' | 'breaker_open';
-  /** 候选片段配对身份（`{merged_from}:{index}` 前缀可省、多段加 `.{part}`），
-   * 与实发 state 片段按位置对齐 */
+  /** 候选片段配对身份（`{index}`、多段加 `.{part}`），与实发 state 片段按位置对齐 */
   snippet_keys: string[];
   /** 候选口径片段文本（与 snippet_keys 对齐） */
   snippet_texts: string[];

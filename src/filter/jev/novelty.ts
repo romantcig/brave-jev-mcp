@@ -51,11 +51,11 @@ export type JevSideDeletionFlags = {
 
 /**
  * 新颖度删除回调的载荷，保留判定当时的逐片段数值与表行引用。
- * 调用方可用 part / mergedFrom 构造原始片段身份。
+ * 调用方可用 part 构造原始片段身份。
  */
 export type NoveltyDeletionInfo = {
   sourceIndex: number;
-  snippet: NoveltySnippetRow & { part?: number; mergedFrom?: number };
+  snippet: NoveltySnippetRow & { part?: number };
   /** 片段指纹总数（判定的 fp 一侧）与当时 novel 数（noveltyMin 对照侧） */
   fpCount: number;
   novelCount: number;

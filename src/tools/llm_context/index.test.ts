@@ -576,7 +576,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
     // 请求级载荷 + 来源级映射引用（全量共享请求，一次搜索零或一条）
-    assert.equal(sample.format_version, 5);
+    assert.equal(sample.format_version, 6);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -840,28 +840,39 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     writeFileSync(join(logDir, 'samples'), 'occupied by a file, not a directory', 'utf8');
     useFilterConfig({ mode: 'test', log_dir: logDir });
 
-    const result = await getClient().callTool({
-      name,
-      arguments: { query: 'drop case', intent: INTENT },
-    });
-    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
-    const content = result.content as { text: string }[];
-    // 状态行第二块仍在（drop case 本有状态行），但绝无 sample 路径（两载体同源剥净）
-    assert.equal(content.length, 2);
-    assert.ok(
-      !content[1]?.text.includes(
-        ' sample for filter debugging - original results, filtered results, Jev decisions: '
-      ),
-      JSON.stringify(content)
-    );
-    const payload = JSON.parse(content[0].text) as Record<string, unknown>;
-    assert.equal(Object.hasOwn(payload, 'output'), false);
+    const originalError = console.error;
+    const errors: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
 
-    await flushWrites();
-    const record = firstRecord(logDir);
-    const sample = record.sample as { path: string; status: string };
-    assert.equal(sample.status, 'failed');
-    assert.match(sample.path, /^samples\//, 'the relative pointer is still recorded');
+    try {
+      const result = await getClient().callTool({
+        name,
+        arguments: { query: 'drop case', intent: INTENT },
+      });
+      assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+      const content = result.content as { text: string }[];
+      // 状态行第二块仍在（drop case 本有状态行），但绝无 sample 路径（两载体同源剥净）
+      assert.equal(content.length, 2);
+      assert.ok(
+        !content[1]?.text.includes(
+          ' sample for filter debugging - original results, filtered results, Jev decisions: '
+        ),
+        JSON.stringify(content)
+      );
+      const payload = JSON.parse(content[0].text) as Record<string, unknown>;
+      assert.equal(Object.hasOwn(payload, 'output'), false);
+
+      await flushWrites();
+      const record = firstRecord(logDir);
+      const sample = record.sample as { path: string; status: string };
+      assert.equal(sample.status, 'failed');
+      assert.match(sample.path, /^samples\//, 'the relative pointer is still recorded');
+      assert.ok(errors.some((args) => String(args[0]).includes('Unable to write sample')));
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it('coverage: all-removed search returns empty, still writes a sample, and maps no candidates', async () => {
@@ -1054,6 +1065,11 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
     const logDir = mkdtempSync(join(tmpdir(), 'jev-sample-brave-err-fail-'));
     writeFileSync(join(logDir, 'samples'), 'occupied by a file, not a directory', 'utf8');
     const originalFetch = globalThis.fetch;
+    const originalError = console.error;
+    const errors: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
     globalThis.fetch = (async () =>
       new Response('{"error":"boom"}', {
         status: 500,
@@ -1085,11 +1101,13 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
         assert.match(sample.path, /^samples\//);
         // 样本确实不存在（写入失败，无半截文件冒充）
         assert.equal(existsSync(join(logDir, sample.path)), false);
+        assert.ok(errors.some((args) => String(args[0]).includes('Unable to write sample')));
       } finally {
         await client.close();
       }
     } finally {
       globalThis.fetch = originalFetch;
+      console.error = originalError;
       rmSync(logDir, { recursive: true, force: true });
     }
   });
@@ -1098,6 +1116,11 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
     // schema 失败 + 样本写入失败叠加：saved / failed 必须能从错误 JSONL 区分
     const logDir = mkdtempSync(join(tmpdir(), 'jev-sample-schema-err-fail-'));
     writeFileSync(join(logDir, 'samples'), 'occupied by a file, not a directory', 'utf8');
+    const originalError = console.error;
+    const errors: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
     try {
       useFilterConfig({ mode: 'test', log_dir: logDir });
       const result = await getClient().callTool({
@@ -1117,7 +1140,9 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
       const sample = record.sample as { path: string; status: string };
       assert.equal(sample.status, 'failed');
       assert.match(sample.path, /^samples\//);
+      assert.ok(errors.some((args) => String(args[0]).includes('Unable to write sample')));
     } finally {
+      console.error = originalError;
       rmSync(logDir, { recursive: true, force: true });
     }
   });
@@ -1347,16 +1372,15 @@ describe(`${name} (config file lifecycle)`, () => {
     });
 
   it('reads the config file once: rewriting it does not change the running behaviour', async () => {
-    // 第一次搜索：factor 2 → 发给 Brave 的 maximum_number_of_urls 被放大成 10
-    const filePath = useFilterConfig({ overfetch_factor: 2 });
+    const filePath = useFilterConfig({ mode: 'off' });
     assert.equal((await call()).isError ?? false, false);
-    assert.equal(forwarded[0].searchParams.get('maximum_number_of_urls'), '10');
+    assert.equal(forwarded[0].searchParams.get('maximum_number_of_urls'), '5');
 
-    // 改写同一个文件（factor 1 / mode on），不重启：进程级单例仍在，行为不变
-    writeFileSync(filePath, JSON.stringify({ mode: 'on', overfetch_factor: 1 }), 'utf8');
+    // 改写同一个文件（mode: 'on'），不重启：进程级单例仍在，行为不变
+    writeFileSync(filePath, JSON.stringify({ mode: 'on' }), 'utf8');
     assert.equal((await call()).isError ?? false, false);
     assert.equal(calls, 2);
-    assert.equal(forwarded[1].searchParams.get('maximum_number_of_urls'), '10');
+    assert.equal(forwarded[1].searchParams.get('maximum_number_of_urls'), '5');
   });
 
   it('ignores the removed JEV_FILTER_MODE variable entirely', async () => {
@@ -1365,7 +1389,7 @@ describe(`${name} (config file lifecycle)`, () => {
     const savedKey = process.env.TYPESAFE_API_KEY;
     const savedMode = process.env.JEV_FILTER_MODE;
     delete process.env.TYPESAFE_API_KEY;
-    useFilterConfig({ overfetch_factor: 1 });
+    useFilterConfig({});
     process.env.JEV_FILTER_MODE = 'on';
 
     const errors: unknown[][] = [];
@@ -1530,34 +1554,44 @@ describe(`${name} (below-minimum clamping)`, () => {
   });
 
   it('raises below-minimum values, forwards the clamped ones, and reports the adjustment', async () => {
-    const result = await getClient().callTool({
-      name,
-      arguments: {
-        query: 'brave browser',
-        intent: 'What Brave Search is',
-        count: 0,
-        maximum_number_of_urls: -1,
-        maximum_number_of_tokens: 100,
-        maximum_number_of_tokens_per_url: 500,
-      },
-    });
+    const originalError = console.error;
+    const errors: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      const result = await getClient().callTool({
+        name,
+        arguments: {
+          query: 'brave browser',
+          intent: 'What Brave Search is',
+          count: 0,
+          maximum_number_of_urls: -1,
+          maximum_number_of_tokens: 100,
+          maximum_number_of_tokens_per_url: 500,
+        },
+      });
 
-    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+      assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
 
-    const payload = JSON.parse((result.content as { text: string }[])[0].text);
-    assert.deepEqual(payload.parameter_adjustments, {
-      count: { requested: 0, applied: 1 },
-      maximum_number_of_urls: { requested: -1, applied: 1 },
-      maximum_number_of_tokens: { requested: 100, applied: 1024 },
-      maximum_number_of_tokens_per_url: { requested: 500, applied: 512 },
-    });
+      const payload = JSON.parse((result.content as { text: string }[])[0].text);
+      assert.deepEqual(payload.parameter_adjustments, {
+        count: { requested: 0, applied: 1 },
+        maximum_number_of_urls: { requested: -1, applied: 1 },
+        maximum_number_of_tokens: { requested: 100, applied: 1024 },
+        maximum_number_of_tokens_per_url: { requested: 500, applied: 512 },
+      });
 
-    // Brave 收到的是钳位后的值
-    const params = forwarded[forwarded.length - 1].searchParams;
-    assert.equal(params.get('count'), '1');
-    assert.equal(params.get('maximum_number_of_urls'), '1');
-    assert.equal(params.get('maximum_number_of_tokens'), '1024');
-    assert.equal(params.get('maximum_number_of_tokens_per_url'), '512');
+      // Brave 收到的是钳位后的值
+      const params = forwarded[forwarded.length - 1].searchParams;
+      assert.equal(params.get('count'), '1');
+      assert.equal(params.get('maximum_number_of_urls'), '1');
+      assert.equal(params.get('maximum_number_of_tokens'), '1024');
+      assert.equal(params.get('maximum_number_of_tokens_per_url'), '512');
+      assert.ok(errors.some((args) => String(args[0]).includes('raised below-minimum parameters')));
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it('leaves values at or above the minimum untouched and adds no adjustment key', async () => {

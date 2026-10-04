@@ -1,5 +1,5 @@
 /**
- * 页面日期选择、归并冲突处理与检索时间校验，不作过滤决策。
+ * 页面日期选择与检索时间校验，不作过滤决策。
  * 只使用传入元数据，不倒推相对日期、不联网补齐、不以当前时间填补缺失。
  */
 
@@ -49,15 +49,6 @@ export const selectPageDate = (meta: SourceMetadata | undefined): string | null 
       validCalendarDate(entry)
   );
   return dateOnly ?? null;
-};
-
-/**
- * 归并来源的日期完全一致才保留；不同或部分未知时返回 null。
- * 不能将一个页面的日期用于另一个页面的事实。
- */
-export const mergePageDates = (dates: ReadonlyArray<string | null>): string | null => {
-  const first = dates[0] ?? null;
-  return dates.every((date) => date === first) ? first : null;
 };
 
 /**

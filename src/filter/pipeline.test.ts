@@ -22,8 +22,6 @@ import type {
 
 const offConfig: FilterConfig = {
   mode: 'off',
-  overfetchFactor: 1,
-  blocklist: new Set(),
   thresholds: { ...DEFAULT_THRESHOLDS },
   jev: {
     model: DEFAULT_JEV_MODEL,
@@ -252,55 +250,6 @@ describe('filterLlmContext', () => {
     });
   }
 
-  it('truncates a snippet at a paywall marker line and counts it', async () => {
-    const data = payload();
-    data.grounding.generic[0].snippets[0] =
-      'Brave is a privacy-focused browser.\nSubscribe to continue reading\njunk after the marker';
-
-    const { result, stats } = await filterLlmContext(data, request, offConfig);
-
-    assert.deepEqual(
-      result.grounding.generic[0].snippets[0],
-      'Brave is a privacy-focused browser.'
-    );
-    assert.equal(stats.sources[0].snippets[0].truncated, true);
-    assert.equal(stats.local.paywall_truncated, 1);
-  });
-
-  it('drops a feed-shaped source during step 4 and cleans its sources entry', async () => {
-    const data = payload();
-    data.grounding.generic.push({
-      url: 'https://example.com/blog/feed/',
-      title: 'Feed',
-      snippets: ['Brave updates feed.'],
-    });
-    data.sources['https://example.com/blog/feed/'] = { title: 'Feed', hostname: 'example.com' };
-
-    const { result, stats } = await filterLlmContext(data, request, offConfig);
-
-    assert.deepEqual(
-      result.grounding.generic.map((item) => item.url),
-      ['https://search.brave.com/', 'https://example.com/post']
-    );
-    assert.equal(Object.hasOwn(result.sources, 'https://example.com/blog/feed/'), false);
-    assert.equal(stats.local.feed_hits, 1);
-    assert.deepEqual(stats.sources[2].reason, 'feed');
-  });
-
-  it('drops a blocklisted host during step 4', async () => {
-    const data = payload();
-    const config: FilterConfig = { ...offConfig, blocklist: new Set(['example.com']) };
-
-    const { result, stats } = await filterLlmContext(data, request, config);
-
-    assert.deepEqual(
-      result.grounding.generic.map((item) => item.url),
-      ['https://search.brave.com/']
-    );
-    assert.equal(stats.local.blocklist_hits, 1);
-    assert.equal(stats.sources[1].reason, 'blocklist');
-  });
-
   it('drops a source whose only snippet is JSON-LD metadata during step 8', async () => {
     const data = payload();
     data.grounding.generic.push({
@@ -385,7 +334,6 @@ describe('filterLlmContext', () => {
       intent: 'What Brave Search is',
       max_urls: 20,
       max_tokens: 8192,
-      overfetch_factor: 1,
     });
     assert.deepEqual(stats.brave, {
       n_sources: 2,
@@ -399,15 +347,10 @@ describe('filterLlmContext', () => {
       ),
     });
     assert.deepEqual(
-      stats.sources.map((source) => [
-        source.index,
-        source.url,
-        source.canonical_url,
-        source.hostname,
-      ]),
+      stats.sources.map((source) => [source.index, source.url, source.hostname]),
       [
-        [0, 'https://search.brave.com/', 'search.brave.com/', 'search.brave.com'],
-        [1, 'https://example.com/post', 'example.com/post', 'example.com'],
+        [0, 'https://search.brave.com/', 'search.brave.com'],
+        [1, 'https://example.com/post', 'example.com'],
       ]
     );
     assert.deepEqual(
@@ -455,8 +398,6 @@ describe('filterLlmContext', () => {
       { params: { query: 'first' }, intent: 'first intent' },
       {
         mode: 'test',
-        overfetchFactor: 2,
-        blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
         jev: {
           model: DEFAULT_JEV_MODEL,
@@ -471,8 +412,6 @@ describe('filterLlmContext', () => {
       { params: { query: 'second' }, intent: 'second intent' },
       {
         mode: 'on',
-        overfetchFactor: 1,
-        blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
         jev: {
           model: DEFAULT_JEV_MODEL,
@@ -487,8 +426,6 @@ describe('filterLlmContext', () => {
       { params: { query: 'first' }, intent: 'first intent' },
       {
         mode: 'test',
-        overfetchFactor: 2,
-        blocklist: new Set(),
         thresholds: { ...DEFAULT_THRESHOLDS },
         jev: {
           model: DEFAULT_JEV_MODEL,
@@ -501,8 +438,6 @@ describe('filterLlmContext', () => {
 
     assert.equal(first.stats.mode, 'test');
     assert.equal(second.stats.mode, 'on');
-    assert.equal(first.stats.request.overfetch_factor, 2);
-    assert.equal(second.stats.request.overfetch_factor, 1);
     assert.equal(first.stats.request.query, 'first');
     assert.equal(second.stats.request.query, 'second');
     assert.notEqual(first.stats, second.stats);
@@ -525,70 +460,11 @@ describe('filterLlmContext', () => {
       else process.env.JEV_FILTER_CONFIG_FILE = savedFile;
     }
   });
-
-  it('marks paywall_empty rows as truncated=true with kept=false', async () => {
-    // 截断至空的片段也必须记录 truncated，便于样本追溯动作。
-    const data = payload();
-    data.grounding.generic[1].snippets = ['Subscribe to continue reading'];
-
-    const { stats } = await filterLlmContext(data, request, offConfig);
-    const source = stats.sources.find((entry) => entry.url === 'https://example.com/post');
-
-    assert.ok(source, 'source missing from stats');
-    assert.deepEqual(
-      source.snippets.map((row) => ({
-        truncated: row.truncated,
-        kept: row.kept,
-        reason: row.reason,
-      })),
-      [{ truncated: true, kept: false, reason: 'paywall_empty' }]
-    );
-  });
-
-  describe('step 9 budget', () => {
-    const tightRequest: { params: FilterRequest; intent: string } = {
-      params: { query: 'brave browser', maximum_number_of_urls: 5, maximum_number_of_tokens: 10 },
-      intent: 'What Brave Search is',
-    };
-
-    it('skips the trim when the overfetch factor is 1 (Brave already honored the cap)', async () => {
-      // 倍数为 1 时不再按本地估算裁剪，避免截掉 Brave 已按请求上限返回的内容。
-      const { result, stats } = await filterLlmContext(payload(), tightRequest, offConfig);
-
-      assert.equal(stats.local.budget_trimmed_snippets, 0);
-      assert.equal(stats.local.budget_dropped_sources, 0);
-      assert.equal(result.grounding.generic[0].snippets.length, 2);
-      assert.equal(result.grounding.generic[1].snippets.length, 1);
-    });
-
-    it('trims back to the original request when the overfetch factor exceeds 1', async () => {
-      const config: FilterConfig = {
-        mode: 'off',
-        overfetchFactor: 2,
-        blocklist: new Set(),
-        thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: {
-          model: DEFAULT_JEV_MODEL,
-          timeoutMs: 15000,
-          concurrency: 12,
-        },
-        logDir: join(homedir(), '.brave-jev', 'logs'),
-      };
-      const { result, stats } = await filterLlmContext(payload(), tightRequest, config);
-
-      assert.equal(stats.local.budget_trimmed_snippets > 0, true);
-      assert.equal(stats.local.budget_dropped_sources > 0, true);
-      // 放大后的请求发给了 Brave（Brave 侧预算翻倍），但输出仍按模型原始请求裁回
-      assert.equal(result.grounding.generic.length, 0);
-    });
-  });
 });
 
 describe('collectJevCandidates', () => {
-  // 四类情形内联载荷：s0 普通纯文本来源；s1 JSON-LD 转段来源（数组两个 articleBody，
-  // 步 1 转出各段都是候选片段）；s2 feed URL 来源（步 4 整源丢）；s3 与 s0 同规范
-  // URL 的待归并来源（步 2 drop+merged，其片段并入 s0）。片段都含 query 实词
-  // （brave / browser），步 3 预筛不误伤。
+  // 两类情形内联载荷：s0 普通纯文本来源；s1 JSON-LD 转段来源（数组两个 articleBody，
+  // 步 1 转出各段都是候选片段）。片段都含 query 实词（brave / browser），预筛不误伤。
   const jevPayload = (): BraveLlmContextResponse => ({
     grounding: {
       generic: [
@@ -607,27 +483,16 @@ describe('collectJevCandidates', () => {
             '[{"@type":"NewsArticle","articleBody":"First body about Brave release details."},{"@type":"NewsArticle","articleBody":"Second body with more Brave analysis."}]',
           ],
         },
-        {
-          url: 'https://example.com/blog/feed/',
-          title: 'Feed',
-          snippets: ['Brave updates feed entry.'],
-        },
-        {
-          url: 'https://www.search.brave.com/',
-          title: 'Brave Search (www)',
-          snippets: ['Third snippet about Brave performance.'],
-        },
       ],
       map: [],
     },
     sources: {},
   });
 
-  it('collects surviving sources with s{index} ids and excludes feed and merged ones', () => {
+  it('collects surviving sources with s{index} ids', () => {
     const candidates = collectJevCandidates(jevPayload(), request, offConfig);
 
-    // feed 来源（s2）与被归并来源（s3）不出现在候选集；被归并片段并入 s0 的片段序列。
-    // 日期字段恒在：归并候选的日期选择常开（s0 无元数据 → null）
+    // 日期字段恒在：无元数据 → null
     assert.deepEqual(candidates, [
       {
         id: 's0',
@@ -636,7 +501,6 @@ describe('collectJevCandidates', () => {
         snippets: [
           'Brave is a privacy-focused browser and search engine.',
           'Second snippet about Brave.',
-          'Third snippet about Brave performance.',
         ],
         brave_page_date: null,
       },
@@ -1177,18 +1041,16 @@ describe('jev status aggregation and SAFE-02 trim-back (02-05 Task 3)', () => {
     assert.equal(stats.jev?.n_requests, 0);
   });
 
-  it('SAFE-02: with overfetch 2 and an all-breaker_open classify the output deep-equals the off run', async () => {
-    const overfetch2 = { ...offConfig, overfetchFactor: 2 };
-    const offRun = await filterLlmContext(payload(), request, { ...overfetch2, mode: 'off' });
+  it('SAFE-02: with an all-breaker_open classify the output deep-equals the off run', async () => {
+    const offRun = await filterLlmContext(payload(), request, { ...offConfig, mode: 'off' });
     const onRun = await filterLlmContext(
       payload(),
       request,
-      { ...overfetch2, mode: 'on' },
+      { ...offConfig, mode: 'on' },
       { classify: async () => breakerOpen }
     );
 
-    // 超量抓取的内容不原样放行：熔断期只跑本地规则，输出与同参数 off 模式
-    // deepEqual（步 9 trimToBudget 照常裁回）
+    // 熔断期只跑本地规则，输出与同参数 off 模式 deepEqual
     assert.deepEqual(onRun.result, offRun.result);
     // 失败来源应保守保留。
     assert.deepEqual(
@@ -2091,19 +1953,24 @@ describe('temporal context (all-only)', () => {
     assert.deepEqual(
       state.sources.map((s) => [s.id, s.brave_page_date]),
       [
-        ['s1', null],
+        ['s1', '2026-10-01'],
         ['s2', '2024-02-29'],
+        ['s3', '2026-09-01'],
       ]
     );
-    assert.deepEqual(state.sources[0].snippets, [article, `A: ${answer}`, merged]);
-    assert.deepEqual(filtered.jev_requests[0].mapping[0].snippet_keys, ['0.0', '0.1', '3:0']);
+    assert.deepEqual(state.sources[0].snippets, [article, `A: ${answer}`]);
+    assert.deepEqual(filtered.jev_requests[0].mapping[0].snippet_keys, ['0.0', '0.1']);
     assert.match(
-      seen[0].questions.s1__snip2.instructions,
-      /^How useful is `sources\[0\].snippets\[2\]`/
+      seen[0].questions.s1__snip1.instructions,
+      /^How useful is `sources\[0\].snippets\[1\]`/
     );
     assert.match(
       seen[0].questions.s2__snip0.instructions,
       /^How useful is `sources\[1\].snippets\[0\]`/
+    );
+    assert.match(
+      seen[0].questions.s3__snip0.instructions,
+      /^How useful is `sources\[2\].snippets\[0\]`/
     );
     assert.deepEqual(data, before, '日期接入不改原正文或元数据');
     const onSources = filtered.stats.sources;
@@ -2142,7 +2009,7 @@ describe('temporal context (all-only)', () => {
     assert.ok(
       snip.instructions.startsWith('How useful is `sources[0].snippets[0]` for answering `intent`?')
     );
-    assert.ok(snip.instructions.includes("A source's `brave_page_date`"));
+    assert.ok(snip.instructions.includes('architectural comparisons'));
     const sourceQuestion = questions['s0__is_off_topic'];
     assert.ok(sourceQuestion);
     assert.ok(
@@ -2202,68 +2069,6 @@ describe('temporal context (all-only)', () => {
       /^How useful is `sources\[0\]\.snippets\[0\]`/
     );
     assert.equal(stats.jev?.requests[0]?.request_id, 'j1');
-  });
-
-  it('merged candidates collapse conflicting page dates to null and keep identical ones', async () => {
-    // 同一 canonical URL 的两个来源（example.com/article 与 www 变体）：日期不同 → null；
-    // 相同 → 保留。片段身份映射不受影响（mergedFrom 并入宿主片段序列）
-    const mergedPayload = (): BraveLlmContextResponse => ({
-      grounding: {
-        generic: [
-          {
-            url: 'https://example.com/article',
-            title: 'Article',
-            snippets: ['A body snippet about brave with enough words to survive. '.repeat(3)],
-          },
-          {
-            url: 'https://www.example.com/article',
-            title: 'Article (www)',
-            snippets: ['A merged snippet about brave with enough words to survive. '.repeat(3)],
-          },
-        ],
-        map: [],
-      },
-      sources: {
-        'https://example.com/article': { title: 'Article', age: ['2026-09-16'] },
-        'https://www.example.com/article': { title: 'Article (www)', age: ['2023-04-18'] },
-      },
-    });
-    seen.length = 0;
-    await filterLlmContext(
-      mergedPayload(),
-      { ...request, retrievalTime: RETRIEVAL },
-      temporalConfig,
-      {
-        classify: keepClassify,
-      }
-    );
-    assert.equal(seen.length, 1);
-    const { state } = seen[0];
-    assert.equal(state.sources.length, 1, '步 2 归并后单候选仍是 sources[] 形状');
-    assert.equal(
-      state.sources[0]?.brave_page_date,
-      null,
-      'A、B 日期不同 → null，不把 A 的日期贴到 B'
-    );
-
-    // 相同日期保留
-    const samePayload = mergedPayload();
-    samePayload.sources['https://www.example.com/article'] = {
-      title: 'Article (www)',
-      age: ['2026-09-16'],
-    };
-    seen.length = 0;
-    await filterLlmContext(samePayload, { ...request, retrievalTime: RETRIEVAL }, temporalConfig, {
-      classify: keepClassify,
-    });
-    assert.equal(seen[0].state.sources[0]?.brave_page_date, '2026-09-16');
-
-    delete samePayload.sources['https://www.example.com/article'].age;
-    seen.length = 0;
-    await filterLlmContext(samePayload, { ...request, retrievalTime: RETRIEVAL }, temporalConfig, {
-      classify: keepClassify,
-    });
-    assert.equal(seen[0].state.sources[0]?.brave_page_date, null, '部分未知不能冒用宿主日期');
   });
 });
 

@@ -7,18 +7,11 @@
   "note": "noise 夹具：主题是另一个产品（Claude Fable 5），query/intent 由标注人重建（A20）。付费墙页面没有任何行首付费墙标记——付费墙规则不据此判整页也不截断（反例），九条片段全部保留。 02-04 重标注：步 7 新颖度与跨源 dup 零命中（新增两节为空数组，note 留痕备查）。",
   "rules": {
     "jsonld": [],
-    "url_merge": [],
     "prefilter": [],
     "dedup": [],
-    "feed_blocklist": [],
-    "paywall": [],
     "empty_source": [],
     "novelty": [],
-    "cross_source_dup": [],
-    "budget": {
-      "dropped_sources": 0,
-      "trimmed_snippets": 0
-    }
+    "cross_source_dup": []
   },
   "final": {
     "urls": [

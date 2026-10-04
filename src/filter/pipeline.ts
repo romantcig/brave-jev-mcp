@@ -1,36 +1,29 @@
 /**
- * 十步过滤管道与输出重建。
- * 各步在保留原始身份的工作表上标记裁决或替换文本，最后按表序重建输出。
+ * 七阶段过滤管道与输出重建。
+ * 各阶段在保留原始身份的工作表上标记裁决或替换文本，最后按表序重建输出。
  * test 与 on 共用实际 Jev 裁决链；off 使用本地链，幸存来源与片段保持 Brave 原序。
  */
 
 import { parseFilterConfigObject } from './config.js';
-import {
-  BRAVE_DEFAULT_MAX_TOKENS,
-  BRAVE_DEFAULT_MAX_URLS,
-  summarizeOutput,
-  trimToBudget,
-} from './budget.js';
 import { splitJsonFragment } from './jsonld.js';
-import { BOILERPLATE_PREFIXES, PAYWALL_MARKERS_EN, PAYWALL_MARKERS_ZH } from './markers.js';
-import {
-  isBlocklisted,
-  isEmptySource,
-  isFeedUrl,
-  isOneLiner,
-  truncateAtPaywall,
-} from './nonArticle.js';
+import { BOILERPLATE_PREFIXES } from './markers.js';
+import { isEmptySource, isOneLiner } from './nonArticle.js';
 import { isNearDuplicate, SHINGLE_N, stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
-import { canonicalizeUrl, mergeByCanonicalUrl } from './url.js';
 import { buildStatusLine } from './statusline.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
 import { estimateTokens } from './tokens.js';
-import { createFilterStats, createNoKeyJevStats } from './stats.js';
-import { mergePageDates, normalizeRetrievalTime, selectPageDate } from './temporal.js';
+import {
+  BRAVE_DEFAULT_MAX_TOKENS,
+  BRAVE_DEFAULT_MAX_URLS,
+  createFilterStats,
+  createNoKeyJevStats,
+  summarizeOutput,
+} from './stats.js';
+import { normalizeRetrievalTime, selectPageDate } from './temporal.js';
 import type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,
@@ -69,18 +62,14 @@ type WorkSnippet = {
   text: string;
   kept: boolean;
   reason?: SnippetRemovalReason;
-  truncated?: boolean;
-  /** 步 3 GitHub 界面清洗的动作明细（test/on 生效）；投影到统计表 github_cleanup */
+  /** 阶段 2 GitHub 界面清洗的动作明细（test/on 生效）；投影到统计表 github_cleanup */
   githubCleanup?: GitHubCleanupAction[];
-  /** 步 2 从同页来源并入时记原来源索引；此时 `index` 是它在原来源里的片段索引 */
-  mergedFrom?: number;
 };
 
-/** 工作表里的一个来源。`url` 永远是 Brave 原始 URL；`canonical` 只用作归并键。 */
+/** 工作表里的一个来源。`url` 永远是 Brave 原始 URL。 */
 type WorkSource = {
   index: number;
   url: string;
-  canonical: string;
   title: string;
   meta: SourceMetadata | undefined;
   snippets: WorkSnippet[];
@@ -113,7 +102,6 @@ const buildWorkTable = (data: BraveLlmContextResponse): WorkSource[] => {
     return {
       index,
       url,
-      canonical: canonicalizeUrl(url),
       title,
       meta: lookupMeta(data?.sources, url),
       snippets: texts.map((text, snippetIndex) => ({
@@ -127,7 +115,7 @@ const buildWorkTable = (data: BraveLlmContextResponse): WorkSource[] => {
 };
 
 /**
- * 步 1 JSON-LD 分流：逐源逐片段按 Brave 序调 `splitJsonFragment`。
+ * 阶段 1 JSON-LD 分流：逐源逐片段按 Brave 序调 `splitJsonFragment`。
  * 转出的多段原地占据原片段位置（同一 `index`、`part` 从 0 递增），不重排；
  * 整片删的只翻 `kept`，片段行仍留在表里供统计投影。普通文本不计数。
  */
@@ -159,11 +147,8 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
   }
 };
 
-/** 步 3 付费墙截断用的标记全集：中英两表合并，每进程算一次。 */
-const PAYWALL_MARKERS: readonly string[] = [...PAYWALL_MARKERS_EN, ...PAYWALL_MARKERS_ZH];
-
 /**
- * 步 3 固定顺序：付费墙截断 → 样板行剥离 → 页内逐字去重。
+ * 阶段 2 固定顺序：样板行剥离 → 页内逐字去重。
  * 样板剥离内部依次为 GitHub 清洗、前缀行、标题重复行、引用块；GitHub 子步仅 test/on 应用。
  * 去重只与同来源内已保留片段比较，被删片段仍留表供统计。
  * 空片段和样板删除合计入 snippets_prefiltered，重复删除单独计数。
@@ -183,18 +168,6 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
         snippet.reason = 'nav';
         stats.local.snippets_prefiltered += 1;
         continue;
-      }
-
-      const paywall = truncateAtPaywall(snippet.text, PAYWALL_MARKERS);
-      if (paywall.truncated) {
-        snippet.truncated = true;
-        if (paywall.text === '') {
-          snippet.kept = false;
-          snippet.reason = 'paywall_empty';
-          continue;
-        }
-        snippet.text = paywall.text;
-        stats.local.paywall_truncated += 1;
       }
 
       // GitHub 清洗：样板行剥离阶段内的专门子步，
@@ -240,44 +213,7 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
 };
 
 /**
- * 步 4 的规范 host：小写、去 `www.` 前缀；解析失败返回 `null`（不判 feed 也不判
- * 黑名单，方向保守）。host 规范化不包含端口；栏目规则另检查原始 URL 路径。
- */
-const canonicalHostOf = (raw: string): string | null => {
-  try {
-    return new URL(raw).hostname.toLowerCase().replace(/^www\./, '');
-  } catch {
-    return null;
-  }
-};
-
-/**
- * 步 4：feed URL 与结构性黑名单，接在步 3 之后。feed 先判（更便宜也更具体），
- * 黑名单兜底；命中者整体丢弃，输出的 `sources` 表随输出重建自动清掉。
- */
-const dropNonArticles = (table: WorkSource[], config: FilterConfig, stats: FilterStats): void => {
-  for (const source of table) {
-    if (source.verdict !== 'keep') continue;
-
-    const host = canonicalHostOf(source.url);
-    if (host === null) continue;
-
-    if (isFeedUrl(source.url)) {
-      source.verdict = 'drop';
-      source.reason = 'feed';
-      stats.local.feed_hits += 1;
-      continue;
-    }
-    if (isBlocklisted(host, config.blocklist, source.url)) {
-      source.verdict = 'drop';
-      source.reason = 'blocklist';
-      stats.local.blocklist_hits += 1;
-    }
-  }
-};
-
-/**
- * 步 8 删除空来源和不含 query 实词的一句话来源；intent 不参与本步。
+ * 阶段 6 删除空来源和不含 query 实词的一句话来源；intent 不参与本阶段。
  * 删除只更新工作表标记，不移除行。
  * 若来源删空且包含新颖度或跨源去重删除，归因为 rewrite；否则为 empty。
  * empty_dropped 只统计 empty，rewrite 由来源裁决表计数。
@@ -305,16 +241,12 @@ const dropEmptySources = (
 };
 
 /**
- * 本地步骤 1–4：JSON-LD 分流 → URL 归并 → 片段预筛 → feed 与结构性黑名单。
+ * 本地阶段 1–2：JSON-LD 分流 → 片段预筛。
  * 候选导出与实际过滤共用此顺序。
  */
 const runLocalRules = (table: WorkSource[], stats: FilterStats, config: FilterConfig): void => {
-  splitJsonLd(table, stats); // 步 1：JSON-LD 分流
-  stats.local.url_merged += mergeByCanonicalUrl(table); // 步 2：URL 规范化归并
-  // 步 3 片段预筛：付费墙截断 → 样板剥离（GitHub 清洗仅 test/on）→ 页内逐字重复
-  // （顺序固定）
-  prefilterSnippets(table, stats, config.mode !== 'off');
-  dropNonArticles(table, config, stats); // 步 4：feed URL 与结构性黑名单
+  splitJsonLd(table, stats); // 阶段 1：JSON-LD 分流
+  prefilterSnippets(table, stats, config.mode !== 'off'); // 阶段 2：片段预筛
 };
 
 /**
@@ -380,9 +312,7 @@ const projectSource = (source: WorkSource): SourceStats => {
     ...(snippet.part !== undefined ? { part: snippet.part } : {}),
     kept: snippet.kept,
     ...(snippet.reason !== undefined ? { reason: snippet.reason } : {}),
-    ...(snippet.truncated !== undefined ? { truncated: snippet.truncated } : {}),
     ...(snippet.githubCleanup !== undefined ? { github_cleanup: snippet.githubCleanup } : {}),
-    ...(snippet.mergedFrom !== undefined ? { merged_from: snippet.mergedFrom } : {}),
     chars: snippet.text.length,
   }));
 
@@ -390,7 +320,6 @@ const projectSource = (source: WorkSource): SourceStats => {
     index: source.index,
     url: source.url,
     title: source.title,
-    canonical_url: source.canonical,
     ...(hostname !== undefined ? { hostname } : {}),
     verdict: source.verdict,
     ...(source.reason !== undefined ? { reason: source.reason } : {}),
@@ -401,7 +330,7 @@ const projectSource = (source: WorkSource): SourceStats => {
 /**
  * 管道跑完后把工作表的最终裁决与输出规模写回统计对象。
  * `output.*` 由 summarizeOutput 从工作表算（幸存片段 `String.length` 之和、
- * 未取整估算和的 `Math.ceil`），token 口径与步 9 的裁剪判定一致。
+ * 未取整估算和的 `Math.ceil`）。
  */
 const finalizeStats = (stats: FilterStats, table: WorkSource[]): void => {
   stats.sources = table.map(projectSource);
@@ -409,10 +338,7 @@ const finalizeStats = (stats: FilterStats, table: WorkSource[]): void => {
 };
 
 /** 把适配行传入的请求归一成统计表的 `request` 摘要，上限缺省填 Brave 默认值。 */
-const toStatsRequest = (
-  request: FilterCallContext,
-  config: FilterConfig
-): FilterStats['request'] => {
+const toStatsRequest = (request: FilterCallContext): FilterStats['request'] => {
   const { params } = request;
   return {
     query: params.query,
@@ -427,7 +353,6 @@ const toStatsRequest = (
     ...(params.context_threshold_mode !== undefined
       ? { context_threshold_mode: params.context_threshold_mode }
       : {}),
-    overfetch_factor: config.overfetchFactor,
   };
 };
 
@@ -444,10 +369,10 @@ export async function filterLlmContext(
   deps?: FilterDeps
 ): Promise<FilterResult> {
   const table = buildWorkTable(data);
-  const stats = createFilterStats(config.mode, toStatsRequest(request, config), data);
-  // 步 8 只看 query 实词（intent 不参与本步判定）
+  const stats = createFilterStats(config.mode, toStatsRequest(request), data);
+  // 阶段 6 只看 query 实词（intent 不参与本阶段判定）
   const queryTerms = contentTerms(request.params.query);
-  // 步 5 填充派发证据，off / no_key 保持空表。
+  // 阶段 3 填充派发证据，off / no_key 保持空表。
   let dispatches: JevDispatchRecord[] = [];
   // 请求级记录每次逻辑调用一条，off / no_key 保持空表。
   let requests: JevRequestRecord[] = [];
@@ -461,7 +386,7 @@ export async function filterLlmContext(
     stats.jev = createNoKeyJevStats();
     runOffChain(table, undefined, config.thresholds, stats, queryTerms);
   } else {
-    // 步 5 Jev 请求派发：非空候选组织一次全量共享请求（§3.1）——test 与 on 共用
+    // 阶段 3 Jev 请求派发：非空候选组织一次全量共享请求（§3.1）——test 与 on 共用
     // 此分支；裁决消费与记账形状完全一致
     const judged = await runJevStage(table, request, deps.classify, stats, config);
     dispatches = judged.dispatches;
@@ -474,20 +399,6 @@ export async function filterLlmContext(
         row?.status === 'answered' && row.verdict !== undefined && row.fail_kind !== 'validation';
     }
   }
-  // 仅 overfetch 放大抓取量时，按原始请求预算从末源末片段向前裁剪。
-  // 倍数为 1 时 Brave 已按请求上限返回；本地估算偏保守，再裁可能误删。
-  if (config.overfetchFactor !== 1) {
-    trimToBudget(table, request.params, estimateTokens);
-  }
-  stats.local.budget_dropped_sources += table.filter(
-    (source) => source.verdict === 'drop' && source.reason === 'budget'
-  ).length;
-  stats.local.budget_trimmed_snippets += table.reduce(
-    (sum, source) =>
-      sum +
-      source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'budget').length,
-    0
-  );
   const result = rebuildOutput(table, data);
   finalizeStats(stats, table);
   // 状态行必须在 finalizeStats 后写入，后者会整体替换 stats.output。
@@ -497,14 +408,13 @@ export async function filterLlmContext(
 }
 
 /**
- * 片段身份：可选 merged_from 前缀 + 原片段 index + 可选 JSON-LD part。
+ * 片段身份：原片段 index + 可选 JSON-LD part（格式：`{index}[.{part}]`）。
  * 与统计表的身份字段同源，用于样本配对。
  */
 const snippetKeyOf = (snippet: WorkSnippet): string =>
-  `${snippet.mergedFrom !== undefined ? `${snippet.mergedFrom}:` : ''}${snippet.index}` +
-  `${snippet.part !== undefined ? `.${snippet.part}` : ''}`;
+  `${snippet.index}${snippet.part !== undefined ? `.${snippet.part}` : ''}`;
 
-/** 带身份候选 → 纯文本候选（探测/重录与步 5 派发的既有消费形状）。 */
+/** 带身份候选 → 纯文本候选（探测/重录与阶段 3 派发的既有消费形状）。 */
 const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
   detailed.map(({ id, url, title, snippets, bravePageDate }) => ({
     id,
@@ -517,13 +427,9 @@ const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
 /**
  * 收集 keep 且仍有片段的来源，ID 为 s{原始索引}，文本取工作表当前值。
  * 候选与片段均按 Brave 原序，只读工作表。
- * 页面日期按原始来源身份读取，不能用压缩后的候选下标对应原元数据。
- * 归并时综合宿主与幸存片段的原来源日期；存在冲突或未知时为 null。
+ * 页面日期直接对每个来源调用 selectPageDate(source.meta)。
  */
 const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => {
-  const pageDateByIndex = new Map<number, string | null>(
-    table.map((source) => [source.index, selectPageDate(source.meta)])
-  );
   const candidates: JevCandidateDetailed[] = [];
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
@@ -533,14 +439,7 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => 
       key: snippetKeyOf(snippet),
       text: snippet.text,
     }));
-    // 贡献原来源 = 宿主本身（候选身份即它的 URL / 标题）∪ 并入片段的原索引
-    const contributorIndexes = new Set<number>([source.index]);
-    for (const snippet of surviving) {
-      if (snippet.mergedFrom !== undefined) contributorIndexes.add(snippet.mergedFrom);
-    }
-    const bravePageDate = mergePageDates(
-      [...contributorIndexes].map((index) => pageDateByIndex.get(index) ?? null)
-    );
+    const bravePageDate = selectPageDate(source.meta);
     candidates.push({
       id: `s${source.index}`,
       url: source.url,
@@ -553,7 +452,7 @@ const jevCandidatesFromTable = (table: WorkSource[]): JevCandidateDetailed[] => 
 };
 
 /**
- * 步 5：零候选不调用 Jev，非空候选共用一次请求；并发和重试由客户端负责。
+ * 阶段 3：零候选不调用 Jev，非空候选共用一次请求；并发和重试由客户端负责。
  * 按显式映射投影答案，失败来源保守保留，空来源记 skipped。
  * requests 保存完整载荷，stats 只存无正文摘要；派发、回答和用量完整性分别记账。
  * 返回逐来源裁决 rows、来源派发证据 dispatches 和请求记录 requests。
@@ -810,7 +709,7 @@ const runJevStage = async (
 };
 
 /**
- * test/on 共用：步 6 来源裁决 → 步 7 评分、跨源去重与新颖度 → 步 8。
+ * test/on 共用：阶段 4 来源裁决 → 阶段 5 评分、跨源去重与新颖度 → 阶段 6。
  * 裁决实际修改工作表，统计同步回写。
  */
 const runOnChain = (
@@ -826,7 +725,7 @@ const runOnChain = (
   dropEmptySources(table, stats, queryTerms, jevSideDeletions);
 };
 
-/** off 或缺少 classify 时：按 Brave 原序执行跨源去重、新颖度和步 8。 */
+/** off 或缺少 classify 时：按 Brave 原序执行跨源去重、新颖度和阶段 6。 */
 const runOffChain = (
   table: WorkSource[],
   judged: ReadonlyMap<string, JevPerSourceStats> | undefined,
@@ -839,7 +738,7 @@ const runOffChain = (
 };
 
 /**
- * 跑本地步骤 1–4 后收集候选，供开发导出与请求构造核对。
+ * 跑本地阶段 1–2 后收集候选，供开发导出与请求构造核对。
  * 不修改输入；实际样本使用客户端派发证据，不在保存时重新调用此函数。
  */
 export function collectJevCandidates(
@@ -860,7 +759,7 @@ export function collectJevCandidatesDetailed(
   config: FilterConfig
 ): JevCandidateDetailed[] {
   const table = buildWorkTable(data);
-  const stats = createFilterStats('off', toStatsRequest(request, config), data);
+  const stats = createFilterStats('off', toStatsRequest(request), data);
   runLocalRules(table, stats, config);
 
   return jevCandidatesFromTable(table);

@@ -62,7 +62,7 @@ const answeredRow = (
 const buildStats = (rows: JevPerSourceStats[]): FilterStats => {
   const stats = createFilterStats(
     'on',
-    { query: 'q', intent: 'i', max_urls: 5, max_tokens: 4000, overfetch_factor: 1 },
+    { query: 'q', intent: 'i', max_urls: 5, max_tokens: 4000 },
     { grounding: { generic: [], map: [] }, sources: {} }
   );
   stats.jev = {
@@ -283,10 +283,10 @@ describe('applySourceVerdicts', () => {
   it('does not touch sources already dropped by the local rules', () => {
     const { table, row, stats } = singleSource({ is_off_topic: 0.99 });
     table[0].verdict = 'drop';
-    table[0].reason = 'feed';
+    table[0].reason = 'empty';
     applySourceVerdicts(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
-    // 步 4 的裁决不被覆盖（只处理 verdict === 'keep' 的来源）
-    assert.equal(table[0].reason, 'feed');
+    // 本地规则的裁决不被覆盖（只处理 verdict === 'keep' 的来源）
+    assert.equal(table[0].reason, 'empty');
     assert.equal(row.verdict, undefined);
   });
 });

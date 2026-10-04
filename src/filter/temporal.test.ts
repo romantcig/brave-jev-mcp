@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { mergePageDates, normalizeRetrievalTime, selectPageDate } from './temporal.js';
+import { normalizeRetrievalTime, selectPageDate } from './temporal.js';
 
 describe('selectPageDate', () => {
   it('拒绝不存在的日期和残缺时间，并继续寻找合法日期', () => {
@@ -62,32 +62,6 @@ describe('selectPageDate', () => {
     // 落进纯日期分支——优先级由两个独立模式保证
     assert.equal(selectPageDate({ age: ['2026-09-16T00:00:00Z'] }), '2026-09-16T00:00:00Z');
     assert.equal(selectPageDate({ age: ['2026-09-16'] }), '2026-09-16');
-  });
-});
-
-describe('mergePageDates', () => {
-  it('keeps a single known date and identical dates across contributors', () => {
-    assert.equal(mergePageDates(['2026-10-01']), '2026-10-01');
-    assert.equal(
-      mergePageDates(['2026-10-01T13:00:00Z', '2026-10-01T13:00:00Z']),
-      '2026-10-01T13:00:00Z'
-    );
-  });
-
-  it('collapses to null when contributor dates differ', () => {
-    assert.equal(mergePageDates(['2026-10-01', '2026-10-02']), null);
-    assert.equal(mergePageDates(['2026-10-01', '2026-10-01T13:00:00Z']), null);
-  });
-
-  it('collapses to null when dates are partially unknown (no partial attribution)', () => {
-    assert.equal(mergePageDates(['2026-10-01', null]), null);
-    assert.equal(mergePageDates([null, '2026-10-01']), null);
-  });
-
-  it('returns null for all-unknown contributors and the empty list', () => {
-    assert.equal(mergePageDates([null]), null);
-    assert.equal(mergePageDates([null, null]), null);
-    assert.equal(mergePageDates([]), null);
   });
 });
 

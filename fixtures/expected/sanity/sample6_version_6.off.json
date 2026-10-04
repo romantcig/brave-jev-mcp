@@ -7,7 +7,6 @@
   "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。博客与文档页的目录/页内导航行剥掉后保留；GitHub release 杂项片段含 v6 实词得以保留。02-04 重标注：步 7 新增 novelty 1 条（newreleases v6.0.0 的 changelog 转发行，novel 仅 1 个图床指纹）——判'标注漏'。",
   "rules": {
     "jsonld": [],
-    "url_merge": [],
     "prefilter": [
       {
         "url": "https://www.sanity.io/blog/sanity-studio-v6",
@@ -25,8 +24,6 @@
       }
     ],
     "dedup": [],
-    "feed_blocklist": [],
-    "paywall": [],
     "empty_source": [],
     "novelty": [
       {
@@ -34,8 +31,7 @@
         "snippet": 1
       }
     ],
-    "cross_source_dup": [],
-    "budget": { "dropped_sources": 0, "trimmed_snippets": 0 }
+    "cross_source_dup": []
   },
   "final": {
     "urls": [
@@ -47,22 +43,72 @@
       "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0"
     ],
     "kept_snippets": {
-      "https://x.com/sanity_io/status/2064784450526032010": [0, 1, 2],
-      "https://www.sanity.io/blog/sanity-studio-v6": [0, 1, 2, 3, 4, 5, 6, 7],
-      "https://github.com/sanity-io/sanity/releases/tag/v6.7.0": [0, 1, 2, 3],
-      "https://newreleases.io/project/npm/sanity/release/6.6.0": [0, 1],
-      "https://www.sanity.io/docs/studio/upgrade": [0, 1, 2, 3, 4, 5, 6, 7, 8],
-      "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0": [0, 2]
+      "https://x.com/sanity_io/status/2064784450526032010": [
+        0,
+        1,
+        2
+      ],
+      "https://www.sanity.io/blog/sanity-studio-v6": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "https://github.com/sanity-io/sanity/releases/tag/v6.7.0": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "https://newreleases.io/project/npm/sanity/release/6.6.0": [
+        0,
+        1
+      ],
+      "https://www.sanity.io/docs/studio/upgrade": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0": [
+        0,
+        2
+      ]
     },
-    "sources_keys": ["age", "hostname", "title"],
+    "sources_keys": [
+      "age",
+      "hostname",
+      "title"
+    ],
     "sources_age": {
-      "https://x.com/sanity_io/status/2064784450526032010": ["2026-06-10"],
-      "https://www.sanity.io/blog/sanity-studio-v6": ["2026-06-09"],
-      "https://newreleases.io/project/npm/sanity/release/6.6.0": ["2026-07-22"],
-      "https://www.sanity.io/docs/studio/upgrade": ["2026-09-04"],
-      "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0": ["2026-06-11"]
+      "https://x.com/sanity_io/status/2064784450526032010": [
+        "2026-06-10"
+      ],
+      "https://www.sanity.io/blog/sanity-studio-v6": [
+        "2026-06-09"
+      ],
+      "https://newreleases.io/project/npm/sanity/release/6.6.0": [
+        "2026-07-22"
+      ],
+      "https://www.sanity.io/docs/studio/upgrade": [
+        "2026-09-04"
+      ],
+      "https://newreleases.io/project/github/sanity-io/sanity/release/v6.0.0": [
+        "2026-06-11"
+      ]
     },
     "n_snippets": 28,
-    "local": { "novelty_removed": 1 }
+    "local": {
+      "novelty_removed": 1
+    }
   }
 }

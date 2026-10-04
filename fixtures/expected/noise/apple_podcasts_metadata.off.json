@@ -13,18 +13,11 @@
         "action": "dropped_meta"
       }
     ],
-    "url_merge": [],
     "prefilter": [],
     "dedup": [],
-    "feed_blocklist": [],
-    "paywall": [],
     "empty_source": [],
     "novelty": [],
-    "cross_source_dup": [],
-    "budget": {
-      "dropped_sources": 0,
-      "trimmed_snippets": 0
-    }
+    "cross_source_dup": []
   },
   "final": {
     "urls": [

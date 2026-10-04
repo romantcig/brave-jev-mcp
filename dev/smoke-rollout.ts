@@ -770,11 +770,11 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
           `sample for filter debugging - original results, filtered results, Jev decisions: the status-line path must exist at return time — ${sampleAbsPath}`
         );
         const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SmokeSample;
-        // 按 v5 请求级记录核对实发载荷。
+        // 按 v6 请求级记录核对实发载荷。
         assert.equal(
           sample.format_version,
-          5,
-          'sample for filter debugging - original results, filtered results, Jev decisions: format_version must be 5'
+          6,
+          'sample for filter debugging - original results, filtered results, Jev decisions: format_version must be 6'
         );
         // all-only：一次共享请求覆盖全部候选；每来源行必须关联到这条真实请求
         assert.equal(sample.jev?.requests?.length, 1);

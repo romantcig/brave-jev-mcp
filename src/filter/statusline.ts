@@ -1,7 +1,7 @@
 /**
  * 从最终统计生成单行英文摘要，供宿主作为第二个 text 块返回。
  * 来源按删除原因计数；片段只统计幸存来源内的删除，避免重复计算。
- * test/on 模式还提示保守保留但未完成 Jev 裁决的来源；无事项时不生成状态行。
+ * test/on 模式还提示保守保留但未完成 Jev 裁决的来源；无删除时不生成状态行。
  */
 
 import type { FilterStats, SourceDropReason } from './types.js';
@@ -13,11 +13,9 @@ const INTENT_ECHO_MAX = 100;
 const plural = (count: number, singular: string): string =>
   count === 1 ? singular : `${singular}s`;
 
-/** 生成状态行；没有删除、截断或未完成的 Jev 检查时返回 undefined。 */
+/** 生成状态行；没有删除或未完成的 Jev 检查时返回 undefined。 */
 export function buildStatusLine(stats: FilterStats): string | undefined {
-  const dropped = stats.sources.filter(
-    (source) => source.verdict === 'drop' && source.reason !== 'merged'
-  );
+  const dropped = stats.sources.filter((source) => source.verdict === 'drop');
 
   // 按原因首次出现的顺序聚合；兼容旧 stale 记录时逐来源回显 intent。
   const intentEcho = `"${truncateIntent(stats.request.intent)}"`;
@@ -44,9 +42,6 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
     }
   }
 
-  // 付费墙截断是片段动作，单独计数。
-  const paywallTruncated = stats.local.paywall_truncated;
-
   // 保留来源缺少回答、请求失败或来源裁决校验失败时，提示 Jev 未完成检查。
   // 收到可解析响应不等于取得有效裁决；off 模式不显示此提示。
   let unchecked = 0;
@@ -61,7 +56,7 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
     }
   }
 
-  if (dropped.length === 0 && removedSnippets === 0 && paywallTruncated === 0 && unchecked === 0) {
+  if (dropped.length === 0 && removedSnippets === 0 && unchecked === 0) {
     return undefined;
   }
 
@@ -80,9 +75,6 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
   }
   if (removedSnippets > 0) {
     parts.push(`${removedSnippets} ${plural(removedSnippets, 'snippet')} removed`);
-  }
-  if (paywallTruncated > 0) {
-    parts.push(`${paywallTruncated} ${plural(paywallTruncated, 'snippet')} paywall-truncated`);
   }
   if (unchecked > 0) {
     parts.push(`${unchecked} ${plural(unchecked, 'source')} not checked by Jev (kept)`);

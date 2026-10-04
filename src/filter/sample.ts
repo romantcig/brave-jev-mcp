@@ -2,7 +2,7 @@
  * test 模式每次搜索保存一份 JSON：原始响应、最终返回、过程映射、Jev 记录与配置。
  * 实发输入只取客户端捕获的证据；错误样本显式标记缺失，不当作零来源成功。
  * 文件经同目录临时文件与 rename 原子写入，失败不影响搜索。
- * 当前格式为 v5；历史样本的读取差异见 FILTERING.md。
+ * 当前格式为 v6；历史样本的读取差异见 FILTERING.md。
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -49,13 +49,13 @@ export type SampleFinalReturn = {
 export type SampleOutcome = {
   /** 本地计数（含新颖度指纹明细 novelty[]——只存指纹串，绝不存正文） */
   local: LocalStats;
-  /** 统计表 sources 投影：keep/drop + 逐片段 kept/reason/index/part/merged_from，无正文 */
+  /** 统计表 sources 投影：keep/drop + 逐片段 kept/reason/index/part，无正文 */
   sources: SourceStats[];
 };
 
 /** 实发映射中的片段：原始身份、候选位置、各阶段状态与候选文本分别记录。 */
 export type SampleJevSentSnippet = {
-  /** 片段配对身份：`{merged_from}:{index}`（前缀可省）+ 可选 `.{part}` */
+  /** 片段配对身份：`{index}` + 可选 `.{part}` */
   snippet: string;
   /** 候选内位置（即 snip{i} 题位） */
   position: number;
@@ -77,7 +77,7 @@ export type SampleJevSentSnippet = {
   scored: boolean;
   /** 实际收到的有限评分，包含越界值便于复查；缺答、错误类型或非有限为 null。 */
   score: number | null;
-  /** 该评分是否进入步 7 评分裁决；整组缺答或整源已删时为 false。后续新颖度删除不改变此事实。 */
+  /** 该评分是否进入阶段 5 评分裁决；整组缺答或整源已删时为 false。后续新颖度删除不改变此事实。 */
   score_applied: boolean;
   /**
    * 候选口径文本（与派发记录 snippet_texts 对齐）：进入实发 state 的片段即实发
@@ -181,10 +181,7 @@ export type SampleConfigSnapshot = {
     timeout_ms: number;
     concurrency: number;
   };
-  overfetch_factor: number;
   mode: FilterMode;
-  /** 结构性黑名单 host 集（排序稳定） */
-  blocklist: string[];
 };
 
 /** 错误路径的缺失标记，避免将未取得结果解释成零来源成功。 */
@@ -202,7 +199,7 @@ export type SampleMissingFinalReturn = {
  */
 export type SampleRecord = {
   /** 当前样本格式版本；跨版本读取规则见 FILTERING.md。 */
-  format_version: 5;
+  format_version: 6;
   request_id: string;
   /** 本地 ISO 带时区偏移（复用 logging.ts 的 localIsoWithOffset 口径） */
   ts: string;
@@ -210,7 +207,7 @@ export type SampleRecord = {
   request: {
     /** 模型给的原始参数（钳位前，原样含 intent 键） */
     params: Record<string, unknown>;
-    /** 补齐与 overfetch 后实际发给 Brave 的参数 */
+    /** 实际发给 Brave 的参数 */
     brave_params: Record<string, unknown>;
     intent: string;
   };
@@ -255,9 +252,9 @@ export type SampleInput = {
   path: AllocatedSamplePath;
   /** 模型给的原始参数（钳位前） */
   originalParams: Record<string, unknown>;
-  /** 补齐与 overfetch 后实际发给 Brave 的参数 */
+  /** 实际发给 Brave 的参数 */
   braveParams: Record<string, unknown>;
-  /** filterLlmContext 收到的查询参数（候选重导出与步 5 同口径） */
+  /** filterLlmContext 收到的查询参数（候选重导出与阶段 3 同口径） */
   filterParams: FilterRequest;
   intent: string;
   /** schema 校验前克隆的完整响应（所有权已隔离，save 内再深拷贝一层） */
@@ -289,7 +286,7 @@ export type SampleErrorInput = {
   path: AllocatedSamplePath;
   /** 模型给的原始参数（钳位前） */
   originalParams: Record<string, unknown>;
-  /** 补齐与 overfetch 后实际发给 Brave 的参数 */
+  /** 实际发给 Brave 的参数 */
   braveParams: Record<string, unknown>;
   intent: string;
   /** 失败阶段：Brave 请求层 / 响应 schema 校验（与 JSONL 错误记录同口径） */
@@ -441,7 +438,7 @@ const buildRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 5,
+  format_version: 6,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,
@@ -467,9 +464,7 @@ const buildRecord = (
       timeout_ms: config.jev.timeoutMs,
       concurrency: config.jev.concurrency,
     },
-    overfetch_factor: config.overfetchFactor,
     mode: config.mode,
-    blocklist: [...config.blocklist].sort(),
   },
   question_set_id: QUESTION_SET_ID,
   context_layout_id: CONTEXT_LAYOUT_ID,
@@ -484,7 +479,7 @@ const buildErrorRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 5,
+  format_version: 6,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,
@@ -507,9 +502,7 @@ const buildErrorRecord = (
       timeout_ms: config.jev.timeoutMs,
       concurrency: config.jev.concurrency,
     },
-    overfetch_factor: config.overfetchFactor,
     mode: config.mode,
-    blocklist: [...config.blocklist].sort(),
   },
   question_set_id: QUESTION_SET_ID,
   context_layout_id: CONTEXT_LAYOUT_ID,

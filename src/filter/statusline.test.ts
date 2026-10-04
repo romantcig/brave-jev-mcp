@@ -10,7 +10,6 @@ const request: FilterStats['request'] = {
   intent: 'test intent',
   max_urls: 10,
   max_tokens: 8192,
-  overfetch_factor: 1,
 };
 
 /** 用片段文本建一份最小 Brave 响应。 */
@@ -95,26 +94,19 @@ describe('buildStatusLine', () => {
     const stats = statsOf();
     dropSource(stats, 0, 'rewrite');
     dropSource(stats, 1, 'rewrite');
-    dropSource(stats, 2, 'blocklist');
-    assert.equal(buildStatusLine(stats), '[filter] dropped 3 of 3 sources: 2 rewrite, 1 blocklist');
+    dropSource(stats, 2, 'empty');
+    assert.equal(buildStatusLine(stats), '[filter] dropped 3 of 3 sources: 2 rewrite, 1 empty');
   });
 
-  it('keeps reason words undeformed and counts budget like any other reason', () => {
+  it('keeps reason words undeformed and counts off_topic like any other reason', () => {
     const stats = statsOf('off', {
       sources: [
         { url: 'https://a.example/', snippets: ['one'] },
         { url: 'https://b.example/', snippets: ['two'] },
       ],
     });
-    dropSource(stats, 0, 'budget');
-    assert.equal(buildStatusLine(stats), '[filter] dropped 1 of 2 sources: 1 budget');
-  });
-
-  it('does not count merged as a drop', () => {
-    const stats = statsOf();
-    dropSource(stats, 1, 'merged');
-    // 唯一的"丢弃"是 merged → 不算丢弃、无附加内容 → 不附状态行
-    assert.equal(buildStatusLine(stats), undefined);
+    dropSource(stats, 0, 'off_topic');
+    assert.equal(buildStatusLine(stats), '[filter] dropped 1 of 2 sources: 1 off_topic');
   });
 
   it('counts removed snippets inside surviving sources only, with English plurals', () => {
@@ -149,27 +141,6 @@ describe('buildStatusLine', () => {
     dropSnippet(stats, 0, 0);
     stats.brave.n_sources = 1;
     assert.equal(buildStatusLine(stats), '[filter] 1 snippet removed');
-  });
-
-  it('lists paywall-truncated snippets as its own item after the removal count', () => {
-    const stats = statsOf('off', {
-      sources: [{ url: 'https://a.example/', snippets: ['one', 'two'] }],
-    });
-    dropSnippet(stats, 0, 0);
-    stats.local.paywall_truncated = 2;
-    assert.equal(
-      buildStatusLine(stats),
-      '[filter] 1 snippet removed; 2 snippets paywall-truncated'
-    );
-  });
-
-  it('attaches the status line for paywall truncation alone (A-05.1 / D-04)', () => {
-    // 独立验证只有付费墙截断时也会生成状态行。
-    const stats = statsOf('off', {
-      sources: [{ url: 'https://a.example/', snippets: ['one', 'two'] }],
-    });
-    stats.local.paywall_truncated = 1;
-    assert.equal(buildStatusLine(stats), '[filter] 1 snippet paywall-truncated');
   });
 
   it('echoes the intent verbatim for a stale drop', () => {
@@ -336,7 +307,7 @@ describe('buildStatusLine', () => {
         ],
       });
       dropSource(stats, 0, 'stale');
-      dropSource(stats, 1, 'merged');
+      dropSource(stats, 1, 'empty');
       dropSource(stats, 2, 'rewrite');
       dropSnippet(stats, 0, 1);
       // 幸存的 d 来源未入 per_source：未判定段在 test/on 出现（同一裁决载体）

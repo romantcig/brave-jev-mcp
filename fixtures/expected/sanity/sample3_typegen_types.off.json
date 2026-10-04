@@ -15,7 +15,6 @@
         "first_part_prefix": "Ok I think this isnt a thing yet."
       }
     ],
-    "url_merge": [],
     "prefilter": [
       {
         "url": "https://www.sanity.io/blog/sanity-typegen-ga",
@@ -33,15 +32,9 @@
       }
     ],
     "dedup": [],
-    "feed_blocklist": [],
-    "paywall": [],
     "empty_source": [],
     "novelty": [],
-    "cross_source_dup": [],
-    "budget": {
-      "dropped_sources": 0,
-      "trimmed_snippets": 0
-    }
+    "cross_source_dup": []
   },
   "final": {
     "urls": [

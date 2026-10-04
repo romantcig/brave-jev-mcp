@@ -30,7 +30,7 @@ import {
 import { createJevClassifier } from './jev/client.js';
 import { filterLlmContext } from './pipeline.js';
 import { createSampleWriter, type SampleRecord } from './sample.js';
-import { createNoKeyJevStats } from './stats.js';
+import { createNoKeyJevStats, zeroLocal } from './stats.js';
 import { FILTER_RULES_VERSION } from './version.js';
 import type {
   BraveLlmContextResponse,
@@ -46,11 +46,9 @@ import type {
 const INTENT = 'What Brave Search is and how it differs from other engines';
 const QUERY = 'brave browser';
 
-/** test 配置，使用临时日志目录与非空黑名单。 */
+/** test 配置，使用临时日志目录。 */
 const configOf = (logDir: string, concurrency = 12): FilterConfig => ({
   mode: 'test',
-  overfetchFactor: 1,
-  blocklist: new Set(['farm.example', 'a.farm.example']),
   thresholds: { ...DEFAULT_THRESHOLDS },
   jev: {
     model: DEFAULT_JEV_MODEL,
@@ -78,10 +76,9 @@ const keepAllClassify: ClassifyDeps['classify'] = async ({ questions }) => ({
 });
 
 /**
- * 身份夹具：s0 带 JSON-LD（articleBody + FAQ → .part 拆分）；s1 与 s0 同规范 URL
- * （www + utm 跟踪参数）→ 步 2 并入（mergedFrom）；s2 页内逐字重复（第二步删）；
- * s3 空白片段 → 步 8 整源丢弃。合并片段与 articleBody 都长于 200 字符且含 query
- * 实词，步 3 预筛不命中。
+ * 身份夹具：s0 带 JSON-LD（articleBody + FAQ → .part 拆分）；s1 与 s0 同主域
+ * （www + utm 跟踪参数）→ 独立候选各自保留；s2 页内逐字重复被删；
+ * s3 空白片段 → 阶段 6 整源丢弃。保留片段长于 200 字符且含 query 实词。
  */
 const articleBody =
   'Brave search deeply analyzes the rendering pipeline of version 2.1 with specific benchmarks ' +
@@ -154,26 +151,9 @@ const runPipeline = async (config: FilterConfig): Promise<FilterResult> =>
 /** 零内容统计对象（目录自愈 / 原子形状用例不需要真实管道）。 */
 const emptyStats = (mode: FilterStats['mode']): FilterStats => ({
   mode,
-  request: { query: QUERY, intent: INTENT, max_urls: 20, max_tokens: 8192, overfetch_factor: 1 },
+  request: { query: QUERY, intent: INTENT, max_urls: 20, max_tokens: 8192 },
   brave: { n_sources: 0, n_snippets: 0, chars: 0, est_tokens: 0 },
-  local: {
-    jsonld_converted: 0,
-    jsonld_dropped: 0,
-    jsonld_kept_raw: 0,
-    url_merged: 0,
-    snippets_prefiltered: 0,
-    dup_removed: 0,
-    paywall_truncated: 0,
-    feed_hits: 0,
-    blocklist_hits: 0,
-    empty_dropped: 0,
-    budget_dropped_sources: 0,
-    budget_trimmed_snippets: 0,
-    novelty_removed: 0,
-    cross_source_dup_removed: 0,
-    github_cleanup_actions: 0,
-    novelty: [],
-  },
+  local: { ...zeroLocal },
   sources: [],
   jev: null,
   output: { n_sources: 0, n_snippets: 0, chars: 0, est_tokens: 0 },
@@ -476,7 +456,7 @@ describe('createSampleWriter', () => {
       'filter_program_version',
       'filter_rules_version',
     ]);
-    assert.equal(sample.format_version, 5);
+    assert.equal(sample.format_version, 6);
     assert.equal(sample.request_id, requestId);
     assert.match(String(sample.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
     assert.equal(sample.mode, 'test');
@@ -501,13 +481,7 @@ describe('createSampleWriter', () => {
 
     // 配置快照只包含生效配置，Jev 组为模型、超时和并发。
     const snapshot = sample.config_snapshot as Record<string, unknown>;
-    assert.deepEqual(Object.keys(snapshot), [
-      'thresholds',
-      'jev',
-      'overfetch_factor',
-      'mode',
-      'blocklist',
-    ]);
+    assert.deepEqual(Object.keys(snapshot), ['thresholds', 'jev', 'mode']);
     assert.deepEqual(snapshot.thresholds, {
       off_topic_drop: DEFAULT_THRESHOLDS.offTopicDrop,
       listing_drop: DEFAULT_THRESHOLDS.listingDrop,
@@ -529,9 +503,7 @@ describe('createSampleWriter', () => {
       timeout_ms: 15000,
       concurrency: 12,
     });
-    assert.equal(snapshot.overfetch_factor, 1);
     assert.equal(snapshot.mode, 'test');
-    assert.deepEqual(snapshot.blocklist, ['a.farm.example', 'farm.example']);
 
     // 题库、包版本与规则版本分别核对。
     assert.match(String(sample.question_set_id), /^[0-9a-f]{12}$/);
@@ -539,7 +511,7 @@ describe('createSampleWriter', () => {
     assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
   });
 
-  it('carries stable snippet identities: URL merge (mergedFrom), JSON-LD split (.part), in-page dup and empty-source exclusion', async () => {
+  it('carries stable snippet identities: JSON-LD split (.part), in-page dup and empty-source exclusion', async () => {
     const logDir = join(root, 'identity', 'logs');
     const config = configOf(logDir);
     const { stats, jev_dispatch, jev_requests } = await runPipeline(config);
@@ -598,7 +570,6 @@ describe('createSampleWriter', () => {
           snippets: Array<{
             index: number;
             part?: number;
-            merged_from?: number;
             kept: boolean;
             reason?: string;
           }>;
@@ -606,32 +577,32 @@ describe('createSampleWriter', () => {
       };
     };
 
-    // 核对删除项的来源、片段身份和原因：URL 归并、空来源和页内重复应能分别定位。
+    // 核对删除项的来源、片段身份和原因：空来源和页内重复应能分别定位。
     const outcomeByIndex = new Map(sample.outcome.sources.map((row) => [row.index, row]));
-    assert.equal(outcomeByIndex.get(1)?.verdict, 'drop');
-    assert.equal(outcomeByIndex.get(1)?.reason, 'merged');
+    assert.equal(outcomeByIndex.get(1)?.verdict, 'keep');
     assert.equal(outcomeByIndex.get(3)?.verdict, 'drop');
     assert.equal(outcomeByIndex.get(3)?.reason, 'empty');
     const bSnippets = outcomeByIndex.get(2)?.snippets ?? [];
     assert.equal(bSnippets[1]?.kept, false);
     assert.equal(bSnippets[1]?.reason, 'dup');
 
-    // Jev 判断：s0 与 s2 answered 且片段分数齐备（3 与 1）
+    // Jev 判断：s0, s1 与 s2 answered 且片段分数齐备（2, 1 与 1）
     assert.equal(sample.jev.status, 'ok');
     const perSource = new Map(sample.jev.per_source.map((row) => [row.src, row]));
     assert.equal(perSource.get('s0')?.status, 'answered');
-    assert.deepEqual(perSource.get('s0')?.snippet_scores, [2, 2, 2]);
+    assert.deepEqual(perSource.get('s0')?.snippet_scores, [2, 2]);
+    assert.equal(perSource.get('s1')?.status, 'answered');
+    assert.deepEqual(perSource.get('s1')?.snippet_scores, [2]);
     assert.equal(perSource.get('s2')?.status, 'answered');
     assert.deepEqual(perSource.get('s2')?.snippet_scores, [2]);
 
-    // 实发映射：全部步 5 时刻的 keep 来源——s0（含并入片段）、s2（重复片段
-    // 不在候选）已取得回答；s3 的片段在步 3 已被删光（步 8 才整源 drop），是
+    // 实发映射：全部 keep 来源已取得回答；s3 的片段在预筛已被删光（最终整源 drop），是
     // "无内容可发"的 skipped——不再从 jev 段隐身
     assert.deepEqual(
       sample.jev.sent.map((entry) => entry.src),
-      ['s0', 's2', 's3']
+      ['s0', 's1', 's2', 's3']
     );
-    // 注入面（合成 classify）无实发载荷：一次共享请求覆盖 s0 与 s2，载荷为 null
+    // 注入面（合成 classify）无实发载荷：一次共享请求覆盖 s0, s1 与 s2，载荷为 null
     // ——v5 的 in_state / score_question_sent 按映射对实发载荷检查，无载荷即
     // false，绝不按 answered 冒充"已提交"；answered 无 dispatch 计零请求
     assert.equal(sample.jev.requests.length, 1);
@@ -642,7 +613,8 @@ describe('createSampleWriter', () => {
     assert.equal(s0.dispatched, false);
     assert.equal(s0.answered, true);
     assert.ok(s0.request_id, 'request_id links the source row to its request record');
-    assert.equal(sample.jev.sent[1]!.request_id, s0.request_id, 's2 shares the same request');
+    assert.equal(sample.jev.sent[1]!.request_id, s0.request_id, 's1 shares the same request');
+    assert.equal(sample.jev.sent[2]!.request_id, s0.request_id, 's2 shares the same request');
     assert.deepEqual(
       s0.snippets.map((snippet) => [
         snippet.snippet,
@@ -654,13 +626,25 @@ describe('createSampleWriter', () => {
       [
         ['0.0', 0, false, false, true], // JSON-LD 拆分 part 0
         ['0.1', 1, false, false, true], // JSON-LD 拆分 part 1
-        ['1:0', 2, false, false, true], // 步 2 并入片段（mergedFrom 1 的 index 0）
       ]
     );
     assert.equal(s0.snippets[0]?.text, articleBody);
-    assert.equal(s0.snippets[2]?.text, mergedBody);
+
+    const s1 = sample.jev.sent[1]!;
+    assert.deepEqual(
+      s1.snippets.map((snippet) => [
+        snippet.snippet,
+        snippet.position,
+        snippet.in_state,
+        snippet.score_question_sent,
+        snippet.scored,
+      ]),
+      [['0', 0, false, false, true]]
+    );
+    assert.equal(s1.snippets[0]?.text, mergedBody);
+
     // s2：页内重复删掉第二片段，候选只有幸存第一片段
-    const s2 = sample.jev.sent[1]!;
+    const s2 = sample.jev.sent[2]!;
     assert.deepEqual(
       s2.snippets.map((snippet) => [snippet.snippet, snippet.in_state, snippet.scored]),
       [['0', false, true]]
@@ -1144,6 +1128,7 @@ describe('createSampleWriter', () => {
       sample.jev.sent.map((entry) => [entry.src, entry.dispatched, entry.answered]),
       [
         ['s0', false, true],
+        ['s1', false, true],
         ['s2', false, true],
         ['s3', false, false],
       ]

@@ -5,7 +5,6 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +12,7 @@ import { parseFilterConfigObject } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
 import { parseJevResponse } from './jev/client.js';
 import { allQuestionKey } from './jev/context.js';
-import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
+import { SOURCE_QUESTIONS } from './jev/questions.js';
 import { filterLlmContext } from './pipeline.js';
 import { zeroLocal } from './stats.js';
 import type {
@@ -38,17 +37,11 @@ type JsonldAnnotation = {
   first_part_prefix?: string;
 };
 
-/** 片段级标注（预筛 / 去重 / 付费墙）；`snippet` 用整数索引，转换段用 `<index>.<part>`。 */
+/** 片段级标注（预筛 / 去重）；`snippet` 用整数索引，转换段用 `<index>.<part>`。 */
 type PrefilterAnnotation = {
   url: string;
   snippet: number | string;
-  action:
-    | 'nav'
-    | 'boilerplate'
-    | 'boilerplate_stripped'
-    | 'dup'
-    | 'paywall_truncated'
-    | 'paywall_empty';
+  action: 'nav' | 'boilerplate' | 'boilerplate_stripped' | 'dup';
   /** 被剥掉的那一行去掉前导标记与空白后的原文开头（仅 boilerplate_stripped）。 */
   stripped_prefix?: string;
   /** 剥后剩余文本的 String.length（仅 boilerplate_stripped）。 */
@@ -58,18 +51,14 @@ type PrefilterAnnotation = {
 /** 期望文件的 rules 节；每条标注由标注人按尺子手写。 */
 type RuleAnnotations = {
   jsonld: JsonldAnnotation[];
-  url_merge: { url: string; merged_from: number }[];
   prefilter: PrefilterAnnotation[];
   dedup: { url: string; snippet: number | string }[];
-  feed_blocklist: { url: string; action: 'feed' | 'blocklist' }[];
-  paywall: PrefilterAnnotation[];
-  /** 步 8 归因：empty 表示空来源，rewrite 表示包含新颖度或跨源重复删除。 */
+  /** 阶段 6 归因：empty 表示空来源，rewrite 表示包含新颖度或跨源重复删除。 */
   empty_source: { url: string; action: 'empty' | 'rewrite' }[];
   /** 新颖度删除的片段。 */
   novelty: { url: string; snippet: number | string }[];
   /** 跨来源逐字重复删除的片段，reason 同为 dup。 */
   cross_source_dup: { url: string; snippet: number | string }[];
-  budget: { dropped_sources: number; trimmed_snippets: number };
 };
 
 type ExpectedFixture = {
@@ -256,7 +245,7 @@ for (const rel of listExpectedFiles()) {
           assert.equal(row.kept, false);
           assert.equal(row.reason, 'boilerplate');
         } else {
-          // 重复与付费墙动作有独立标注节，放错节时必须失败。
+          // 重复动作有独立标注节，放错节时必须失败。
           assert.fail(`unexpected prefilter action: ${item.action}`);
         }
       });
@@ -271,34 +260,8 @@ for (const rel of listExpectedFiles()) {
       });
     }
 
-    for (const item of expected.rules.feed_blocklist) {
-      it(`step4 · ${hostOf(item.url)} ${item.action}`, () => {
-        const source = sourceStats(item.url);
-        assert.equal(source.verdict, 'drop');
-        assert.equal(source.reason, item.action);
-      });
-    }
-
-    for (const item of expected.rules.paywall) {
-      it(`paywall · ${hostOf(item.url)} #${item.snippet} ${item.action}`, () => {
-        const row = findRow(sourceStats(item.url), item.snippet);
-        assert.ok(row, `snippet ${item.snippet} not found for ${item.url}`);
-        assert.equal(
-          row.truncated,
-          item.action.startsWith('paywall'),
-          'both paywall actions truncate'
-        );
-        assert.equal(
-          row.kept,
-          item.action === 'paywall_truncated',
-          'only truncations survive; paywall_empty rows are dropped'
-        );
-        if (item.action === 'paywall_empty') assert.equal(row.reason, 'paywall_empty');
-      });
-    }
-
     for (const item of expected.rules.empty_source) {
-      it(`step8 · ${hostOf(item.url)} ${item.action}`, () => {
+      it(`empty_source · ${hostOf(item.url)} ${item.action}`, () => {
         const source = sourceStats(item.url);
         assert.equal(source.verdict, 'drop');
         // 区分空来源与包含新颖度或跨源重复删除的 rewrite。
@@ -323,11 +286,6 @@ for (const rel of listExpectedFiles()) {
         assert.equal(row.reason, 'dup');
       });
     }
-
-    it('budget · counters', () => {
-      assert.equal(stats.local.budget_dropped_sources, expected.rules.budget.dropped_sources);
-      assert.equal(stats.local.budget_trimmed_snippets, expected.rules.budget.trimmed_snippets);
-    });
 
     // ---- 整卷：顺序、sources 精简、计数对账 ----------------------------
 
@@ -410,60 +368,6 @@ for (const rel of listExpectedFiles()) {
     });
   });
 }
-
-// 真实夹具的小预算裁剪。
-
-describe('budget trimming on a real fixture', () => {
-  const data = loadBraveFixture('jev_release_default.json');
-  const query = 'Jev TypeSafe AI model release';
-  const intent = 'What TypeSafe released with the Jev model and how it works';
-  const braveUrls = data.grounding.generic.map((item) => item.url);
-
-  it('keeps the first five sources in Brave order and trims from the tail', async () => {
-    // 设置 2 倍抓取使步 9 生效；2400 token 预算低于本地过滤后的内容，确保触发裁剪。
-    const { result, stats } = await filterLlmContext(
-      data,
-      { params: { query, maximum_number_of_urls: 5, maximum_number_of_tokens: 2400 }, intent },
-      {
-        mode: 'off',
-        overfetchFactor: 2,
-        blocklist: new Set(),
-        thresholds: { ...DEFAULT_THRESHOLDS },
-        jev: {
-          model: DEFAULT_JEV_MODEL,
-          timeoutMs: 15000,
-          concurrency: 12,
-        },
-        logDir: join(homedir(), '.brave-jev', 'logs'),
-      }
-    );
-
-    assert.deepEqual(
-      result.grounding.generic.map((item) => item.url),
-      braveUrls.slice(0, 5)
-    );
-    assert.equal(stats.local.budget_dropped_sources, braveUrls.length - 5);
-    assert.ok(stats.local.budget_trimmed_snippets > 0, 'token budget must trim something');
-    assert.ok(stats.output.est_tokens <= 2400, 'output must fit the token budget');
-
-    // 前四源不受 token 裁剪影响；第 5 源从末尾开始裁
-    for (const url of braveUrls.slice(0, 4)) {
-      const source = stats.sources.find((entry) => entry.url === url);
-      assert.ok(source, `source ${url} missing from stats`);
-      assert.equal(
-        source.snippets.some((row) => row.reason === 'budget'),
-        false,
-        `source ${url} must keep all its snippets`
-      );
-    }
-    const fifth = stats.sources.find((entry) => entry.url === braveUrls[4]);
-    assert.ok(fifth, 'fifth source missing from stats');
-    const surviving = fifth.snippets.filter((row) => row.kept).map((row) => row.index);
-    const all = fifth.snippets.map((row) => row.index);
-    assert.deepEqual(surviving, all.slice(0, surviving.length), 'trimming must drop tail snippets');
-    assert.ok(surviving.length < all.length, 'the fifth source must lose snippets');
-  });
-});
 
 // 核对 empty 与 rewrite 的独立计数，避免将转述删除误记为空来源。
 

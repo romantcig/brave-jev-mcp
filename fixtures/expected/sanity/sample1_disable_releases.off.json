@@ -7,7 +7,6 @@
   "note": "bare 夹具没有请求记录；query/intent 由标注人按文件名与内容重建（A20）。request 留空即按 Brave 缺省 20/8192，本夹具不触发裁剪。 02-04 重标注：步 7 新颖度与跨源 dup 零命中（新增两节为空数组，note 留痕备查）。",
   "rules": {
     "jsonld": [],
-    "url_merge": [],
     "prefilter": [
       {
         "url": "https://www.sanity.io/docs/studio/content-releases-configuration/changelog",
@@ -18,15 +17,9 @@
       }
     ],
     "dedup": [],
-    "feed_blocklist": [],
-    "paywall": [],
     "empty_source": [],
     "novelty": [],
-    "cross_source_dup": [],
-    "budget": {
-      "dropped_sources": 0,
-      "trimmed_snippets": 0
-    }
+    "cross_source_dup": []
   },
   "final": {
     "urls": [

@@ -1,13 +1,12 @@
 /**
  * 单个 JSON 文件的过滤配置解析与加载。
- * 纯解析入口逐项校验，加载入口读取配置及外部黑名单；坏值回落默认并向 stderr 告警。
+ * 纯解析入口逐项校验，加载入口读取配置；坏值回落默认并向 stderr 告警。
  * 宿主持有初始化后的配置，改文件需重启对应 MCP；stdout 留给协议通信。
  */
 
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_BLOCKLIST, parseBlocklist } from './blocklist.js';
 import {
   DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
@@ -149,16 +148,7 @@ export function parseFilterConfigObject(
     } else warn(ignored('mode', value, 'off'));
   }
 
-  // overfetch_factor：有限数且 >= 1
-  let overfetchFactor = 1;
-  if (Object.hasOwn(file, 'overfetch_factor')) {
-    const value = file.overfetch_factor;
-    if (typeof value === 'number' && Number.isFinite(value) && value >= 1) {
-      overfetchFactor = value;
-    } else {
-      warn(ignored('overfetch_factor', value, 1));
-    }
-  }
+  // 遗留 overfetch_factor / blocklist_file / context_mode / temporal_context 按未知键忽略，不影响请求或题目。
 
   // jev 组：model / timeout_ms / concurrency
   let jevRecord: Record<string, unknown> = {};
@@ -189,8 +179,6 @@ export function parseFilterConfigObject(
     else warn(ignored('jev.concurrency', value, DEFAULT_JEV_CONCURRENCY));
   }
 
-  // 遗留 context_mode / temporal_context 按未知键忽略，不影响请求或题目。
-
   // thresholds 组：逐键校验，坏值只回落该项
   let thresholdRecord: Record<string, unknown> = {};
   if (Object.hasOwn(file, 'thresholds')) {
@@ -215,12 +203,6 @@ export function parseFilterConfigObject(
     toolDescriptionFile = optionalPath(file, 'tool_description_file');
     if (toolDescriptionFile === undefined) warn(ignored('tool_description_file', value, null));
   }
-  if (Object.hasOwn(file, 'blocklist_file')) {
-    const value = file.blocklist_file;
-    if (optionalPath(file, 'blocklist_file') === undefined) {
-      warn(ignored('blocklist_file', value, null));
-    }
-  }
 
   // log_dir：非空字符串，开头 `~` 展开为本机 home
   let logDir = expandHome(DEFAULT_LOG_DIR);
@@ -233,8 +215,6 @@ export function parseFilterConfigObject(
 
   return {
     mode,
-    overfetchFactor,
-    blocklist: DEFAULT_BLOCKLIST,
     thresholds: Object.freeze(thresholds),
     jev: { model, timeoutMs, concurrency },
     logDir,
@@ -244,7 +224,6 @@ export function parseFilterConfigObject(
 
 /**
  * 加载指定配置文件；未指定用默认值，读取或解析失败时告警并回落。
- * 外部黑名单与内置表合并，读取失败时保留内置表。
  */
 export function loadFilterConfig(env: Record<string, string | undefined>): FilterConfig {
   const filePath = env[JEV_CONFIG_FILE_ENV]?.trim();
@@ -268,25 +247,5 @@ export function loadFilterConfig(env: Record<string, string | undefined>): Filte
     }
   }
 
-  const config = parseFilterConfigObject(raw);
-
-  // 黑名单文件（路径来自配置对象，口径与 parseFilterConfigObject 一致）：设了则读
-  // 文件、与内置求并集为新 Set（每次调用新建，不改内置常量）。
-  const blocklistPath = optionalPath(configFileRecord(raw), 'blocklist_file');
-  if (blocklistPath) {
-    try {
-      const merged = new Set([
-        ...DEFAULT_BLOCKLIST,
-        ...parseBlocklist(readFileSync(blocklistPath, 'utf8')),
-      ]);
-      return { ...config, blocklist: merged };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(
-        `[jev-filter] Unable to read blocklist file '${blocklistPath}': ${reason}; using the built-in blocklist only.`
-      );
-    }
-  }
-
-  return config;
+  return parseFilterConfigObject(raw);
 }

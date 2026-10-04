@@ -19,7 +19,7 @@ const thresholds: JevThresholds = { ...DEFAULT_THRESHOLDS };
 const makeStats = (): FilterStats =>
   createFilterStats(
     'off',
-    { query: 'q', intent: 'i', max_urls: 5, max_tokens: 4000, overfetch_factor: 1 },
+    { query: 'q', intent: 'i', max_urls: 5, max_tokens: 4000 },
     { grounding: { generic: [], map: [] }, sources: {} }
   );
 

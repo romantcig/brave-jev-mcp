@@ -1,30 +1,9 @@
 /**
- * 付费墙标记与样板行前缀，使用 TS 常量随构建发布。
- * 付费墙按归一后的整行匹配并截断；样板行前缀的精确匹配规则见 matchesPrefix。
+ * 样板行前缀，使用 TS 常量随构建发布。
+ * 样板行前缀的精确匹配规则见 matchesPrefix。
  */
 
-/** 英文付费墙标记；行首匹配（忽略大小写），命中处截断片段。可增补。 */
-export const PAYWALL_MARKERS_EN: readonly string[] = [
-  'Premium content',
-  'Subscriber only',
-  'Subscribers only',
-  'This post is for paid subscribers',
-  'Subscribe to continue reading',
-  'Sign in to read',
-  'Members only',
-  'Continue reading with a subscription',
-];
-
-/** 中文付费墙标记；语义同上。可增补。 */
-export const PAYWALL_MARKERS_ZH: readonly string[] = [
-  '付费会员专享',
-  '以下为付费内容',
-  '订阅后阅读全文',
-  '会员可见',
-  '加入会员查看',
-];
-
-/** 步 3 样板行剥离的前缀表：命中行整行删。匹配语义见 prefilter.ts 的 matchesPrefix——
+/** 阶段 2 样板行剥离的前缀表：命中行整行删。匹配语义见 prefilter.ts 的 matchesPrefix——
  * 独立样板行整行相等、短行前缀带词边界（中文条目阈值更紧）；`Share`/`分享`/`广告`
  * 这类词出现在正文长句行首时不会命中。可增补。 */
 export const BOILERPLATE_PREFIXES: readonly string[] = [

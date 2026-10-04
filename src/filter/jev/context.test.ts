@@ -112,7 +112,7 @@ describe('buildContextRequest: state / questions / mapping', () => {
       )
     );
     assert.equal(s7snip1?.instructions.includes(GLOBAL_INSTRUCTION), false);
-    assert.ok(s7snip1?.instructions.includes("A source's `brave_page_date`"));
+    assert.ok(s7snip1?.instructions.includes('architectural comparisons'));
     assert.deepEqual(s7snip1?.criteria, SNIPPET_CRITERIA);
     // s0（数组位置 0）引用 sources[0]，不串到 s7 的位置
     assert.match(

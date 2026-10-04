@@ -12,7 +12,6 @@ import {
 import { LlmContextSearchApiResponseSchema } from './schemas/output.js';
 import {
   applyMinimumValues,
-  applyOverfetch,
   compactResponse,
   createJevClassifier,
   createLogWriter,
@@ -133,7 +132,7 @@ export const execute = async (params: QueryParams) => {
   const parsedParams = RequestParamsSchema.parse(adjusted);
   const parsedHeaders = RequestHeadersSchema.parse(params);
   const config = configFor();
-  const braveParams = applyOverfetch(parsedParams, config);
+  const braveParams = parsedParams;
 
   // 三种模式均记录 JSONL，错误请求也落账；日志失败不影响搜索。
   const writer = (logWriter ??= createLogWriter(config));

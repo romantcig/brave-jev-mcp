@@ -1,5 +1,5 @@
 /**
- * 步 3 的样板行、标题重复行、引用块与页内重复判定。
+ * 片段预筛阶段的样板行、标题重复行、引用块与页内重复判定。
  * 纯函数，不修改输入；前缀表由调用方统一传入。
  */
 
@@ -52,7 +52,7 @@ export function matchesPrefix(normalizedLine: string, prefixes: readonly string[
   });
 }
 
-/** 剥掉行末的标点、符号与空白：样板行、付费墙标记行常带句点或冒号收尾。 */
+/** 剥掉行末的标点、符号与空白：样板行常带句点或冒号收尾。 */
 export const stripTrailingPunctuation = (line: string): string =>
   line.replace(/[\p{P}\p{S}\s]+$/u, '');
 

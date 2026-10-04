@@ -762,6 +762,8 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     };
   };
 
+  const instantHooks = { sleep: async () => {}, random: () => 0 };
+
   it('retries 429 twice and answers on the third attempt', async () => {
     let fetchCount = 0;
     const saved = globalThis.fetch;
@@ -781,7 +783,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     ]);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
@@ -797,7 +799,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -814,7 +816,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
@@ -831,7 +833,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       for (const status of [408, 500, 503]) {
         const { fetchImpl, counter } = statusFetch(status, 'transient');
         globalThis.fetch = fetchImpl;
-        const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+        const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
         const outcome = await classifier.classify(request);
         assert.ok(outcome.status === 'failed', `${status} ${JSON.stringify(outcome)}`);
         assert.equal(outcome.kind, status === 408 ? 'timeout' : 'network', `${status} kind`);
@@ -848,7 +850,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       // 派发后失败仍保留输入证据。
@@ -873,7 +875,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       assert.deepEqual(outcome, {
@@ -897,7 +899,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       // HTTP 拒绝仍是已发送请求，样本必须保留其载荷。
@@ -922,7 +924,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     globalThis.fetch = fetchImpl;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       assert.deepEqual(outcome, {
@@ -978,7 +980,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     }) as typeof fetch;
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify({ state: bigState, questions: bigQuestions });
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
       assert.deepEqual(outcome.answers.s0__has_original_reasoning, {
@@ -1014,7 +1016,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     ]);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' });
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify(request);
 
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));

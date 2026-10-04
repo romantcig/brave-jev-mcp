@@ -3,7 +3,6 @@
  * 库内部直接导入具体模块，避免通过此入口形成循环依赖。
  */
 
-export { applyOverfetch, BRAVE_MAX_TOKENS, BRAVE_MAX_URLS } from './budget.js';
 export {
   applyMinimumValues,
   logRaisedToStderr,

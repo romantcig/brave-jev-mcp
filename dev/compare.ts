@@ -192,7 +192,7 @@ const replayClassifier =
 const config = parseFilterConfigObject(mode === 'off' ? {} : { mode });
 const results = mode === 'off' ? undefined : loadRecording();
 
-// 候选覆盖核对（与管道步 5 同源 collectJevCandidates）：录制里缺的候选 id 打一行
+// 候选覆盖核对（与管道阶段 3 同源 collectJevCandidates）：录制里缺的候选 id 打一行
 // WARN（源 id 加 url）后照跑——注入桩对缺失候选不给答案，来源级缺答保守 → "留"
 if (results !== undefined) {
   for (const candidate of collectJevCandidates(data, request, config)) {
@@ -235,7 +235,7 @@ const beforeOf = (index: number): { snippets: number; chars: number } => {
 };
 
 /**
- * 过滤后：统计表该行的幸存片段数与字符数。被整体丢弃的来源（含归并）对输出
+ * 过滤后：统计表该行的幸存片段数与字符数。被整体丢弃的来源对输出
  * 零贡献——rebuildOutput 只收 verdict keep 的来源，这里按同一口径记 0。
  */
 const afterOf = (row: SourceStats): { snippets: number; chars: number } => {

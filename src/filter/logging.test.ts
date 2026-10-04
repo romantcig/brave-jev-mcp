@@ -18,7 +18,6 @@ const request: FilterStats['request'] = {
   intent: 'test intent',
   max_urls: 10,
   max_tokens: 8192,
-  overfetch_factor: 1,
 };
 
 const emptyResponse: BraveLlmContextResponse = {

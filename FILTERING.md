@@ -14,10 +14,10 @@
 
 Jev 请求组织只有一种：全部候选共享一次请求（all）。曾经的双开关 `jev.context_mode` 与 `jev.temporal_context` 已于 filter-rules-16 退役——遗留配置里出现这两个键按未知键忽略，不需要清理也能运行，但它们不再改变任何行为。
 
-## 请求契约（filter-rules-16 起）
+## 请求契约（filter-rules-17 起）
 
 - 零候选：零次 Jev 逻辑调用与 HTTP，不构造空问题请求。
-- 一个或多个候选：本地步骤 1–4 之后的完整候选数组进入同一次共享请求（`state.sources[]`，保持 Brave 原序）；只有一个候选也走同一模板，没有单候选特殊路径。
+- 一个或多个候选：本地阶段 1–2 之后的完整候选数组进入同一次共享请求（`state.sources[]`，保持 Brave 原序）；只有一个候选也走同一模板，没有单候选特殊路径。
 - 一次搜索最多一次 Jev 逻辑请求。没有 single 回退、没有超限降级、没有本地 `too_large` 分类：发送前不做 token 估算预检，不删正文、不删题、不拆请求。载荷超过官方限额时依赖服务端拒绝——HTTP 413／422 按通用非重试 `validation` 处理，相关来源保守保留。
 - 同一搜索的重试复用完全相同的 body、检索时间和题目；重试属于同一逻辑请求。
 - 逐题错误隔离是唯一解析语义：单个坏答案不使其他来源的有效答案失效；顶层协议错误仍整请求失败。
@@ -29,26 +29,27 @@ Jev 请求组织只有一种：全部候选共享一次请求（all）。曾经�
 时间上下文字段常开，没有开关：
 
 - `retrieval_time`：宿主发起 Brave 请求前捕获的那一个时刻，带时区的 ISO 字符串；缺失或非法时省略，不补"今天"。纯过滤库与回放不读当前时间。
-- 每个候选带 `brave_page_date`（`string | null`）：从原 Brave 元数据 `age` 中选择，优先合法绝对时间，再选合法 `YYYY-MM-DD`，保留原字串。相对时间不倒推；非法日期、缺失日期、合并来源日期冲突统一为 `null`。日期不进公开 MCP 参数或 Brave 查询参数。
+- 每个候选带 `brave_page_date`（`string | null`）：从原 Brave 元数据 `age` 中选择，优先合法绝对时间，再选合法 `YYYY-MM-DD`，保留原字串。相对时间不倒推；非法日期、缺失日期统一为 `null`。日期不进公开 MCP 参数或 Brave 查询参数。
 
 页面日期只是发表或更新线索，不代表项目维护时间，也不代表所有内容失效。评分题根据需求时期、事件状态以及候选材料中的同事件后续证据打分；历史需求与仍适用的技术说明仍可能保留。没有跨来源覆盖删除或最终参照复核。
 
-题库（QUESTION_SET_ID `0ef644dda1ad`）：
+题库（QUESTION_SET_ID `a03ab5c2506c`，即 Candidate 1+ / C1+ 题库）：
 
 - 来源级四题：`has_original_reasoning`、`is_template_filler`、`is_off_topic`、`is_listing`。
-- 片段级：每个候选片段一道时间上下文评分题。
+- 片段级：每个候选片段一道时间上下文评分题（Candidate 1+ 方案，兼顾时效与架构/实操干货）。
 - 总题数 = 候选数 × 4 + 片段数。
 
-四道来源题、原创论证保护、Brave 原序、十步管道和既有去重不变。片段仍是三档 score，默认 `thresholds.snippet_min = 1.00`，严格小于才删除，原因仍记为 `score`。没有独立时间题、年份选择器或按页面年龄删除的门槛。
+四道来源题、原创论证保护、Brave 原序、七阶段管道和既有去重不变。片段仍是三档 score，默认 `thresholds.snippet_min = 1.00`，严格小于才删除，原因仍记为 `score`。没有独立时间题、年份选择器或按页面年龄删除的门槛。
+详细方案设计与实测数据见 [SNIPPET_FILTER_REPLACEMENT_PLAN.md](SNIPPET_FILTER_REPLACEMENT_PLAN.md)。
 
-## v5 样本核对方法
+## v6 样本核对方法
 
-当前样本 `format_version` 为 5，规则与布局版本为 `filter-rules-16`、`jev-context-3`。核对一次实际搜索：
+当前样本 `format_version` 为 6，规则与布局版本为 `filter-rules-17`、`jev-context-3`。核对一次实际搜索：
 
-1. 样本根字段 `format_version: 5`。
-2. `config_snapshot.jev` 只含 `model`、`timeout_ms`、`concurrency` 三键；`context_mode`／`temporal_context` 不再出现在新样本里。
+1. 样本根字段 `format_version: 6`。
+2. `config_snapshot` 只含 `thresholds`、`jev`、`mode`。
 3. 请求级记录 `jev.requests` 一次搜索至多一条：`request_id`、`source_ids`、`dispatched`／`answered`／`usage_complete`、真实 `input_tokens`、`mapping`；字段中没有 `mode`、`requested`、`effective`、`fallback_reason`、`planned_estimates`。`n_requests` ≤ 1，`n_http_attempts` 单独记真实 HTTP 尝试（含重试）。
-4. `question_set_id` 为 `0ef644dda1ad`，`filter_rules_version` 为 `filter-rules-16`。
+4. `question_set_id` 为 `a03ab5c2506c`，`filter_rules_version` 为 `filter-rules-17`。
 
 旧样本按其自身 `format_version` 读取，不迁移、不改写：
 
@@ -59,6 +60,7 @@ Jev 请求组织只有一种：全部候选共享一次请求（all）。曾经�
 | v3   | 仍是逐来源 state；逐题记录有效评分，分开 `score_applied` 与来源裁决有效性              | 不能把 `sent[].state` 当作请求级共享载荷                                                                  |
 | v4   | `requests[]` 保存每次逻辑请求的载荷，`sent[]` 经 `request_id` 引用；新增 HTTP 尝试计数 | 请求带 `mode`，可能逐来源多条；配置可能包含 `context_mode` / `temporal_context`，不能套用 v5 的单请求约束 |
 | v5   | 只使用全量共享请求，一次搜索至多一条；请求记录去掉模式、回退与预估字段                 | 未派发的载荷为 null；Jev 配置只含模型、超时和并发；未派发原因仅 `skipped` / `breaker_open`                |
+| v6   | 配置快照精简（只含 `thresholds`、`jev`、`mode`），七阶段管道输出                       | 当前格式                                                                                                  |
 
 `dispatched` 表示 fetch 已调用，不保证服务端收到或处理；`in_state`、`score_question_sent`、`answered`、`scored` 与 `score_applied` 分别表示不同阶段的事实，不能互相代替。缺答或无效评分不能从题目数量推断成“已评分”。
 

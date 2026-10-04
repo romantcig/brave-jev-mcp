@@ -1,5 +1,5 @@
 /**
- * 运行本地步骤 1–4，stdout 输出一行 { query, intent, sources }，不调用 Jev。
+ * 运行本地阶段 1–2，stdout 输出一行 { query, intent, sources }，不调用 Jev。
  * 用法：node --import tsx dev/dump_local_rules.ts fixtures/<stem>.json
  * 请求参数来自对应 expected 文件；候选口径与生产管道共用。
  */

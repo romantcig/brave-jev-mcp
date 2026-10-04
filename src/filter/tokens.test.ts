@@ -78,7 +78,7 @@ describe('estimateTokens', () => {
     assert.ok(total >= 8000 && total < 9000, `default raw estimate ${total} out of band`);
     assert.ok(
       total < (fixture.request.maximum_number_of_tokens ?? Infinity),
-      'default fixture must not trigger trimming under its own request'
+      'default fixture raw estimate must be below its request limit'
     );
   });
 
@@ -91,7 +91,7 @@ describe('estimateTokens', () => {
     assert.ok(total < 6000, `strict raw estimate ${total} not below 6000`);
     assert.ok(
       total < (fixture.request.maximum_number_of_tokens ?? Infinity),
-      'strict fixture must not trigger trimming under its own request'
+      'strict fixture raw estimate must be below its request limit'
     );
   });
 });
