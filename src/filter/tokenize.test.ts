@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { contentTerms, jaccard, containment, shingles, tokenize } from './tokenize.js';
+import { contentTerms, tokenize } from './tokenize.js';
 
 describe('tokenize', () => {
   it('splits Latin and digit runs into lowercased tokens and keeps version tokens', () => {
@@ -87,61 +87,5 @@ describe('contentTerms', () => {
     const terms = contentTerms('Jev release', 'release how');
 
     assert.deepEqual([...terms].sort(), ['jev', 'release']);
-  });
-});
-
-describe('shingles', () => {
-  it('returns an empty set when there are fewer tokens than n', () => {
-    assert.equal(shingles(['a', 'b', 'c', 'd']).size, 0);
-  });
-
-  it('builds n-token windows joined by single spaces', () => {
-    assert.deepEqual([...shingles(['a', 'b', 'c', 'd', 'e'])], ['a b c d e']);
-    assert.equal(shingles(['a', 'b', 'c', 'd', 'e', 'f', 'g']).size, 3);
-  });
-
-  it('dedupes identical windows', () => {
-    assert.equal(shingles(['x', 'x', 'x', 'x', 'x', 'x']).size, 1);
-  });
-});
-
-describe('jaccard', () => {
-  it('returns 0 when either set is empty', () => {
-    assert.equal(jaccard(new Set(), new Set(['a'])), 0);
-    assert.equal(jaccard(new Set(['a']), new Set()), 0);
-    assert.equal(jaccard(new Set(), new Set()), 0);
-  });
-
-  it('returns 1 for identical sets', () => {
-    assert.equal(jaccard(new Set(['a', 'b']), new Set(['b', 'a'])), 1);
-  });
-
-  it('returns the intersection over the union', () => {
-    assert.equal(jaccard(new Set(['a', 'b', 'c']), new Set(['a', 'b', 'd'])), 0.5);
-  });
-
-  it('returns 0 for disjoint sets', () => {
-    assert.equal(jaccard(new Set(['a']), new Set(['b'])), 0);
-  });
-});
-
-describe('containment', () => {
-  it('returns 0 when either set is empty', () => {
-    assert.equal(containment(new Set(), new Set(['a'])), 0);
-    assert.equal(containment(new Set(['a']), new Set()), 0);
-  });
-
-  it('returns 1 when the smaller set is a subset, true or not', () => {
-    // 真子集（A ⊊ B）→ 1
-    assert.equal(containment(new Set(['a', 'b']), new Set(['a', 'b', 'c'])), 1);
-    assert.equal(containment(new Set(['a', 'b', 'c']), new Set(['a', 'b'])), 1);
-  });
-
-  it('returns the intersection over the smaller set', () => {
-    // 较小集合 5 个 shingle 中 3 个落在较大集合里
-    assert.equal(
-      containment(new Set(['a', 'b', 'c', 'd', 'e']), new Set(['a', 'b', 'c', 'x', 'y'])),
-      0.6
-    );
   });
 });

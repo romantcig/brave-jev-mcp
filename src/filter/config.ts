@@ -96,8 +96,7 @@ const configFileRecord = (raw: unknown): Record<string, unknown> => (isRecord(ra
 
 /**
  * 配置键、内部阈值键与合法范围的统一映射，日志和样本快照复用此表。
- * 概率与 CJK 参数在 [0,1]，snippet_min 在 [0,2]，事实数与新颖度下限为正整数。
- * max 为 Infinity 表示只有下限。
+ * 概率与 CJK 参数在 [0,1]，snippet_min 在 [0,2]。
  */
 export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly key: string;
@@ -111,14 +110,6 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
   { key: 'filler_drop', configKey: 'fillerDrop', min: 0, max: 1 },
   { key: 'reasoning_protect', configKey: 'reasoningProtect', min: 0, max: 1 },
   { key: 'snippet_min', configKey: 'snippetMin', min: 0, max: SNIPPET_MIN_MAX },
-  { key: 'min_facts', configKey: 'minFacts', min: 1, max: Number.POSITIVE_INFINITY, integer: true },
-  {
-    key: 'novelty_min',
-    configKey: 'noveltyMin',
-    min: 1,
-    max: Number.POSITIVE_INFINITY,
-    integer: true,
-  },
   { key: 'cjk_bonus', configKey: 'cjkBonus', min: 0, max: 1 },
   { key: 'cjk_share', configKey: 'cjkShare', min: 0, max: 1 },
 ]);

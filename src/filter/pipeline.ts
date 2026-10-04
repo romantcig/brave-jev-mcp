@@ -8,13 +8,13 @@ import { parseFilterConfigObject } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
 import { BOILERPLATE_PREFIXES } from './markers.js';
 import { isEmptySource, isOneLiner } from './nonArticle.js';
-import { isNearDuplicate, SHINGLE_N, stripBoilerplateLines } from './prefilter.js';
+import { stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
-import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
+import { applyCrossSourceDedup } from './dedup.js';
 import { buildStatusLine } from './statusline.js';
-import { contentTerms, shingles, tokenize } from './tokenize.js';
+import { contentTerms } from './tokenize.js';
 import {
   BRAVE_DEFAULT_MAX_TOKENS,
   BRAVE_DEFAULT_MAX_URLS,
@@ -156,8 +156,8 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
 
-    const survivorShingles: Set<string>[] = [];
     const survivorTexts: string[] = [];
+    const survivorTextSet = new Set<string>();
     for (const snippet of source.snippets) {
       if (!snippet.kept) continue;
 
@@ -198,14 +198,14 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
       }
       snippet.text = stripped.text;
 
-      const shingleSet = shingles(tokenize(snippet.text), SHINGLE_N);
-      if (survivorShingles.some((survivor) => isNearDuplicate(shingleSet, survivor))) {
+      // 页内严格字符串全等去重，保留 Brave 原生顺序靠前的片段
+      if (survivorTextSet.has(snippet.text)) {
         snippet.kept = false;
         snippet.reason = 'dup';
         stats.local.dup_removed += 1;
         continue;
       }
-      survivorShingles.push(shingleSet);
+      survivorTextSet.add(snippet.text);
       survivorTexts.push(snippet.text);
     }
   }
@@ -214,14 +214,14 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
 /**
  * 阶段 6 删除空来源和不含 query 实词的一句话来源；intent 不参与本阶段。
  * 删除只更新工作表标记，不移除行。
- * 若来源删空且包含新颖度或跨源去重删除，归因为 rewrite；否则为 empty。
+ * 若来源删空且包含跨源去重删除，归因为 rewrite；否则为 empty。
  * empty_dropped 只统计 empty，rewrite 由来源裁决表计数。
  */
 const dropEmptySources = (
   table: WorkSource[],
   stats: FilterStats,
   queryTerms: ReadonlySet<string>,
-  jevSideDeletions?: ReadonlyMap<number, JevSideDeletionFlags>
+  crossSourceDeletions?: ReadonlySet<number>
 ): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
@@ -229,11 +229,10 @@ const dropEmptySources = (
     const surviving = source.snippets.filter((snippet) => snippet.kept);
     if (!isEmptySource(surviving) && !isOneLiner(surviving, queryTerms)) continue;
 
-    const flags = jevSideDeletions?.get(source.index);
-    const emptiedByJev = flags !== undefined && (flags.novelty || flags.crossSourceDup);
+    const emptiedByCrossSource = crossSourceDeletions?.has(source.index) ?? false;
     source.verdict = 'drop';
-    source.reason = emptiedByJev ? 'rewrite' : 'empty';
-    if (!emptiedByJev) {
+    source.reason = emptiedByCrossSource ? 'rewrite' : 'empty';
+    if (!emptiedByCrossSource) {
       stats.local.empty_dropped += 1;
     }
   }
@@ -378,11 +377,11 @@ export async function filterLlmContext(
   runLocalRules(table, stats, config);
   if (config.mode === 'off') {
     // off：整段跳过 Jev（stats.jev 保持 null），只跑本地链
-    runOffChain(table, undefined, config.thresholds, stats, queryTerms);
+    runOffChain(table, stats, queryTerms);
   } else if (deps?.classify === undefined) {
-    // 缺少分类器时走本地链，不使用 Jev 论证保护，去重仍按 Brave 原序。
+    // 缺少分类器时走本地链，去重仍按 Brave 原序。
     stats.jev = createNoKeyJevStats();
-    runOffChain(table, undefined, config.thresholds, stats, queryTerms);
+    runOffChain(table, stats, queryTerms);
   } else {
     // 阶段 3 Jev 请求派发：非空候选组织一次全量共享请求（§3.1）——test 与 on 共用
     // 此分支；裁决消费与记账形状完全一致
@@ -707,7 +706,7 @@ const runJevStage = async (
 };
 
 /**
- * test/on 共用：阶段 4 来源裁决 → 阶段 5 评分、跨源去重与新颖度 → 阶段 6。
+ * test/on 共用：阶段 4 来源裁决 → 阶段 5 评分与跨源完整文本去重 → 阶段 6 删除空来源。
  * 裁决实际修改工作表，统计同步回写。
  */
 const runOnChain = (
@@ -719,20 +718,18 @@ const runOnChain = (
 ): void => {
   applySourceVerdicts(table, judged, thresholds, stats);
   applySnippetScores(table, judged, thresholds, stats);
-  const jevSideDeletions = applyNovelty(table, judged, thresholds, stats);
-  dropEmptySources(table, stats, queryTerms, jevSideDeletions);
+  const crossSourceDeletions = applyCrossSourceDedup(table, stats);
+  dropEmptySources(table, stats, queryTerms, crossSourceDeletions);
 };
 
-/** off 或缺少 classify 时：按 Brave 原序执行跨源去重、新颖度和阶段 6。 */
+/** off 或缺少 classify 时：按 Brave 原序执行跨源完整文本去重和阶段 6 删除空来源。 */
 const runOffChain = (
   table: WorkSource[],
-  judged: ReadonlyMap<string, JevPerSourceStats> | undefined,
-  thresholds: JevThresholds,
   stats: FilterStats,
   queryTerms: ReadonlySet<string>
 ): void => {
-  const jevSideDeletions = applyNovelty(table, judged, thresholds, stats);
-  dropEmptySources(table, stats, queryTerms, jevSideDeletions);
+  const crossSourceDeletions = applyCrossSourceDedup(table, stats);
+  dropEmptySources(table, stats, queryTerms, crossSourceDeletions);
 };
 
 /**

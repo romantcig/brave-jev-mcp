@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { summarizeOutput, type SummarizeSourceRow } from './stats.js';
+import { summarizeOutput, zeroLocal, type SummarizeSourceRow } from './stats.js';
 
 const makeSource = (
   texts: string[],
@@ -9,6 +9,23 @@ const makeSource = (
 ): SummarizeSourceRow => ({
   verdict,
   snippets: texts.map((text, i) => ({ text, kept: kept[i] ?? true })),
+});
+
+describe('zeroLocal', () => {
+  it('包含两项去重计数且不再包含退役的 novelty 字段', () => {
+    assert.deepEqual(zeroLocal, {
+      jsonld_converted: 0,
+      jsonld_dropped: 0,
+      jsonld_kept_raw: 0,
+      snippets_prefiltered: 0,
+      dup_removed: 0,
+      empty_dropped: 0,
+      cross_source_dup_removed: 0,
+      github_cleanup_actions: 0,
+    });
+    assert.equal('novelty_removed' in zeroLocal, false);
+    assert.equal('novelty' in zeroLocal, false);
+  });
 });
 
 describe('summarizeOutput', () => {

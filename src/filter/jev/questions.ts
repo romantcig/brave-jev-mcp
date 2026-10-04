@@ -16,7 +16,7 @@ export const GLOBAL_INSTRUCTION =
 
 /**
  * 四道来源题：off_topic、listing、template_filler 用于删除判断；
- * has_original_reasoning 用于模板删除豁免与指纹新颖度保护。键序即请求中的题序。
+ * has_original_reasoning 用于模板删除豁免。键序即请求中的题序。
  */
 export const SOURCE_QUESTIONS: Readonly<Record<string, string>> = Object.freeze({
   has_original_reasoning:
@@ -48,8 +48,6 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   fillerDrop: 0.8,
   reasoningProtect: 0.7,
   snippetMin: 1.0,
-  minFacts: 4,
-  noveltyMin: 2,
   cjkBonus: 0.1,
   cjkShare: 0.5,
 } as const);

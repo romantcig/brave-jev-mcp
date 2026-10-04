@@ -2,7 +2,7 @@
  * test 模式每次搜索保存一份 JSON：原始响应、最终返回、过程映射、Jev 记录与配置。
  * 实发输入只取客户端捕获的证据；错误样本显式标记缺失，不当作零来源成功。
  * 文件经同目录临时文件与 rename 原子写入，失败不影响搜索。
- * 当前格式为 v6；历史样本的读取差异见 FILTERING.md。
+ * 当前格式为 v7；历史样本的读取差异见 FILTERING.md。
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -47,7 +47,7 @@ export type SampleFinalReturn = {
 
 /** 过程映射记录删除原因与执行阶段；正文凭来源和片段身份回 pre_filter 查找。 */
 export type SampleOutcome = {
-  /** 本地计数（含新颖度指纹明细 novelty[]——只存指纹串，绝不存正文） */
+  /** 本地计数（预筛、去重与 GitHub 清洗动作，不存片段正文） */
   local: LocalStats;
   /** 统计表 sources 投影：keep/drop + 逐片段 kept/reason/index/part，无正文 */
   sources: SourceStats[];
@@ -199,7 +199,7 @@ export type SampleMissingFinalReturn = {
  */
 export type SampleRecord = {
   /** 当前样本格式版本；跨版本读取规则见 FILTERING.md。 */
-  format_version: 6;
+  format_version: 7;
   request_id: string;
   /** 本地 ISO 带时区偏移（复用 logging.ts 的 localIsoWithOffset 口径） */
   ts: string;
@@ -438,7 +438,7 @@ const buildRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 6,
+  format_version: 7,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,
@@ -479,7 +479,7 @@ const buildErrorRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 6,
+  format_version: 7,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,

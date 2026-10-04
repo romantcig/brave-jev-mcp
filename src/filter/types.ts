@@ -175,15 +175,13 @@ export type ClassifyDeps = {
   }): Promise<ClassifyOutcome>;
 };
 
-/** 九项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
+/** 七项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
 export type JevThresholds = {
   offTopicDrop: number;
   listingDrop: number;
   fillerDrop: number;
   reasoningProtect: number;
   snippetMin: number;
-  minFacts: number;
-  noveltyMin: number;
   cjkBonus: number;
   cjkShare: number;
 };
@@ -316,8 +314,7 @@ export type SnippetRemovalReason =
   | 'boilerplate'
   | 'dup'
   | 'score'
-  | 'time_mismatch'
-  | 'novelty';
+  | 'time_mismatch';
 
 /** `grounding.generic[]` 的一条：一个来源与它的片段。 */
 export type BraveLlmContextGenericItem = {
@@ -363,24 +360,10 @@ export type LocalStats = {
   snippets_prefiltered: number;
   dup_removed: number;
   empty_dropped: number;
-  /** 因事实指纹新颖度删除的片段数。 */
-  novelty_removed: number;
-  /** 因跨来源 5-gram 重复删除的片段数。 */
+  /** 因跨来源完整文本重复删除的片段数。 */
   cross_source_dup_removed: number;
   /** GitHub 清洗动作总数，包含清空片段的动作；与逐片段 github_cleanup 明细对应。 */
   github_cleanup_actions: number;
-  /**
-   * 新颖度删除的逐来源指纹明细，不含完整正文。
-   * fp_total 为被删片段指纹的并集大小，novel 相对判定时的幸存指纹并集计算。
-   */
-  novelty: NoveltySourceDetail[];
-};
-
-/** 发生过新颖度删除的来源明细；跨来源逐字重复不建立此条目。 */
-export type NoveltySourceDetail = {
-  src: string;
-  fp_total: number;
-  novel: string[];
 };
 
 /**

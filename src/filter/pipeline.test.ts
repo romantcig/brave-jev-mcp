@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parseFilterConfigObject } from './config.js';
 import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
@@ -10,6 +11,7 @@ import type {
   BraveLlmContextResponse,
   ClassifyDeps,
   ClassifyOutcome,
+  FilterCallContext,
   FilterConfig,
   FilterRequest,
   JevAnswer,
@@ -598,7 +600,6 @@ describe('verdicts and drops in step 8', () => {
 });
 
 // 同一合成夹具验证三模式：test/on 真实应用裁决，off 仅用本地规则。
-// 此夹具事实指纹少于 minFacts，不触发新颖度；该行为由独立用例与录制差集覆盖。
 
 describe('three-mode semantic matrix (off / test / on)', () => {
   // 四来源覆盖矩阵四角：s0 来源级 keep 且 score 全过（三模式输出同）；s1 来源级
@@ -902,9 +903,8 @@ describe('jev status aggregation and breaker open trim-back', () => {
 
 // 新颖度、跨源逐字去重与 rewrite 归因。
 
-describe('novelty and cross-source dup (02-04)', () => {
-  // s0 原文（四数字事实 + p:brave），s1 同四事实改写（词序不同 → 无共享 5-gram，
-  // 不触发跨源 dup、走指纹新颖度），s2 独有事实（全模式幸存）
+describe('cross-source dedup and verbatim match', () => {
+  // s0 原文，s1 改写（词序不同，非严格相等），s2 独有事实
   const S0_TEXT = 'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency';
   const S1_TEXT =
     'Brave it costs $4.2m, runs 193x faster, and has 40% less latency at version 1.13';
@@ -922,20 +922,19 @@ describe('novelty and cross-source dup (02-04)', () => {
     sources: {},
   });
 
-  it('off mode removes the rewritten duplicate as novelty and marks the emptied source rewrite', async () => {
+  it('off 模式下非严格相等的改写内容完整保留，不因本地去重删除', async () => {
     const { result, stats } = await filterLlmContext(noveltyPayload(), request, offConfig);
 
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
-      ['https://origin.example/', 'https://unique.example/']
+      ['https://origin.example/', 'https://rewrite.example/', 'https://unique.example/']
     );
-    assert.equal(stats.local.novelty_removed, 1);
-    const rewrite = stats.sources.find((entry) => entry.url === 'https://rewrite.example/');
-    assert.equal(rewrite?.verdict, 'drop');
-    assert.equal(rewrite?.reason, 'rewrite');
+    assert.equal(result.grounding.generic[1].snippets[0], S1_TEXT);
+    assert.equal(stats.local.cross_source_dup_removed, 0);
     assert.equal(stats.local.empty_dropped, 0);
   });
-  it('启用 Jev 后仍按 Brave 顺序保留原创并删除同事实改写', async () => {
+
+  it('启用 Jev 后模拟最高分 2 保留新事实，不因并集覆盖删除', async () => {
     const classify: ClassifyDeps['classify'] = async ({ questions }) => ({
       status: 'answered',
       model: DEFAULT_JEV_MODEL,
@@ -957,13 +956,13 @@ describe('novelty and cross-source dup (02-04)', () => {
     );
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
-      ['https://origin.example/', 'https://unique.example/']
+      ['https://origin.example/', 'https://rewrite.example/', 'https://unique.example/']
     );
+    assert.equal(result.grounding.generic[1].snippets[0], S1_TEXT);
   });
 
-  it('cross-source verbatim duplicate is removed as dup with its own counter in off mode', async () => {
-    // 通稿转载：s1 逐字复制 s0 的长片段 → 跨源 5-gram dup（先于指纹）、独立计数；
-    // 片段被 Jev 侧删除清空的来源记 'rewrite'
+  it('跨来源逐字完全相同的内容作为 dup 删除，清空来源归因为 rewrite', async () => {
+    // 通稿转载：s1 逐字复制 s0 的长片段 → 跨源严格 dup，清空来源记 rewrite
     const dupLong =
       'the brave model ships with a streaming api and costs $4.2m per month for scale';
     const data: BraveLlmContextResponse = {
@@ -984,7 +983,6 @@ describe('novelty and cross-source dup (02-04)', () => {
       ['https://wire.example/']
     );
     assert.equal(stats.local.cross_source_dup_removed, 1);
-    assert.equal(stats.local.novelty_removed, 0);
     const syndicated = stats.sources.find((entry) => entry.url === 'https://syndicated.example/');
     assert.equal(syndicated?.verdict, 'drop');
     assert.equal(syndicated?.reason, 'rewrite');
@@ -1679,5 +1677,338 @@ describe('temporal context (all-only)', () => {
       /^How useful is `sources\[0\]\.snippets\[0\]`/
     );
     assert.equal(stats.jev?.requests[0]?.request_id, 'j1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOCAL_DEDUP_CLEANUP_PLAN 最小行为回归集（§6.1）
+// ---------------------------------------------------------------------------
+
+describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
+  const regressionRequest: FilterCallContext = {
+    params: { query: 'Brave release notes' },
+    intent: 'Learn about the latest Brave browser updates and security notices',
+  };
+
+  it('日期与新事实：中文同日不同事件均保留，共享数字但新版本的片段保留', async () => {
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://news.example/reg',
+            title: 'Registration Notice',
+            snippets: [
+              'Brave 项目于2026-09-30开放注册。欢迎广大用户提前配置环境并参与首批公测体验，系统将在稍后发放邀请凭证。',
+            ],
+          },
+          {
+            url: 'https://sec.example/advisory',
+            title: 'Security Advisory',
+            snippets: [
+              'Brave 安全公告确认，2026-09-30发现权限绕过漏洞，建议立即撤销公开链接并更新至最新安全补丁。',
+            ],
+          },
+          {
+            url: 'https://release.example/v14',
+            title: 'Version 1.14 Update',
+            snippets: [
+              'Brave version 1.14 costs $4.2m and runs 193x faster with 40% less latency under heavy load benchmark testing.',
+            ],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const { result, stats } = await filterLlmContext(data, regressionRequest, offConfig);
+
+    assert.equal(result.grounding.generic.length, 3);
+    assert.equal(stats.local.cross_source_dup_removed, 0);
+    assert.ok(result.grounding.generic[0].snippets[0].includes('开放注册'));
+    assert.ok(result.grounding.generic[1].snippets[0].includes('权限绕过漏洞'));
+    assert.ok(result.grounding.generic[2].snippets[0].includes('1.14'));
+  });
+
+  it('结论与关联：共享相同指标与数字但反驳原结论的内容完整保留', async () => {
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://benchmark.example/claim',
+            title: 'Initial Claims',
+            snippets: [
+              'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency in laboratory tests.',
+            ],
+          },
+          {
+            url: 'https://audit.example/rebuttal',
+            title: 'Independent Audit Rebuttal',
+            snippets: [
+              'Independent tests show Brave version 1.13 does not cost $4.2m nor run 193x faster with 40% less latency in practice.',
+            ],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const { result, stats } = await filterLlmContext(data, regressionRequest, offConfig);
+
+    assert.equal(result.grounding.generic.length, 2);
+    assert.equal(stats.local.cross_source_dup_removed, 0);
+    assert.ok(result.grounding.generic[1].snippets[0].includes('does not cost $4.2m'));
+  });
+
+  it('近似不等于重复：高度重复正文加关键短句在页内与跨来源两个调用位置均保留', async () => {
+    const base =
+      'Brave browser ships with native ad blocking, fingerprinting protection, and multi-threaded script execution.';
+    const pageWithBonus = `${base} 启动前必须关闭硬件加速才能启用实验模式。`;
+    const crossWithBonus = `${base} 生产环境严禁直接开放未授权公网访问。`;
+
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://docs.example/page1',
+            title: 'Page 1 Documentation',
+            snippets: [base, pageWithBonus],
+          },
+          {
+            url: 'https://docs.example/page2',
+            title: 'Page 2 Documentation',
+            snippets: [crossWithBonus],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const { result, stats } = await filterLlmContext(data, regressionRequest, offConfig);
+
+    assert.equal(result.grounding.generic.length, 2);
+    // 页内：两段均保留
+    assert.equal(result.grounding.generic[0].snippets.length, 2);
+    assert.ok(result.grounding.generic[0].snippets[1].includes('关闭硬件加速'));
+    // 跨来源：保留
+    assert.equal(result.grounding.generic[1].snippets.length, 1);
+    assert.ok(result.grounding.generic[1].snippets[0].includes('严禁直接开放未授权公网访问'));
+    assert.equal(stats.local.dup_removed, 0);
+    assert.equal(stats.local.cross_source_dup_removed, 0);
+  });
+
+  it('文本区别：代码大小写、缩进不同与负号不同不因去重合并', async () => {
+    const codeRequest: FilterCallContext = {
+      params: { query: 'configure maxRetries' },
+      intent: 'Find maxRetries settings in source code',
+    };
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://code.example/s0',
+            title: 'Code S0',
+            snippets: ['function configure() {\n  return maxRetries;\n}'],
+          },
+          {
+            url: 'https://code.example/s1',
+            title: 'Code S1',
+            snippets: ['function configure() {\n    return maxRetries;\n}'],
+          },
+          {
+            url: 'https://code.example/s2',
+            title: 'Code S2',
+            snippets: ['function configure() {\n  return -maxRetries;\n}'],
+          },
+          {
+            url: 'https://code.example/s3',
+            title: 'Code S3',
+            snippets: ['function configure() {\n  return MAX_RETRIES;\n}'],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const { result, stats } = await filterLlmContext(data, codeRequest, offConfig);
+
+    assert.equal(result.grounding.generic.length, 4);
+    assert.equal(stats.local.cross_source_dup_removed, 0);
+  });
+
+  it('完整重复：页内与跨来源严格全等删除后者，覆盖短片段，归因与计数正确', async () => {
+    const textA = 'Brave browser official release announcement.';
+    const shortText = 'Release v1.14';
+
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://origin.example/s0',
+            title: 'Origin S0',
+            snippets: [textA, textA, shortText],
+          },
+          {
+            url: 'https://mirror.example/s1',
+            title: 'Mirror S1',
+            snippets: [shortText],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const { result, stats } = await filterLlmContext(data, regressionRequest, offConfig);
+
+    // s0 页内第二个 textA 被删（dup_removed = 1）
+    assert.equal(result.grounding.generic[0].snippets.length, 2);
+    assert.equal(stats.local.dup_removed, 1);
+
+    // s1 跨来源短片段 shortText 被删（cross_source_dup_removed = 1），s1 成为空来源被删且归因为 rewrite
+    assert.equal(stats.local.cross_source_dup_removed, 1);
+    assert.equal(result.grounding.generic.length, 1);
+    const mirror = stats.sources.find((s) => s.url === 'https://mirror.example/s1');
+    assert.equal(mirror?.verdict, 'drop');
+    assert.equal(mirror?.reason, 'rewrite');
+  });
+
+  it('参照与顺序：被来源裁决删除的内容不影响后续来源参照，Brave 顺序保持', async () => {
+    const commonText = 'Brave native privacy features documentation and architecture overview.';
+
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://offtopic.example/s0',
+            title: 'Offtopic S0',
+            snippets: [commonText],
+          },
+          {
+            url: 'https://legit.example/s1',
+            title: 'Legit S1',
+            snippets: [commonText],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const classify: ClassifyDeps['classify'] = async ({ questions }) => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      input_tokens: 10,
+      answers: Object.fromEntries(
+        Object.entries(questions).map(([key, q]) => [
+          key,
+          key.includes('s0__is_off_topic')
+            ? { kind: 'noul', probability: 0.99 }
+            : q.type === 'score'
+              ? { kind: 'score', score: 2 }
+              : { kind: 'noul', probability: 0 },
+        ])
+      ),
+    });
+
+    const { result, stats } = await filterLlmContext(
+      data,
+      regressionRequest,
+      { ...offConfig, mode: 'on' },
+      { classify }
+    );
+
+    // s0 被来源裁决（off_topic）删除，其片段不能压掉 s1
+    assert.equal(result.grounding.generic.length, 1);
+    assert.equal(result.grounding.generic[0].url, 'https://legit.example/s1');
+    assert.equal(result.grounding.generic[0].snippets[0], commonText);
+    assert.equal(stats.local.cross_source_dup_removed, 0);
+  });
+
+  it('Jev 集成：模拟最高分 2、原创论证为 0 的新事实完整保留', async () => {
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://origin.example/s0',
+            title: 'Origin S0',
+            snippets: [
+              'Brave version 1.13 costs $4.2m and runs 193x faster with 40% less latency under test.',
+            ],
+          },
+          {
+            url: 'https://update.example/s1',
+            title: 'Update S1',
+            snippets: [
+              'Brave version 1.14 costs $4.2m and runs 193x faster with 40% less latency under test.',
+            ],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const classify: ClassifyDeps['classify'] = async ({ questions }) => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      input_tokens: 10,
+      answers: Object.fromEntries(
+        Object.entries(questions).map(([key, q]) => [
+          key,
+          // has_original_reasoning = 0（无原创论证），但 score = 2（最高分），来源题均通过
+          key.includes('has_original_reasoning')
+            ? { kind: 'noul', probability: 0 }
+            : q.type === 'score'
+              ? { kind: 'score', score: 2 }
+              : { kind: 'noul', probability: 0 },
+        ])
+      ),
+    });
+
+    const { result } = await filterLlmContext(
+      data,
+      regressionRequest,
+      { ...offConfig, mode: 'on' },
+      { classify }
+    );
+
+    assert.equal(result.grounding.generic.length, 2);
+    assert.ok(result.grounding.generic[1].snippets[0].includes('1.14'));
+  });
+
+  it('旧配置兼容：配置中携带退役键 min_facts 和 novelty_min 被静默忽略，不影响正常过滤', async () => {
+    const legacyConfig = parseFilterConfigObject({
+      mode: 'off',
+      thresholds: { min_facts: 1000000000, novelty_min: 50 },
+    });
+
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          {
+            url: 'https://origin.example/s0',
+            title: 'Origin S0',
+            snippets: ['Brave browser release information and technical specifications.'],
+          },
+          {
+            url: 'https://mirror.example/s1',
+            title: 'Mirror S1',
+            snippets: ['Brave browser release information and technical specifications.'],
+          },
+        ],
+        map: [],
+      },
+      sources: {},
+    };
+
+    const { result, stats } = await filterLlmContext(data, regressionRequest, legacyConfig);
+
+    // 完全相同文本依然正常去重，不受旧 min_facts=1000000000 影响
+    assert.equal(result.grounding.generic.length, 1);
+    assert.equal(stats.local.cross_source_dup_removed, 1);
   });
 });

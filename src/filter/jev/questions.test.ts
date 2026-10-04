@@ -32,7 +32,7 @@ describe('SOURCE_QUESTIONS', () => {
 });
 
 describe('DEFAULT_THRESHOLDS', () => {
-  it('carries the nine authoritative initial values', () => {
+  it('carries the seven authoritative initial values', () => {
     assert.deepEqual(
       { ...DEFAULT_THRESHOLDS },
       {
@@ -41,8 +41,6 @@ describe('DEFAULT_THRESHOLDS', () => {
         fillerDrop: 0.8,
         reasoningProtect: 0.7,
         snippetMin: 1.0,
-        minFacts: 4,
-        noveltyMin: 2,
         cjkBonus: 0.1,
         cjkShare: 0.5,
       }

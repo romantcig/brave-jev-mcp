@@ -1,5 +1,5 @@
 /**
- * 按 Unicode script 分词，提供实词集和 shingle 相似度。
+ * 按 Unicode script 分词，提供实词集合。
  * CJK 连续段拆成字符二元，避免整句汉字成为单个 token；其他词段转小写。
  */
 
@@ -112,43 +112,4 @@ export function contentTerms(...texts: string[]): Set<string> {
     }
   }
   return terms;
-}
-
-/**
- * token 序列的 n-gram shingle 集合（窗口按单空格连接）。
- * @returns 去重后的 shingle 集合；少于 n 个 token 时为空集合
- * @example shingles(['a', 'b', 'c', 'd', 'e']) 为 {'a b c d e'}
- * @example shingles(['a', 'b', 'c', 'd']).size === 0
- */
-export function shingles(tokens: string[], n = 5): Set<string> {
-  const out = new Set<string>();
-  for (let i = 0; i + n <= tokens.length; i++) {
-    out.add(tokens.slice(i, i + n).join(' '));
-  }
-  return out;
-}
-
-/**
- * Jaccard 相似度：交并比。
- * @returns `|A∩B| / |A∪B|`；任一集合为空时返回 0
- * @example jaccard(new Set(['a', 'b', 'c']), new Set(['a', 'b', 'd'])) === 0.5
- * @example jaccard(new Set(), new Set(['a'])) === 0
- */
-export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let inter = 0;
-  for (const x of a) if (b.has(x)) inter += 1;
-  return inter / (a.size + b.size - inter);
-}
-
-/**
- * 包含度为交集除以较小集合大小，任一集合为空时为 0。
- * isNearDuplicate 使用候选自身覆盖率，不用此值，避免误删信息更全的超集。
- */
-export function containment(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
-  const [small, big] = a.size <= b.size ? [a, b] : [b, a];
-  if (small.size === 0) return 0;
-  let inter = 0;
-  for (const x of small) if (big.has(x)) inter += 1;
-  return inter / small.size;
 }

@@ -1,9 +1,9 @@
 /**
- * 片段预筛阶段的样板行、标题重复行、引用块与页内重复判定。
+ * 片段预筛阶段的样板行、标题重复行与引用块判定。
  * 纯函数，不修改输入；前缀表由调用方统一传入。
  */
 
-import { CJK_SEGMENT, jaccard, tokenize } from './tokenize.js';
+import { CJK_SEGMENT, tokenize } from './tokenize.js';
 import { normalizeTitleForCompare } from './jsonld.js';
 
 /** 样板短行阈值（英文条目）：行归一化后不超过该长度才允许前缀命中——Share/分享/广告
@@ -12,18 +12,6 @@ export const BOILERPLATE_SHORT_LINE_MAX = 40;
 
 /** 样板短行阈值（中文条目）：中文正文句没有空格分隔，40 码元能装下一整句，阈值远小于英文。 */
 export const BOILERPLATE_SHORT_LINE_MAX_CJK = 12;
-
-/** 页内逐字重复判定的 shingle 窗口宽度。 */
-export const SHINGLE_N = 5;
-
-/** Jaccard 严格大于该值才算重复（恰为 0.8 不删）。 */
-export const NEAR_DUP_JACCARD = 0.8;
-
-/** 候选被幸存者覆盖的 shingle 比例达到该值即算重复（恰为 0.8 删）。 */
-export const NEAR_DUP_COVERAGE = 0.8;
-
-/** 参与重复判定的最小 shingle 集合规模；更短的片段不做重复判定（保守留）。 */
-export const MIN_SHINGLES = 8;
 
 /** 去掉行首 # / * / - 标记及其间空白，再 trim；不压缩内部空白或改变大小写。 */
 export function normalizeLine(line: string): string {
@@ -314,26 +302,4 @@ export function stripBoilerplateLines(
     .trim();
 
   return { text: stripped, emptied: stripped === '' || isTitleOnly(stripped, sourceTitle) };
-}
-
-/**
- * 与已幸存片段比较：Jaccard > 0.8 或候选自身至少 80% 的 shingle 被覆盖即重复。
- * 任一侧少于八个 shingle 时不判。覆盖率分母必须是候选自身，
- * 不能用较小集合，否则含更多信息的超集候选也会被误删。
- */
-export function isNearDuplicate(
-  candidateShingles: ReadonlySet<string>,
-  survivorShingles: ReadonlySet<string>
-): boolean {
-  if (survivorShingles.size < MIN_SHINGLES || candidateShingles.size < MIN_SHINGLES) {
-    return false;
-  }
-  let covered = 0;
-  for (const shingle of candidateShingles) {
-    if (survivorShingles.has(shingle)) covered += 1;
-  }
-  return (
-    jaccard(candidateShingles, survivorShingles) > NEAR_DUP_JACCARD ||
-    covered / candidateShingles.size >= NEAR_DUP_COVERAGE
-  );
 }

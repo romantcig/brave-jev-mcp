@@ -86,15 +86,13 @@ describe('parseFilterConfigObject: shape and defaults', () => {
     assert.deepEqual(fromNull, defaults());
   });
 
-  it('carries the nine DEFAULT_THRESHOLDS values verbatim', () => {
+  it('carries the seven DEFAULT_THRESHOLDS values verbatim', () => {
     assert.deepEqual(parseFilterConfigObject({}).thresholds, {
       offTopicDrop: 0.85,
       listingDrop: 0.8,
       fillerDrop: 0.8,
       reasoningProtect: 0.7,
       snippetMin: 1.0,
-      minFacts: 4,
-      noveltyMin: 2,
       cjkBonus: 0.1,
       cjkShare: 0.5,
     });
@@ -269,8 +267,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
         thresholds: {
           off_topic_drop: 0.9,
           snippet_min: 1.2,
-          min_facts: 6,
-          novelty_min: 3,
           cjk_share: 0,
         },
       },
@@ -281,8 +277,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
       ...DEFAULT_THRESHOLDS,
       offTopicDrop: 0.9,
       snippetMin: 1.2,
-      minFacts: 6,
-      noveltyMin: 3,
       cjkShare: 0,
     });
     assert.ok(Object.isFrozen(config.thresholds));
@@ -298,8 +292,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
           filler_drop: 0,
           reasoning_protect: 1,
           snippet_min: 2,
-          min_facts: 1,
-          novelty_min: 1,
           cjk_bonus: 0,
           cjk_share: 1,
         },
@@ -313,8 +305,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
       fillerDrop: 0,
       reasoningProtect: 1,
       snippetMin: 2,
-      minFacts: 1,
-      noveltyMin: 1,
       cjkBonus: 0,
       cjkShare: 1,
     });
@@ -328,7 +318,7 @@ describe('parseFilterConfigObject: thresholds group', () => {
           off_topic_drop: 1.5,
           filler_drop: -0.1,
           snippet_min: 1.2,
-          min_facts: 6,
+          cjk_share: 0.2,
         },
       },
       (line) => lines.push(line)
@@ -337,7 +327,7 @@ describe('parseFilterConfigObject: thresholds group', () => {
     assert.equal(config.thresholds.offTopicDrop, DEFAULT_THRESHOLDS.offTopicDrop);
     assert.equal(config.thresholds.fillerDrop, DEFAULT_THRESHOLDS.fillerDrop);
     assert.equal(config.thresholds.snippetMin, 1.2);
-    assert.equal(config.thresholds.minFacts, 6);
+    assert.equal(config.thresholds.cjkShare, 0.2);
     assert.ok(lines.some((line) => line.includes('thresholds.off_topic_drop=1.5')));
     assert.ok(lines.some((line) => line.includes('thresholds.filler_drop=-0.1')));
   });
@@ -364,28 +354,25 @@ describe('parseFilterConfigObject: thresholds group', () => {
   it('falls back for non-numeric and string values, warning once per key', () => {
     const lines: string[] = [];
     const config = parseFilterConfigObject(
-      { thresholds: { reasoning_protect: 'high', cjk_bonus: 0.2, min_facts: 4.5 } },
+      { thresholds: { reasoning_protect: 'high', cjk_bonus: 0.2, listing_drop: 'bad' } },
       (line) => lines.push(line)
     );
     assert.equal(config.thresholds.reasoningProtect, DEFAULT_THRESHOLDS.reasoningProtect);
     assert.equal(config.thresholds.cjkBonus, 0.2);
-    assert.equal(config.thresholds.minFacts, DEFAULT_THRESHOLDS.minFacts);
+    assert.equal(config.thresholds.listingDrop, DEFAULT_THRESHOLDS.listingDrop);
     assert.equal(lines.length, 2, lines.join('\n'));
   });
 
-  it('requires integers for min_facts and novelty_min', () => {
-    for (const value of [4.5, 2.0000001, '4', null]) {
-      const lines: string[] = [];
-      const config = parseFilterConfigObject({ thresholds: { min_facts: value } }, (line) =>
-        lines.push(line)
-      );
-      assert.equal(config.thresholds.minFacts, DEFAULT_THRESHOLDS.minFacts, JSON.stringify(value));
-      assert.equal(lines.length, 1, JSON.stringify(value));
-    }
-    const zero = parseFilterConfigObject({ thresholds: { novelty_min: 0 } }, () => {});
-    assert.equal(zero.thresholds.noveltyMin, DEFAULT_THRESHOLDS.noveltyMin);
-    const negative = parseFilterConfigObject({ thresholds: { novelty_min: -1 } }, () => {});
-    assert.equal(negative.thresholds.noveltyMin, DEFAULT_THRESHOLDS.noveltyMin);
+  it('ignores retired min_facts and novelty_min keys without warning or affecting thresholds', () => {
+    const lines: string[] = [];
+    const config = parseFilterConfigObject(
+      { thresholds: { min_facts: 6, novelty_min: 3, off_topic_drop: 0.9 } },
+      (line) => lines.push(line)
+    );
+    assert.equal(lines.length, 0);
+    assert.equal(config.thresholds.offTopicDrop, 0.9);
+    assert.equal('minFacts' in config.thresholds, false);
+    assert.equal('noveltyMin' in config.thresholds, false);
   });
 
   it('ignores unknown keys inside thresholds (fail-open direction)', () => {
@@ -479,7 +466,7 @@ describe('parseFilterConfigObject: warning format', () => {
       {
         mode: 'banana',
         jev: { model: '', timeout_ms: 15000.5, concurrency: 65 },
-        thresholds: { snippet_min: 2.01, min_facts: 4.5, cjk_bonus: 7 },
+        thresholds: { snippet_min: 2.01, listing_drop: 2, cjk_bonus: 7 },
         log_dir: '',
       },
       (line) => lines.push(line)
@@ -491,7 +478,7 @@ describe('parseFilterConfigObject: warning format', () => {
       assert.ok(line.includes('; using default '), line);
     }
     assert.ok(lines.some((line) => line.includes('ignoring mode="banana"; using default "off"')));
-    assert.ok(lines.some((line) => line.includes('ignoring thresholds.min_facts=4.5')));
+    assert.ok(lines.some((line) => line.includes('ignoring thresholds.listing_drop=2')));
   });
 
   it('truncates very long offending values', () => {
@@ -582,7 +569,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
     const file = writeFixture(tmpRoot, 'full.json', {
       mode: 'test',
       jev: { model: 'jev-1.14.0', timeout_ms: 20000, concurrency: 6 },
-      thresholds: { off_topic_drop: 0.9, snippet_min: 1.2, min_facts: 6, novelty_min: 3 },
+      thresholds: { off_topic_drop: 0.9, snippet_min: 1.2 },
       log_dir: 'C:/logs/jev',
     });
     let config: FilterConfig | undefined;
@@ -596,8 +583,6 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
         ...DEFAULT_THRESHOLDS,
         offTopicDrop: 0.9,
         snippetMin: 1.2,
-        minFacts: 6,
-        noveltyMin: 3,
       },
       jev: {
         model: 'jev-1.14.0',
@@ -609,12 +594,13 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
   });
 
   it('keeps parsing a config that still carries the retired keys (ignored silently)', () => {
-    // 遗留配置带着退役键（overfetch_factor, blocklist_file, jev.context_mode 等）照常解析：其余配置生效，退役键不影响任何行为
+    // 遗留配置带着退役键（overfetch_factor, blocklist_file, jev.context_mode, min_facts, novelty_min 等）照常解析：其余配置生效，退役键不影响任何行为
     const file = writeFixture(tmpRoot, 'retired-keys.json', {
       mode: 'test',
       overfetch_factor: 2,
       blocklist_file: '~/no-such-blocklist.txt',
       jev: { context_mode: 'all', temporal_context: true },
+      thresholds: { min_facts: 6, novelty_min: 3 },
     });
     let config: FilterConfig | undefined;
     const stderr = captureStderr(() => {

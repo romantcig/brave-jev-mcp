@@ -3,20 +3,15 @@ import { describe, it } from 'node:test';
 import { normalizeTitleForCompare } from './jsonld.js';
 import { BOILERPLATE_PREFIXES } from './markers.js';
 import {
-  isNearDuplicate,
   isTitleOnly,
   isTitleRepeatLine,
   matchesPrefix,
-  MIN_SHINGLES,
-  NEAR_DUP_COVERAGE,
-  NEAR_DUP_JACCARD,
   normalizeLine,
-  SHINGLE_N,
   stripBoilerplateLines,
   TITLE_LINE_MIN,
   TITLE_RESIDUAL_MAX,
 } from './prefilter.js';
-import { shingles, tokenize } from './tokenize.js';
+import { tokenize } from './tokenize.js';
 
 /** 从入库夹具逐字取出的片段，用于直接验证预筛谓词。 */
 
@@ -38,13 +33,6 @@ const KUCOIN_TITLE = 'TypeSafe AI Launches Jev, a Non-Chat AI Model 193x Faster 
 const MEZHA_SNIPPET_0 =
   '### Russian Drones Injure Two Men and Ignite Warehouses in Kyiv Region\n\n18 sep 2026, 23:45\n\n### Trump Announces White House Ban on CNN, MS NOW and Politico\n\n18 sep 2026, 23:30\n\n### Budanov Says Ukraine Can Resist Russia’s Information Warfare\n\n18 sep 2026, 23:01\n\n### TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation\n\n18 sep 2026, 23:00';
 const MEZHA_TITLE = 'TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation';
-
-/** 内联摘录自 Git 历史中的 fixtures/sanity/sample4_upgrade_guide.json 来源 3（agent-skills.md）片段 0 与片段 2：片段 2 几乎整段包含于片段 0（RESEARCH 实测包含度 0.875）。 */
-const SAMPLE4_SKILL_0 =
-  "# Agent Skills: Sanity Studio upgrade planner\nProduces a tailored Sanity Studio upgrade plan by inspecting the repository's installed versions, config, and source, then reporting only the breaking changes that actually apply. Covers Studio v3 and later; v2 projects are identified and redirected, not planned. Use this skill whenever someone wants to upgrade, migrate, or modernize a Sanity Studio across one or more major versions from v3 onward, asks what will break if they bump the `sanity` package, asks why their Studio broke after an upgrade, or asks how far behind their Studio is";
-const SAMPLE4_SKILL_2 =
-  "**Name**: sanity-studio-upgrade\n**Description**: Produces a tailored Sanity Studio upgrade plan by inspecting the repository's installed versions, config, and source, then reporting only the breaking changes that actually apply. Covers Studio v3 and later; v2 projects are identified and redirected, not planned";
-const SAMPLE4_SKILL_TITLE = 'Sanity Studio upgrade planner Skill';
 
 describe('normalizeLine', () => {
   it('strips leading markdown markers and whitespace', () => {
@@ -196,62 +184,6 @@ describe('stripBoilerplateLines', () => {
 
     assert.equal(result.emptied, true);
     assert.equal(normalizeTitleForCompare(result.text), normalizeTitleForCompare(KUCOIN_TITLE));
-  });
-});
-
-describe('isNearDuplicate', () => {
-  /** 造 n 个不重复的 5-gram shingle 字符串。 */
-  const sh = (prefix: string, n: number): Set<string> =>
-    new Set(Array.from({ length: n }, (_, i) => `${prefix} ${i} ${i + 1} ${i + 2} ${i + 3}`));
-
-  it('never judges either side with fewer than 8 shingles', () => {
-    assert.equal(isNearDuplicate(sh('a', MIN_SHINGLES - 1), sh('a', MIN_SHINGLES)), false);
-    assert.equal(isNearDuplicate(sh('a', MIN_SHINGLES), sh('a', MIN_SHINGLES - 1)), false);
-  });
-
-  it('drops a true duplicate (jaccard 1)', () => {
-    const set = sh('s', MIN_SHINGLES);
-
-    assert.equal(isNearDuplicate(new Set(set), set), true);
-  });
-
-  it('drops when the candidate is 80% covered by the survivor', () => {
-    // 候选 10 个、幸存 15 个、交 8 → 候选被覆盖率 = 8/10 = NEAR_DUP_COVERAGE，条件取 >= → 删
-    const candidate = new Set([...sh('c', 8), ...sh('c2', 2)]);
-    const survivor = new Set([...sh('c', 8), ...sh('x', 7)]);
-
-    assert.equal(candidate.size >= MIN_SHINGLES && survivor.size >= MIN_SHINGLES, true);
-    assert.equal(isNearDuplicate(candidate, survivor), true);
-    assert.equal(NEAR_DUP_COVERAGE, 0.8);
-  });
-
-  it('keeps a candidate that is a superset of the survivor', () => {
-    // 超集候选含更多信息，不应使用交集除以较小集合判断重复。
-    // 本例覆盖率为 14/34，新增内容应保留。
-    const lead = sh('lead', MIN_SHINGLES + 6);
-    const longer = new Set([...sh('lead', MIN_SHINGLES + 6), ...sh('extra', 20)]);
-
-    assert.equal(longer.size, 34);
-    assert.equal(isNearDuplicate(longer, lead), false);
-  });
-
-  it('does not drop when both similarities sit below the thresholds', () => {
-    // 候选与幸存各 10 个、交 7 → jaccard = 0.7 < 0.8 且覆盖率 = 0.7 < 0.8 → 保留。
-    // 注：jaccard = 0.8 且覆盖率 < 0.8 的集合对数学上不存在（覆盖率 = 交/|候选| ≥ 交/并
-    // = jaccard 恒成立），jaccard 分支是冗余保险；jaccard 语义本身由 tokenize.test.ts 锁住，
-    // 这里锁双阈值之下的保留。
-    const candidate = new Set([...sh('c', 7), ...sh('c-only', 3)]);
-    const survivor = new Set([...sh('c', 7), ...sh('s-only', 3)]);
-
-    assert.equal(isNearDuplicate(candidate, survivor), false);
-    assert.equal(NEAR_DUP_JACCARD, 0.8);
-  });
-
-  it('drops the sample4 skill snippet against its own lead (containment 0.875)', () => {
-    const candidate = shingles(tokenize(SAMPLE4_SKILL_2), SHINGLE_N);
-    const survivor = shingles(tokenize(SAMPLE4_SKILL_0), SHINGLE_N);
-
-    assert.equal(isNearDuplicate(candidate, survivor), true);
   });
 });
 

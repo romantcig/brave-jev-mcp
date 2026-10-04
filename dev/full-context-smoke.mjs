@@ -219,7 +219,7 @@ try {
       'saved'
     );
     const sample = read(path.absolute);
-    assert.equal(sample.format_version, 6);
+    assert.equal(sample.format_version, 7);
     assert.equal(sample.context_layout_id, CONTEXT_LAYOUT_ID);
     assert.deepEqual(sample.pre_filter, item.data);
     assert.deepEqual(sample.final_return, { payload: filtered.result, status_line: statusLine });

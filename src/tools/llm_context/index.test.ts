@@ -576,7 +576,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
     // 请求级载荷 + 来源级映射引用（全量共享请求，一次搜索零或一条）
-    assert.equal(sample.format_version, 6);
+    assert.equal(sample.format_version, 7);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
