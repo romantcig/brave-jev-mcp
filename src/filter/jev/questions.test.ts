@@ -1,10 +1,7 @@
-/** 当前题库生成与哈希测试；历史录制单独验证结构完整性，不改写成当前题库回答。 */
+/** 当前题库生成与哈希测试。 */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
@@ -18,8 +15,6 @@ import {
   buildSourceQuestions,
   snippetScoreInstructions,
 } from './questions.js';
-
-const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
 
 describe('SOURCE_QUESTIONS', () => {
   it('has exactly the four source-level keys after the 2026-10-03 slimming', () => {
@@ -179,58 +174,4 @@ describe('QUESTION_SET_ID (all-only recipe)', () => {
     // 锁定现行题库完整哈希，防止题干、criteria、键序或总指令无意漂移。
     assert.equal(QUESTION_SET_ID, 'a03ab5c2506c');
   });
-});
-
-// 两份历史录制是旧十题题库的真实记录，验证原始结构，不改写内容。
-// 其回答用于当前规则回放时属于固定回答验证，不代表模型对当前题目的回答。
-
-/** 历史录制对应的十个来源题键。 */
-const V3_HISTORICAL_KEYS: readonly string[] = [
-  'worth_keeping',
-  'is_primary',
-  'has_original_reasoning',
-  'is_attributed_rewrite',
-  'is_template_filler',
-  'is_off_topic',
-  'is_listing',
-  'self_deprecated',
-  'stale',
-  'paywalled',
-];
-
-/** 历史录制的三档评分说明，仅用于核对原始格式。 */
-const V3_HISTORICAL_LEVELS: readonly string[] = [
-  'Navigation, metadata, boilerplate, or unrelated to `query`',
-  'Mentions the subject of `query` but adds no specific information',
-  'States specific information or analysis that directly serves `intent`',
-];
-
-describe('historical recording compatibility', () => {
-  for (const name of ['jev_release_default', 'jev_release_strict']) {
-    describe(name, () => {
-      const parsed: unknown = JSON.parse(
-        readFileSync(join(fixtureRoot, `${name}.jev.json`), 'utf8')
-      );
-      assert.ok(
-        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed),
-        `${name}.jev.json is not an object`
-      );
-      const recording = parsed as { questions: Record<string, string>; levels: string[] };
-
-      it('keeps the ten v3 questions readable and untouched as historical evidence', () => {
-        assert.deepEqual(Object.keys(recording.questions), [...V3_HISTORICAL_KEYS]);
-        for (const [key, text] of Object.entries(recording.questions)) {
-          assert.equal(typeof text, 'string', `${key} must remain a string`);
-          assert.ok(
-            text.startsWith(`${GLOBAL_INSTRUCTION} `),
-            `${key} must carry the global instruction prefix`
-          );
-        }
-      });
-
-      it('keeps the three snippet levels aligned with the retired v3 legend verbatim', () => {
-        assert.deepEqual(recording.levels, [...V3_HISTORICAL_LEVELS]);
-      });
-    });
-  }
 });

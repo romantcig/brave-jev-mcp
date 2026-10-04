@@ -5,7 +5,7 @@ import { METADATA_KEYS, extractBodyParts, parseJsonFragment, splitJsonFragment }
 const TITLE = 'TypeSafe launches Jev, a chatless AI model that claims to beat Claude 193x';
 
 /**
- * 仿 fixtures/jev_release_default.json 来源 2 片段 4（pasqualepillitteri）的形状：
+ * 仿 Git 历史中的 fixtures/jev_release_default.json 来源 2 片段 4（pasqualepillitteri）的形状：
  * `headline` 与来源标题逐字相同，其余八个键全在笔记 §1 的"删除的键"里 → 整片删。
  */
 const ARTICLE_META_ONLY = JSON.stringify({

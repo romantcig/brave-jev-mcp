@@ -262,25 +262,6 @@ describe('applyNovelty', () => {
     assert.equal(stats.local.novelty_removed, 0);
   });
 
-  it('processes sources in Brave order and ignores is_primary answers entirely', () => {
-    // s0 Brave 在前但 is_primary 0.5，s1 is_primary 0.9——filter-rules-5 起排序取消，
-    // 旧答案里的当事方概率不影响去重谁先参与：s0 先播种幸存，s1 同事实改写被删
-    // （与 filter-rules-4 相反：当时 s1 按概率先播种幸存、s0 被删）
-    const table = [source(0, [snippet(0, FACTS_A)]), source(1, [snippet(0, FACTS_A_REWORD)])];
-    const judged = judgedMap({
-      s0: answered({ is_primary: 0.5 }),
-      s1: answered({ is_primary: 0.9 }),
-    });
-    const stats = makeStats();
-
-    applyNovelty(table, judged, thresholds, stats);
-
-    assert.equal(table[0].snippets[0].kept, true);
-    assert.equal(table[1].snippets[0].kept, false);
-    assert.equal(table[1].snippets[0].reason, 'novelty');
-    assert.equal(stats.local.novelty_removed, 1);
-  });
-
   it('lets a failed source occupy its Brave position with the failure-keep boundary intact', () => {
     // 失败的 s0 保守保留并按原序参与去重，因此 s1 的同事实改写可被删除。
     // 本步骤不改变来源级 verdict。

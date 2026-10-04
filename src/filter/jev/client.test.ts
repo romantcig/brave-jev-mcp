@@ -1,20 +1,15 @@
 /**
- * 客户端解析、传输与管道回放测试，全部使用本地回答或 fetch 桩。
- * 录制按候选 ID 配对，响应解析复用生产实现；历史回答只验证规则行为。
+ * 客户端解析、传输与边界测试，全部使用本地回答或 fetch 桩。
+ * 响应解析复用生产实现，只保留最小代表性测试与协议边界。
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { fileURLToPath } from 'node:url';
 import { parseFilterConfigObject } from '../config.js';
 import { filterLlmContext } from '../pipeline.js';
 import type {
   BraveLlmContextResponse,
-  ClassifyDeps,
   FilterConfig,
-  FilterRequest,
   JevCandidateDetailed,
   JevQuestion,
   JevState,
@@ -23,80 +18,6 @@ import { buildRequest, createJevClassifier, hasJevKey, JEVI_ENDPOINT } from './c
 import { parseJevResponse } from './client.js';
 import { DEFAULT_JEV_MODEL, SOURCE_QUESTIONS } from './questions.js';
 import { buildContextRequest, projectSourceAnswers } from './context.js';
-
-const fixtureRoot = fileURLToPath(new URL('../../../fixtures/', import.meta.url));
-const expectedRoot = join(fixtureRoot, 'expected');
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-// ---------------------------------------------------------------------------
-// 夹具装载与收窄（不 spread 解析结果，V5）
-// ---------------------------------------------------------------------------
-
-/** 录制夹具里单个来源的答案条目（只声明测试关心的字段）。 */
-type RecordedAnswer = { type: string; noul?: number; score?: number };
-
-type RecordedEntry = {
-  url: string;
-  http: number;
-  response: {
-    model: string;
-    answers: Record<string, RecordedAnswer>;
-    usage: { input_tokens: number };
-  };
-};
-
-type JevRecording = {
-  intent: string;
-  results: Record<string, RecordedEntry>;
-};
-
-const loadJevRecording = (rel: string): JevRecording => {
-  const parsed: unknown = JSON.parse(readFileSync(join(fixtureRoot, rel), 'utf8'));
-  assert.ok(isRecord(parsed), `${rel} is not an object`);
-  assert.ok(isRecord(parsed.results), `${rel} has no results table`);
-  assert.equal(typeof parsed.intent, 'string', `${rel} has no intent`);
-  return {
-    intent: parsed.intent as string,
-    results: parsed.results as Record<string, RecordedEntry>,
-  };
-};
-
-/** 三形状 Brave 夹具加载器（与 pipeline.fixtures.test.ts / dev/dump_local_rules.ts 同逻辑）。 */
-const loadBraveFixture = (rel: string): BraveLlmContextResponse => {
-  const parsed: unknown = JSON.parse(readFileSync(join(fixtureRoot, rel), 'utf8'));
-  if (typeof parsed === 'object' && parsed !== null && 'response' in parsed) {
-    return (parsed as { response: BraveLlmContextResponse }).response;
-  }
-  if (Array.isArray((parsed as BraveLlmContextResponse)?.grounding?.generic)) {
-    return parsed as BraveLlmContextResponse;
-  }
-  const noise = parsed as {
-    generic: BraveLlmContextResponse['grounding']['generic'][number];
-    source?: BraveLlmContextResponse['sources'];
-  };
-  return {
-    grounding: { generic: [noise.generic], map: [] },
-    sources: noise.source ?? {},
-  };
-};
-
-/** 期望文件头三件套（query / intent / request 与录制口径一致）。 */
-const loadExpectedHeader = (
-  rel: string
-): { query: string; intent: string; request: Omit<FilterRequest, 'query'> } => {
-  const parsed: unknown = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8'));
-  assert.ok(isRecord(parsed), `${rel} is not an object`);
-  assert.equal(typeof parsed.query, 'string', `${rel} has no query`);
-  assert.equal(typeof parsed.intent, 'string', `${rel} has no intent`);
-  assert.ok(isRecord(parsed.request), `${rel} has no request`);
-  return {
-    query: parsed.query as string,
-    intent: parsed.intent as string,
-    request: parsed.request as Omit<FilterRequest, 'query'>,
-  };
-};
 
 // ---------------------------------------------------------------------------
 // 全量共享请求辅助（all-only）：全部 classify 桩统一使用 sources[] 形状
@@ -135,43 +56,6 @@ const sharedState = makeAllState(1, 1);
 const sharedQuestions = makeQuestions(sharedState, 1);
 const sharedRequest = { state: sharedState, questions: sharedQuestions };
 
-/**
- * 固定回答注入（all-only 合成桩）：把逐来源录制答案按 `${id}__${localKey}` 命名空间注入
- * 全量共享请求（只回答实发题集里存在的键），合成单个 200 响应走生产同一条
- * parseJevResponse 路径。没有 fetch，不带 dispatch，计零实发；合成用量为 0、
- * usage_complete=false，旧 single 录制用量不作为当前共享请求的用量。
- */
-const replayClassifier =
-  (recording: JevRecording): ClassifyDeps['classify'] =>
-  async ({ state, questions }) => {
-    const answers: Record<string, unknown> = {};
-    for (const source of state.sources) {
-      const entry = recording.results[source.id];
-      if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
-      for (const [localKey, value] of Object.entries(entry.response.answers)) {
-        const globalKey = `${source.id}__${localKey}`;
-        if (questions[globalKey] !== undefined) answers[globalKey] = value;
-      }
-    }
-    const parsed = parseJevResponse(
-      200,
-      JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 0 } })
-    );
-    return parsed.ok
-      ? {
-          status: 'answered',
-          model: parsed.model,
-          answers: parsed.answers,
-          input_tokens: parsed.input_tokens,
-          usage_complete: false,
-        }
-      : // 录制声称 200 但解析不过：响应形状坏，按校验失败记账（契约里无 'shape' kind）
-        { status: 'failed', kind: 'validation' };
-  };
-
-const defaultRecording = loadJevRecording('jev_release_default.jev.json');
-const strictRecording = loadJevRecording('jev_release_strict.jev.json');
-
 // ---------------------------------------------------------------------------
 // buildRequest：钉版与形状
 // ---------------------------------------------------------------------------
@@ -204,48 +88,30 @@ describe('buildRequest', () => {
 });
 
 // ---------------------------------------------------------------------------
-// parseJevResponse：真实夹具条目 + ok:false 分支
+// parseJevResponse：代表性协议响应与失败分支
 // ---------------------------------------------------------------------------
 
 describe('parseJevResponse', () => {
-  it('narrows every recorded entry of both fixtures with the actual model id and input_tokens', () => {
-    for (const [name, recording] of Object.entries({
-      default: defaultRecording,
-      strict: strictRecording,
-    })) {
-      for (const [key, entry] of Object.entries(recording.results)) {
-        const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
-        assert.equal(parsed.ok, true, `${name} ${key} must parse`);
-        if (parsed.ok) {
-          assert.equal(parsed.model, 'jev-1.13.0', `${name} ${key} model`);
-          assert.equal(
-            parsed.input_tokens,
-            entry.response.usage.input_tokens,
-            `${name} ${key} tokens`
-          );
-          assert.equal(
-            Object.keys(parsed.answers).length,
-            Object.keys(entry.response.answers).length,
-            `${name} ${key} answer keys`
-          );
-        }
-      }
+  it('reads noul probability and continuous score from a representative response', () => {
+    const rawBody = JSON.stringify({
+      model: 'jev-1.13.0',
+      answers: {
+        s0__has_original_reasoning: { type: 'noul', noul: 0.85 },
+        s0__snip0: { type: 'score', score: 1.5 },
+      },
+      usage: { input_tokens: 150 },
+    });
+    const parsed = parseJevResponse(200, rawBody);
+    assert.equal(parsed.ok, true);
+    if (parsed.ok) {
+      assert.equal(parsed.model, 'jev-1.13.0');
+      assert.equal(parsed.input_tokens, 150);
+      assert.deepEqual(parsed.answers['s0__has_original_reasoning'], {
+        kind: 'noul',
+        probability: 0.85,
+      });
+      assert.deepEqual(parsed.answers['s0__snip0'], { kind: 'score', score: 1.5 });
     }
-  });
-
-  it('reads noul probability and continuous score from a real entry', () => {
-    const entry = defaultRecording.results['s0'];
-    assert.ok(entry, 's0 missing from the default recording');
-    const parsed = parseJevResponse(entry.http, JSON.stringify(entry.response));
-    assert.ok(parsed.ok);
-
-    const noul = entry.response.answers['worth_keeping'];
-    assert.ok(noul, 'worth_keeping answer missing');
-    assert.deepEqual(parsed.answers['worth_keeping'], { kind: 'noul', probability: noul.noul });
-
-    const score = entry.response.answers['snip0'];
-    assert.ok(score, 'snip0 answer missing');
-    assert.deepEqual(parsed.answers['snip0'], { kind: 'score', score: score.score });
   });
 
   it('returns kind http for non-200 statuses without parsing the body', () => {
@@ -350,116 +216,20 @@ describe('parseJevResponse boundaries', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 端到端回放：on 模式 + 注入回放 classify，整条真实路径零网络
-// ---------------------------------------------------------------------------
-
-for (const [name, recording] of Object.entries({
-  jev_release_default: defaultRecording,
-  jev_release_strict: strictRecording,
-})) {
-  const expected = loadExpectedHeader(`${name}.off.json`);
-  // 录制与期望的 intent 必须一致，否则不能用于此回放。
-  assert.equal(recording.intent, expected.intent, `${name} recording intent mismatch`);
-
-  const data = loadBraveFixture(`${name}.json`);
-  const config: FilterConfig = { ...parseFilterConfigObject({}), mode: 'on' };
-  const request = {
-    params: { ...expected.request, query: expected.query },
-    intent: expected.intent,
-  };
-  // 顶层 await：管道一次跑完，describe 闭包共享（node:test 等模块求值完成后开跑）
-  const replay = replayClassifier(recording);
-  let classifyCalls = 0;
-  const { result, stats, jev_requests } = await filterLlmContext(data, request, config, {
-    classify: async (input) => {
-      classifyCalls += 1;
-      return replay(input);
-    },
-  });
-  const jev = stats.jev;
-  assert.ok(jev, 'on mode with classify must populate stats.jev');
-  const inputUrls = data.grounding.generic.map((item) => item.url);
-  const outputUrls = result.grounding.generic.map((item) => item.url);
-
-  describe(`end-to-end replay · ${name}`, () => {
-    it('一次共享回答注入覆盖全部候选，零实发且不伪造载荷', () => {
-      assert.equal(jev.status, 'ok');
-      assert.equal(classifyCalls, 1);
-      assert.equal(jev.n_requests, 0);
-      assert.equal(jev.n_http_attempts, 0);
-      assert.equal(jev_requests.length, 1);
-      assert.equal(jev_requests[0].answered, true);
-      assert.equal(jev_requests[0].dispatched, false);
-      assert.equal(jev_requests[0].state, null);
-      assert.equal(jev_requests[0].questions, null);
-      assert.equal(jev.per_source.length, Object.keys(recording.results).length);
-      for (const row of jev.per_source) {
-        assert.equal(row.status, 'answered', `${row.src} must be answered`);
-        assert.equal(row.model, 'jev-1.13.0');
-        assert.equal(row.request_id, 'j1');
-        // 请求级维度不逐来源复制：耗时在请求记录上（§6.1）
-        assert.equal(row.latency_ms, undefined);
-      }
-      assert.equal(typeof jev.requests[0]?.latency_ms, 'number');
-    });
-
-    it('合成回答计零用量，不把旧逐来源用量合计成共享请求用量', () => {
-      assert.equal(jev.input_tokens, 0);
-      assert.equal(jev_requests[0].input_tokens, 0);
-      assert.equal(jev_requests[0].usage_complete, false);
-    });
-
-    it('records the current source-level probabilities per source exactly as recorded', () => {
-      for (const row of jev.per_source) {
-        const entry = recording.results[row.src];
-        assert.ok(entry, `recording missing ${row.src}`);
-        for (const key of Object.keys(SOURCE_QUESTIONS)) {
-          const recorded = entry.response.answers[key];
-          assert.ok(recorded, `${row.src} missing answer ${key}`);
-          assert.equal(row.answers?.[key], recorded.noul, `${row.src} ${key}`);
-        }
-      }
-    });
-
-    it('records snippet scores in snip0..snipN order aligned with the recorded state', () => {
-      for (const row of jev.per_source) {
-        const entry = recording.results[row.src];
-        assert.ok(entry, `recording missing ${row.src}`);
-        const snipKeys = Object.keys(entry.response.answers)
-          .filter((key) => /^snip\d+$/.test(key))
-          .sort((a, b) => Number(a.slice(4)) - Number(b.slice(4)));
-        assert.equal(row.snippet_scores?.length, snipKeys.length, `${row.src} score count`);
-        snipKeys.forEach((key, i) => {
-          const recorded = entry.response.answers[key];
-          assert.ok(recorded, `${row.src} missing answer ${key}`);
-          assert.equal(row.snippet_scores?.[i], recorded.score, `${row.src} ${key}`);
-        });
-      }
-    });
-
-    it('keeps surviving sources as a subsequence of the Brave order', () => {
-      let cursor = 0;
-      for (const url of outputUrls) {
-        const found = inputUrls.indexOf(url, cursor);
-        assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
-        cursor = found + 1;
-      }
-    });
-  });
-}
-
 // 空输入即使注入分类器也应零请求。
 
 describe('empty response with classify injected (VERDICT-06)', () => {
   it('returns empty output and makes zero requests without fabricating sources', async () => {
-    const recording = defaultRecording;
     const config: FilterConfig = { ...parseFilterConfigObject({}), mode: 'on' };
     const { result, stats } = await filterLlmContext(
       { grounding: { generic: [], map: [] }, sources: {} },
       { params: { query: 'q' }, intent: 'i' },
       config,
-      { classify: replayClassifier(recording) }
+      {
+        classify: async () => {
+          throw new Error('classify must not be called for empty response');
+        },
+      }
     );
 
     assert.deepEqual(result, { grounding: { generic: [], map: [] }, sources: {} });

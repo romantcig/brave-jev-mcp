@@ -20,26 +20,26 @@ import { shingles, tokenize } from './tokenize.js';
 
 /** 从入库夹具逐字取出的片段，用于直接验证预筛谓词。 */
 
-/** Captured from fixtures/jev_release_default.json 来源 1（heise）片段 1：以样板行开头、剥后应保留正文的最小真实证据。 */
+/** 内联摘录自 Git 历史中的 fixtures/jev_release_default.json 来源 1（heise）片段 1：以样板行开头、剥后应保留正文的最小真实证据。 */
 const HEISE_SNIPPET_1 =
   'Continue after ad\n\nTypeSafe AI demonstrates how Jev could help companies using customer service routing as an example. Jev decides there how an incoming request should be processed. A simple question about order status can go to normal program code, a product question to a language model, and a complex or uncertain case to a human.';
 const HEISE_TITLE = 'AI model “Jev” to make machines decide faster';
 
-/** Captured from fixtures/jev_release_default.json 来源 2（pasqualepillitteri）片段 2：样板前缀自带 `##` 标记的 FAQ 块。 */
+/** 内联摘录自 Git 历史中的 fixtures/jev_release_default.json 来源 2（pasqualepillitteri）片段 2：样板前缀自带 `##` 标记的 FAQ 块。 */
 const PASQUALE_SNIPPET_2 =
   '## Frequently Asked Questions (FAQ)\n#### 1. What is TypeSafe\'s Jev?\n**Jev is an AI model that doesn\'t chat.** Instead of generating text it returns a typed decision, picked from the options you supply, with a confidence score. TypeSafe calls it the first "System One Model," built for fast decisions inside software';
 
-/** Captured from fixtures/jev_release_default.json 来源 7（kucoin）片段 0：剥后只剩来源标题 → 整片删的最小真实证据。 */
+/** 内联摘录自 Git 历史中的 fixtures/jev_release_default.json 来源 7（kucoin）片段 0：剥后只剩来源标题 → 整片删的最小真实证据。 */
 const KUCOIN_SNIPPET_0 =
   '# TypeSafe AI Launches Jev, a Non-Chat AI Model 193x Faster Than Claude\nRelease Time: 2026/09/16 05:34:40\nShare';
 const KUCOIN_TITLE = 'TypeSafe AI Launches Jev, a Non-Chat AI Model 193x Faster Than Claude';
 
-/** Captured from fixtures/jev_release_default.json 来源 10（mezha）片段 0：8 行站内导航块，长度 ≥ 200，预筛规则都不删。 */
+/** 内联摘录自 Git 历史中的 fixtures/jev_release_default.json 来源 10（mezha）片段 0：8 行站内导航块，长度 ≥ 200，预筛规则都不删。 */
 const MEZHA_SNIPPET_0 =
   '### Russian Drones Injure Two Men and Ignite Warehouses in Kyiv Region\n\n18 sep 2026, 23:45\n\n### Trump Announces White House Ban on CNN, MS NOW and Politico\n\n18 sep 2026, 23:30\n\n### Budanov Says Ukraine Can Resist Russia’s Information Warfare\n\n18 sep 2026, 23:01\n\n### TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation\n\n18 sep 2026, 23:00';
 const MEZHA_TITLE = 'TypeSafe AI Unveils Jev, a Fast AI Model Built for Software Automation';
 
-/** Captured from fixtures/sanity/sample4_upgrade_guide.json 来源 3（agent-skills.md）片段 0 与片段 2：片段 2 几乎整段包含于片段 0（RESEARCH 实测包含度 0.875）。 */
+/** 内联摘录自 Git 历史中的 fixtures/sanity/sample4_upgrade_guide.json 来源 3（agent-skills.md）片段 0 与片段 2：片段 2 几乎整段包含于片段 0（RESEARCH 实测包含度 0.875）。 */
 const SAMPLE4_SKILL_0 =
   "# Agent Skills: Sanity Studio upgrade planner\nProduces a tailored Sanity Studio upgrade plan by inspecting the repository's installed versions, config, and source, then reporting only the breaking changes that actually apply. Covers Studio v3 and later; v2 projects are identified and redirected, not planned. Use this skill whenever someone wants to upgrade, migrate, or modernize a Sanity Studio across one or more major versions from v3 onward, asks what will break if they bump the `sanity` package, asks why their Studio broke after an upgrade, or asks how far behind their Studio is";
 const SAMPLE4_SKILL_2 =

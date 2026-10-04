@@ -1,0 +1,124 @@
+{
+  "id": "minimax-time",
+  "purpose": "已发布信息替代尚未发布的旧预测",
+  "origin": {
+    "sample": "2026-10-04/b7e7450b.json",
+    "sample_sha256": "fb5f11a9c909c93f5e7ac66db685f854a5709585fc80aadc1bc120cf82246afe",
+    "source_indices": [
+      0,
+      1,
+      3
+    ],
+    "captured_at": "2026-10-04T03:19:49.254+08:00",
+    "filter_rules_version": "filter-rules-16",
+    "question_set_id": "0ef644dda1ad"
+  },
+  "request": {
+    "params": {
+      "query": "MiniMax M3.1",
+      "count": 10
+    },
+    "intent": "Find current information about MiniMax M3.1, the latest large language model from MiniMax, including its release details, capabilities and positioning.",
+    "retrievalTime": "2026-10-04T03:19:49.254+08:00"
+  },
+  "config": {},
+  "data": {
+    "grounding": {
+      "generic": [
+        {
+          "url": "https://www.aibase.com/news/31365",
+          "title": "MiniMax's Latest Text Model M3.1-Flash-Preview Officially Launched Official Synchronization of Quota Reset Cards and Double Points Rewards",
+          "snippets": [
+            "# MiniMax's Latest Text Model M3.1-Flash-Preview Officially Launched Official Synchronization of Quota Reset Cards and Double Points Rewards\n#### AIbase基地\nEfficiency competition in the field of large AI models is intensifying again. MiniMax officially announced on September 27 that its latest text model, M3.1-Flash-Preview, is now fully available on the MiniMax Code platform.",
+            "To thank developers for their support, the official released a major benefit on the launch day - the quota reset card, which resets all users' Token Plan quotas, and also launched multiple benefits such as free token collection.",
+            "Regarding core capabilities, M3.1-Flash-Preview is positioned as a stable productivity tool for daily development work. Whether it's regular bug fixes or complete feature development from scratch, the model can deliver reliably. It not only has the ability to deeply understand complex requirements, but also carefully handles various edge cases (boundary conditions), automatically completes regression testing, and strictly verifies the potential impact of code changes on existing functions.",
+            "By organically connecting all aspects, including problem identification, code implementation, testing verification, and result delivery, the model builds an efficient and reliable development loop for developers.",
+            "In addition to the iterative upgrades of the core model features, MiniMax also announced that the limited-time \"Double Points for Check-in\" activity will officially start on September 28 and end on October 7. During this period, all new and existing users who log in to the MiniMax Code platform and complete daily check-ins can easily claim double free points, further reducing the cost of using the platform for developers.",
+            "AINewWords MiniMax M3.1-Flash-Preview CodeModel",
+            "## Qwen Partners with Quark Cloud Disk: Organize and Retrieve Documents and Photos, Which Can Be Turned into Posters in a Flash\nAI Daily: MiniMax New Model M3.1-Flash-Preview Launches; OpenAI to Introduce a Permanent AI Assistant; Claude Sonnet 5.5 Begins Beta Testing",
+            "## AI Daily: MiniMax New Model M3.1-Flash-Preview Launches; OpenAI to Introduce a Permanent AI Assistant; Claude Sonnet 5.5 Begins Beta Testing\nMiniMax New Text Model M3.1-Flash-Preview Official Beta Test",
+            "## MiniMax New Text Model M3.1-Flash-Preview Official Beta Test\nOn Sept 28, MiniMax launched M3.1-Flash-Preview for public beta, showing faster AI model iteration. It supports native multimodal capabilities and a million-token context window, enabling efficient bug fixes, complex feature development, and deep involvement in complex dev tasks....."
+          ]
+        },
+        {
+          "url": "https://www.reddit.com/r/MiniMax_AI/comments/1v73a0r/m31_has_strong_potential_to_be_the_most/",
+          "title": "r/MiniMax_AI on Reddit: M3.1 has strong potential to be the most cost-efficient large model ahead",
+          "snippets": [
+            "# M3.1 has strong potential to be the most cost-efficient large model ahead\nI’ve gone through the technical specs of Minimax M3, and I want to share my analysis here.\n\n• Its total parameters are twice the size of last year’s M2.x lineup, which gives it a strong base for complex logical reasoning.\n\n• Compared with other mainstream commercial LLMs, M3 uses a smaller overall parameter size, meaning cheaper costs for inference and deployment.",
+            "• The biggest structural change is sparse attention, a design that fits perfectly with the agent tools developers are building nowadays.\n\n• Where it struggles right now is real-world usage, especially coding. The model performs far worse than its hardware/parameter specs promise. The dev team still has lots of tuning work left, so future updates should bring clear performance upgrades.",
+            "Even with all these technical strengths, Minimax is in a tough spot right now.\nUsers’ opinions of M3 have gotten much worse lately. The time Minimax has to patch M3’s issues and win back user trust is running out quickly",
+            "## Vancecookcobain\nI doubt it....something tells me it's just going to give us annoying rate limits that make it unusable as a cost effective model....\n\n If they are going for a nearly 3 trillion model chances are they are looking for an enormous payday and are going to squeeze every penny from every customer....",
+            "## respectful_stimulus\nIs there going to be a M3.1?? The company seems quiet."
+          ]
+        },
+        {
+          "url": "https://x.com/MiniMaxAgent/status/2104079819881517400",
+          "title": "MiniMax_Agent on X: \"MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.\" / X",
+          "snippets": [
+            "# MiniMax\\_Agent on X: \"MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.\"\nMiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.",
+            "- @MiniMaxAgent MiniMax\\_Agent MiniMax (official) @MiniMaxAgent MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.",
+            "Open to new and existing users. Use them on any model: code with M3.1-Flash-Preview, or make videos with H3 7\n- @shiaho777 shiaho @shiaho777 Sep 27 You finally remembered the M series 1"
+          ]
+        }
+      ],
+      "map": []
+    },
+    "sources": {
+      "https://www.aibase.com/news/31365": {
+        "title": "MiniMax's Latest Text Model M3.1-Flash-Preview Officially Launched Official Synchronization of Quota Reset Cards and Double Points Rewards",
+        "hostname": "www.aibase.com",
+        "age": [
+          "Monday, September 28, 2026",
+          "2026-09-28",
+          "5 days ago",
+          "2026-09-28T07:08:27Z"
+        ],
+        "snippet": "conditions), automatically completes regression testing, and strictly verifies the potential impact of code changes on existing functions. By organically connecting all aspects, including problem identification, code implementation, testing ..."
+      },
+      "https://www.reddit.com/r/MiniMax_AI/comments/1v73a0r/m31_has_strong_potential_to_be_the_most/": {
+        "title": "r/MiniMax_AI on Reddit: M3.1 has strong potential to be the most cost-efficient large model ahead",
+        "hostname": "www.reddit.com",
+        "age": [
+          "Sunday, July 26, 2026",
+          "2026-07-26",
+          "69 days ago",
+          "2026-07-26T13:10:20Z"
+        ],
+        "snippet": "I’ve gone through the technical specs of Minimax M3, and I want to share my analysis here."
+      },
+      "https://x.com/MiniMaxAgent/status/2104079819881517400": {
+        "title": "MiniMax_Agent on X: \"MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.\" / X",
+        "hostname": "x.com",
+        "age": [
+          "Sunday, September 27, 2026",
+          "2026-09-27",
+          "6 days ago",
+          "2026-09-27T05:24:55Z"
+        ],
+        "snippet": "MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features."
+      }
+    }
+  },
+  "checks": [
+    {
+      "source": 0,
+      "keep": [
+        "fully available on the MiniMax Code platform",
+        "quota reset card"
+      ]
+    },
+    {
+      "source": 1,
+      "absent": [
+        "Is there going to be a M3.1??"
+      ]
+    },
+    {
+      "source": 2,
+      "keep": [
+        "debuts today"
+      ]
+    }
+  ],
+  "review_note": "技术段落讨论 M3 的 sparse attention，原文未确证它同样适用于 M3.1，因此不预设其必留或必删。当前录制给该段 0.57 分；本例仅核对明确的 M3.1 发布事实及已失效的发布疑问，不证明所有技术分析均被保留。"
+}

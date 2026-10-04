@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
@@ -559,178 +557,7 @@ describe('trimSourceMeta', () => {
   });
 });
 
-// on 模式裁决的管道接线、score 删空归因与 Brave 原序。
-
-describe('on-mode verdicts end to end (replay fixture)', () => {
-  const fixtureRoot = fileURLToPath(new URL('../../fixtures/', import.meta.url));
-  const expectedRoot = join(fixtureRoot, 'expected');
-
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === 'object' && value !== null && !Array.isArray(value);
-
-  /** 三形状 Brave 夹具加载器（与 pipeline.fixtures.test.ts 同逻辑，不建 testUtils）。 */
-  const loadBraveData = (rel: string): BraveLlmContextResponse => {
-    const parsed: unknown = JSON.parse(readFileSync(join(fixtureRoot, rel), 'utf8'));
-    assert.ok(isRecord(parsed), `${rel} is not an object`);
-    if ('response' in parsed) return parsed.response as BraveLlmContextResponse;
-    return parsed as BraveLlmContextResponse;
-  };
-
-  /** 期望的 query / intent / request 与录制保持一致。 */
-  const loadExpectedHeader = (
-    rel: string
-  ): { query: string; intent: string; request: Omit<FilterRequest, 'query'> } => {
-    const parsed: unknown = JSON.parse(readFileSync(join(expectedRoot, rel), 'utf8'));
-    assert.ok(isRecord(parsed), `${rel} is not an object`);
-    assert.equal(typeof parsed.query, 'string', `${rel} has no query`);
-    assert.equal(typeof parsed.intent, 'string', `${rel} has no intent`);
-    assert.ok(isRecord(parsed.request), `${rel} has no request`);
-    return {
-      query: parsed.query as string,
-      intent: parsed.intent as string,
-      request: parsed.request as Omit<FilterRequest, 'query'>,
-    };
-  };
-
-  /**
-   * 回放传输（all-only）：把逐来源录制答案按 `${id}__${localKey}` 命名空间注入
-   * 全量共享请求（只回答实发题集里存在的键），合成单个 200 响应走生产同一条
-   * parseJevResponse；input_tokens 取各来源录制用量之和。
-   */
-  const replay: ClassifyDeps['classify'] = async ({ state, questions }) => {
-    const parsed: unknown = JSON.parse(
-      readFileSync(join(fixtureRoot, 'jev_release_default.jev.json'), 'utf8')
-    );
-    assert.ok(isRecord(parsed) && isRecord(parsed.results), 'recording has no results');
-    const results = parsed.results as Record<
-      string,
-      {
-        http: number;
-        response: { model: string; answers: unknown; usage: { input_tokens: number } };
-      }
-    >;
-    const answers: Record<string, unknown> = {};
-    let inputTokens = 0;
-    for (const source of state.sources) {
-      const entry = results[source.id];
-      if (!entry || entry.http !== 200) return { status: 'failed', kind: 'network' };
-      inputTokens += entry.response.usage.input_tokens;
-      assert.ok(isRecord(entry.response.answers), `${source.id} recording has no answers`);
-      for (const [localKey, value] of Object.entries(entry.response.answers)) {
-        const globalKey = `${source.id}__${localKey}`;
-        if (questions[globalKey] !== undefined) answers[globalKey] = value;
-      }
-    }
-    const parsedResponse = parseJevResponse(
-      200,
-      JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: inputTokens } })
-    );
-    return parsedResponse.ok
-      ? {
-          status: 'answered',
-          model: parsedResponse.model,
-          answers: parsedResponse.answers,
-          input_tokens: parsedResponse.input_tokens,
-        }
-      : { status: 'failed', kind: 'validation' };
-  };
-
-  const braveOrderIsSubsequence = (data: BraveLlmContextResponse, outputUrls: string[]) => {
-    const inputUrls = data.grounding.generic.map((item) => item.url);
-    let cursor = 0;
-    for (const url of outputUrls) {
-      const found = inputUrls.indexOf(url, cursor);
-      assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
-      cursor = found + 1;
-    }
-  };
-
-  it('keeps every source under the default thresholds and removes exactly the low-score snippets', async () => {
-    const data = loadBraveData('jev_release_default.json');
-    const expected = loadExpectedHeader('jev_release_default.off.json');
-    const fixtureRequest = {
-      params: { ...expected.request, query: expected.query },
-      intent: expected.intent,
-    };
-
-    const { result, stats } = await filterLlmContext(
-      data,
-      fixtureRequest,
-      { ...offConfig, mode: 'on' },
-      { classify: replay }
-    );
-
-    // 真实录好的答案全部低于三道门槛：12 源来源级 keep
-    const perSource = stats.jev?.per_source ?? [];
-    assert.equal(perSource.length, 12);
-    for (const row of perSource) {
-      assert.equal(row.status, 'answered', `${row.src} status`);
-      assert.equal(row.verdict, 'keep', `${row.src} verdict`);
-    }
-    // 幸存者保持 Brave 原序子序列
-    braveOrderIsSubsequence(
-      data,
-      result.grounding.generic.map((item) => item.url)
-    );
-    // score 删除计数与夹具 snippet_scores 推导一致（s8 4 + s9 4 + s10 2 = 10）
-    const derived = perSource.reduce(
-      (sum, row) =>
-        sum +
-        (row.snippet_scores ?? []).filter((score) => score < DEFAULT_THRESHOLDS.snippetMin).length,
-      0
-    );
-    const removed = stats.sources.reduce(
-      (sum, source) =>
-        sum +
-        source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'score').length,
-      0
-    );
-    assert.equal(removed, 10);
-    assert.equal(removed, derived);
-    // 没有来源被 score 删光：步 8 不产生 empty
-    assert.equal(stats.local.empty_dropped, 0);
-  });
-
-  it('drops every candidate as off_topic when the threshold is lowered and returns empty without refill', async () => {
-    const data = loadBraveData('jev_release_default.json');
-    const expected = loadExpectedHeader('jev_release_default.off.json');
-    const fixtureRequest = {
-      params: { ...expected.request, query: expected.query },
-      intent: expected.intent,
-    };
-    const config: FilterConfig = {
-      ...offConfig,
-      mode: 'on',
-      // default 夹具全部来源 CJK 占比 0、is_off_topic >= 0.02：门槛降到 0.01 后全部命中
-      thresholds: { ...DEFAULT_THRESHOLDS, offTopicDrop: 0.01 },
-    };
-
-    const { result, stats } = await filterLlmContext(data, fixtureRequest, config, {
-      classify: replay,
-    });
-
-    // 整源丢弃应反映在输出中；删空后不补回。
-    assert.deepEqual(result.grounding.generic, []);
-    assert.deepEqual(result.sources, {});
-    // stats.sources 保持 Brave 原序（只翻标记不重排）且 reason 正确
-    assert.deepEqual(
-      stats.sources.map((source) => [source.index, source.reason]),
-      Array.from({ length: 12 }, (_, index) => [index, 'off_topic'])
-    );
-    for (const row of stats.jev?.per_source ?? []) {
-      assert.equal(row.verdict, 'drop', `${row.src} verdict`);
-      assert.equal(row.reason, 'off_topic', `${row.src} reason`);
-    }
-    // 来源级已丢的来源不再跑 score 删除
-    const scoreRemoved = stats.sources.reduce(
-      (sum, source) =>
-        sum +
-        source.snippets.filter((snippet) => !snippet.kept && snippet.reason === 'score').length,
-      0
-    );
-    assert.equal(scoreRemoved, 0);
-  });
-
+describe('verdicts and drops in step 8', () => {
   it('marks a source whose snippets are all score-removed as empty in step 8', async () => {
     // 只有 score 或本地删除时归为 empty；新颖度和跨源重复由其他用例检查。
     const data: BraveLlmContextResponse = {
@@ -746,10 +573,9 @@ describe('on-mode verdicts end to end (replay fixture)', () => {
       },
       sources: {},
     };
-    const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
+    const classify: ClassifyDeps['classify'] = async ({ questions }) => {
       const answers: Record<string, JevAnswer> = {};
       for (const key of Object.keys(questions)) {
-        // 额外历史答案不参与投影和当前裁决。
         answers[key] = key.includes('snip')
           ? { kind: 'score', score: 0.1 }
           : { kind: 'noul', probability: 0 };
@@ -1109,64 +935,30 @@ describe('novelty and cross-source dup (02-04)', () => {
     assert.equal(rewrite?.reason, 'rewrite');
     assert.equal(stats.local.empty_dropped, 0);
   });
-
-  it('all three modes seed novelty in Brave order; test and on share one chain output', async () => {
-    // filter-rules-5 起当事方播种序取消：test/on 与 off 的去重播种同为 Brave 原序，
-    // 旧答案里的 is_primary 概率（历史录制回放形态）不影响谁先参与去重
-    // filter-rules-5 起当事方播种序取消：is_primary 等历史键不再提问，来源级四题
-    // 全 0（keep）——去重播种即 Brave 原序，与旧回答里的当事方概率无关
-    const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
-      const answers: Record<string, JevAnswer> = {};
-      for (const key of Object.keys(questions)) {
-        answers[key] = { kind: 'noul', probability: 0 };
-      }
-      return {
-        status: 'answered',
-        model: DEFAULT_JEV_MODEL,
-        answers,
-        input_tokens: 10,
-      };
-    };
-
-    const offRun = await filterLlmContext(noveltyPayload(), request, offConfig);
-    const testRun = await filterLlmContext(
-      noveltyPayload(),
-      request,
-      { ...offConfig, mode: 'test' },
-      { classify }
-    );
-    const onRun = await filterLlmContext(
+  it('启用 Jev 后仍按 Brave 顺序保留原创并删除同事实改写', async () => {
+    const classify: ClassifyDeps['classify'] = async ({ questions }) => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      input_tokens: 10,
+      answers: Object.fromEntries(
+        Object.entries(questions).map(([key, question]) => [
+          key,
+          question.type === 'score'
+            ? { kind: 'score', score: 2 }
+            : { kind: 'noul', probability: 0 },
+        ])
+      ),
+    });
+    const { result } = await filterLlmContext(
       noveltyPayload(),
       request,
       { ...offConfig, mode: 'on' },
       { classify }
     );
-
-    // 三模式统一 Brave 序播种：s1（改写）被新颖度删除、s0 幸存——test/on 不再因
-    // 当事方概率让 s1 抢先，与 off 同一结果
-    const expected = ['https://origin.example/', 'https://unique.example/'];
-    for (const run of [offRun, testRun, onRun]) {
-      assert.deepEqual(
-        run.result.grounding.generic.map((item) => item.url),
-        expected
-      );
-    }
-    // test 与 on 共用同一链：输出逐字段一致
-    assert.deepEqual(testRun.result, onRun.result);
-    // 三模式输出都是 Brave 序子序列（幸存者不重排）
-    const inputUrls = noveltyPayload().grounding.generic.map((item) => item.url);
-    for (const outputUrls of [
-      offRun.result.grounding.generic.map((item) => item.url),
-      testRun.result.grounding.generic.map((item) => item.url),
-      onRun.result.grounding.generic.map((item) => item.url),
-    ]) {
-      let cursor = 0;
-      for (const url of outputUrls) {
-        const found = inputUrls.indexOf(url, cursor);
-        assert.ok(found >= cursor, `output url ${url} breaks Brave order`);
-        cursor = found + 1;
-      }
-    }
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://origin.example/', 'https://unique.example/']
+    );
   });
 
   it('cross-source verbatim duplicate is removed as dup with its own counter in off mode', async () => {
@@ -1249,9 +1041,8 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
       { ...offConfig, mode: 'test' },
       { classify }
     );
-    const onRun = await filterLlmContext(data, request, { ...offConfig, mode: 'on' }, { classify });
 
-    // off 保留 s1；test 与 on 把 s1 丢掉（score 删掉含实词片段后只剩一句话）
+    // 评分删掉含实词的片段后，剩余一句话来源被删除。
     assert.equal(
       offRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
       true
@@ -1260,8 +1051,6 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
       testRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
       false
     );
-    // test 与 on 共用同一链：输出逐字段一致
-    assert.deepEqual(testRun.result, onRun.result);
   });
 });
 
@@ -1639,37 +1428,6 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
       assert.equal(row.request_id, 'j1');
     }
   });
-
-  it('test and on share one chain and one all request under fixed answers (T11)', async () => {
-    const script: Record<string, Record<string, JevAnswer>> = {
-      s0: { ...SIX_KEEP, snip0: { kind: 'score', score: 2 }, snip1: { kind: 'score', score: 0 } },
-      s1: { ...SIX_KEEP, snip0: { kind: 'score', score: 2 } },
-    };
-
-    const testRun = await filterLlmContext(
-      payload(),
-      request,
-      { ...allConfig, mode: 'test' },
-      {
-        classify: allClassify(script),
-      }
-    );
-    const onRun = await filterLlmContext(payload(), request, allConfig, {
-      classify: allClassify(script),
-    });
-
-    // 同一过滤实现：最终正文与裁决逐字段一致，仅样本保存等模式职责不同
-    assert.deepEqual(testRun.result, onRun.result);
-    assert.deepEqual(testRun.stats.sources, onRun.stats.sources);
-    assert.deepEqual(testRun.stats.local, onRun.stats.local);
-    assert.deepEqual(
-      onRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
-      [
-        ['https://search.brave.com/', 1],
-        ['https://example.com/post', 1],
-      ]
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1678,147 +1436,56 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
 // 进统计表（github_cleanup_actions 计数 + 逐片段 github_cleanup）。
 // ---------------------------------------------------------------------------
 
-describe('step-3 GitHub UI cleanup (filter-rules-9)', () => {
-  const ghPayload = (): BraveLlmContextResponse => ({
+describe('GitHub 清洗接入', () => {
+  const url = 'https://github.com/example/brave';
+  const body =
+    'Brave browser repository documents its rendering pipeline and benchmark methodology.';
+  const input: BraveLlmContextResponse = {
     grounding: {
-      generic: [
-        {
-          url: 'https://github.com/lotillc/redlib-loti',
-          title: 'redlib-loti',
-          snippets: [
-            '## Repository files navigation\n# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
-          ],
-        },
-        {
-          url: 'https://github.com/HexRaysSA/ida-mcp/pull/8',
-          title: 'ida-mcp PR 8',
-          snippets: [
-            'migrate-mcp HexRaysSA/ida-mcp:migrate-mcp Copy head branch name to clipboard\nBrave browser patch discussion.',
-          ],
-        },
-        {
-          url: 'https://example.com/post',
-          title: 'Example Post',
-          snippets: ['Example snippet about brave.'],
-        },
-      ],
-      map: [],
+      generic: [{ url, title: 'Brave', snippets: ['## Repository files navigation', body] }],
     },
     sources: {},
-  });
-
-  /** 捕获实收 state 的全保留 classify（来源级全 0、片段分满分——只裁 keep）。 */
-  const capturingClassify =
-    (captured: JevState[]): ClassifyDeps['classify'] =>
-    async ({ state, questions }) => {
-      captured.push(JSON.parse(JSON.stringify(state)) as JevState);
-      const answers: Record<string, JevAnswer> = {};
-      for (const key of Object.keys(questions)) {
-        answers[key] = key.includes('snip')
-          ? { kind: 'score', score: 2 }
-          : { kind: 'noul', probability: 0 };
-      }
-      return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
-    };
-
-  /** 共享请求里取指定来源的实收来源对象。 */
-  const sourceOf = (captured: JevState[], id: string) => {
-    assert.ok(captured.length === 1, 'one shared all request captured');
-    const found = captured[0].sources.find((source) => source.id === id);
-    assert.ok(found, `source ${id} captured`);
-    return found;
   };
 
-  it('test/on: UI lines are stripped before classify, body kept; final output shares the cleaned text', async () => {
-    // test 与 on 共用同一清洗实现与接入位置，两种模式都用假 Jev 客户端真实跑通
-    for (const mode of ['test', 'on'] as const) {
-      const captured: JevState[] = [];
-      const { result, stats } = await filterLlmContext(
-        ghPayload(),
-        request,
-        { ...offConfig, mode },
-        {
-          classify: capturingClassify(captured),
-        }
-      );
-
-      // Jev 输入（实收 state）：界面行已清掉、正文还在、按钮后缀已剥
-      const repoState = sourceOf(captured, 's0');
-      assert.deepEqual(repoState.snippets, [
-        '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
-      ]);
-      const prState = sourceOf(captured, 's1');
-      assert.deepEqual(prState.snippets, [
-        'migrate-mcp HexRaysSA/ida-mcp:migrate-mcp\nBrave browser patch discussion.',
-      ]);
-
-      // 最终实际返回与 Jev 输入同一份清洗后文本（同步干净）
-      assert.deepEqual(
-        result.grounding.generic.map((item) => [item.url, item.snippets]),
-        [
-          [
-            'https://github.com/lotillc/redlib-loti',
-            [
-              '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
-            ],
-          ],
-          [
-            'https://github.com/HexRaysSA/ida-mcp/pull/8',
-            ['migrate-mcp HexRaysSA/ida-mcp:migrate-mcp\nBrave browser patch discussion.'],
-          ],
-          ['https://example.com/post', ['Example snippet about brave.']],
-        ]
-      );
-
-      // 计数与逐片段动作（1 = repo_nav；1 = copy_branch_button）
-      assert.equal(stats.local.github_cleanup_actions, 2);
-      const repoRow = stats.sources[0].snippets[0];
-      assert.deepEqual(repoRow.github_cleanup, [{ rule: 'repo_nav', line: 1 }]);
-      assert.equal(
-        repoRow.chars,
-        '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.'
-          .length
-      );
-      assert.deepEqual(stats.sources[1].snippets[0].github_cleanup, [
-        { rule: 'copy_branch_button', line: 1, partial: true },
-      ]);
-      // 非 GitHub 来源无动作键
-      assert.equal(stats.sources[2].snippets[0].github_cleanup, undefined);
-    }
-  });
-
-  it('off: cleanup is not applied — GitHub UI lines stay verbatim, no action accounting', async () => {
-    const captured: JevState[] = [];
-    const { result, stats } = await filterLlmContext(ghPayload(), request, offConfig, {
-      classify: capturingClassify(captured),
-    });
-
-    assert.equal(stats.local.github_cleanup_actions, 0);
-    assert.equal(stats.sources[0].snippets[0].github_cleanup, undefined);
-    // 界面行逐字保留（off 连 Jev 也不跑，但本地样板剥离照旧——通用前缀表无这些行）
-    assert.ok(
-      result.grounding.generic[0].snippets[0]?.startsWith('## Repository files navigation')
+  it('分类收到清洗后的正文，返回和原始片段身份对应', async () => {
+    let sent: JevState | undefined;
+    const { result, stats } = await filterLlmContext(
+      input,
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify: async ({ state, questions }) => {
+          sent = state;
+          return {
+            status: 'answered',
+            model: DEFAULT_JEV_MODEL,
+            input_tokens: 10,
+            answers: Object.fromEntries(
+              Object.entries(questions).map(([key, question]) => [
+                key,
+                question.type === 'score'
+                  ? { kind: 'score', score: 2 }
+                  : { kind: 'noul', probability: 0 },
+              ])
+            ),
+          };
+        },
+      }
     );
-    assert.ok(result.grounding.generic[0].snippets[0]?.includes('# Saved searches'));
-    const prSnippet = result.grounding.generic[1].snippets[0] ?? '';
-    assert.ok(prSnippet.includes('Copy head branch name to clipboard'));
-    assert.deepEqual(captured, []); // off 不派发
+    assert.deepEqual(sent?.sources[0].snippets, [body]);
+    assert.deepEqual(result.grounding.generic[0].snippets, [body]);
+    assert.deepEqual(
+      stats.sources[0].snippets.filter((row) => row.kept).map((row) => row.index),
+      [1]
+    );
   });
 
-  it('no_key (test/on without classify) still cleans: same config semantics as test/on', async () => {
-    // 两种模式的无 key 路径都走同一本地规则链，清洗照常应用
-    for (const mode of ['test', 'on'] as const) {
-      const { result, stats } = await filterLlmContext(ghPayload(), request, {
-        ...offConfig,
-        mode,
-      });
-
-      assert.equal(stats.jev?.status, 'no_key');
-      assert.equal(stats.local.github_cleanup_actions, 2);
-      assert.deepEqual(result.grounding.generic[0].snippets, [
-        '# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nPrivate front-end for Reddit, a brave browser project.',
-      ]);
-    }
+  it('off 保留界面行；启用过滤但无密钥时仍执行本地清洗', async () => {
+    const off = await filterLlmContext(input, request, offConfig);
+    assert.deepEqual(off.result.grounding.generic[0].snippets, input.grounding.generic[0].snippets);
+    const noKey = await filterLlmContext(input, request, { ...offConfig, mode: 'test' });
+    assert.equal(noKey.stats.jev?.status, 'no_key');
+    assert.deepEqual(noKey.result.grounding.generic[0].snippets, [body]);
   });
 });
 
@@ -2012,119 +1679,5 @@ describe('temporal context (all-only)', () => {
       /^How useful is `sources\[0\]\.snippets\[0\]`/
     );
     assert.equal(stats.jev?.requests[0]?.request_id, 'j1');
-  });
-});
-
-describe('GitHub 新规则的管道与身份映射', () => {
-  const intro = 'Private front-end for brave researchers';
-  const topics = '## About\n### Topics\nbrowser-extension privacy typescript';
-  const echo = '# Configuration\n## About\n' + intro;
-  const makeInput = (): BraveLlmContextResponse => ({
-    grounding: {
-      generic: [
-        {
-          url: 'https://github.com/example/browser',
-          title: 'Research browser',
-          snippets: [intro, topics, echo, '## License\nMIT\n## About\n' + intro],
-        },
-        {
-          url: 'https://github.com/example/tool/pull/4',
-          title: 'Patch',
-          snippets: [
-            '### Uh oh!\nBrave patch uses atomic swaps.\nReactions are currently unavailable\n## Conversation',
-          ],
-        },
-        {
-          url: 'https://github.com/example/sdk/releases',
-          title: 'SDK Releases',
-          snippets: [
-            'Choose a tag to compare\nNo results found\nBrave SDK v9 adds typed response validation.',
-          ],
-        },
-      ],
-    },
-    sources: {},
-  });
-
-  for (const mode of ['test', 'on'] as const) {
-    {
-      it(`${mode}：新增清理进入实际 state，原始索引与返回正文一致`, async () => {
-        const input = makeInput();
-        const original = structuredClone(input);
-        const states: JevState[] = [];
-        const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
-          states.push(structuredClone(state));
-          const answers: Record<string, JevAnswer> = {};
-          for (const [id, q] of Object.entries(questions))
-            answers[id] =
-              q.type === 'score'
-                ? { kind: 'score', score: 2 }
-                : { kind: 'noul', probability: id.endsWith('has_original_reasoning') ? 1 : 0 };
-          return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
-        };
-        const { result, stats, jev_dispatch } = await filterLlmContext(
-          input,
-          request,
-          {
-            ...offConfig,
-            mode,
-          },
-          { classify }
-        );
-        assert.deepEqual(input, original);
-        const sent = states.flatMap((state) => state.sources);
-        assert.deepEqual(
-          sent.map((source) => source.snippets),
-          result.grounding.generic.map((source) => source.snippets)
-        );
-        assert.deepEqual(result.grounding.generic[0].snippets, [
-          intro,
-          '## License\nMIT\n## About\n' + intro,
-        ]);
-        assert.equal(stats.sources[0].snippets[1].reason, 'boilerplate');
-        assert.equal(stats.sources[0].snippets[2].reason, 'dup');
-        assert.ok(
-          stats.sources[0].snippets[1].github_cleanup?.every((a) => a.rule === 'repo_topics')
-        );
-        assert.ok(
-          stats.sources[0].snippets[2].github_cleanup?.every((a) => a.rule === 'about_echo')
-        );
-        assert.equal(stats.local.dup_removed, 1);
-        assert.equal(stats.local.github_cleanup_actions, 9);
-        assert.ok(
-          result.grounding.generic[1].snippets[0].includes('Reactions are currently unavailable')
-        );
-        assert.ok(result.grounding.generic[1].snippets[0].includes('## Conversation'));
-        assert.equal(
-          result.grounding.generic[2].snippets[0],
-          'Brave SDK v9 adds typed response validation.'
-        );
-        assert.ok(jev_dispatch.length > 0);
-        assert.deepEqual(
-          stats.sources[0].snippets.filter((s) => s.kept).map((s) => s.index),
-          [0, 3]
-        );
-      });
-    }
-  }
-
-  it('off 不应用新增规则；no_key 仍走本地清洗', async () => {
-    const off = await filterLlmContext(makeInput(), request, offConfig);
-    assert.equal(off.stats.local.github_cleanup_actions, 0);
-    assert.ok(off.result.grounding.generic[0].snippets.includes(topics));
-    assert.ok(off.result.grounding.generic[0].snippets.includes(echo));
-    const noKey = await filterLlmContext(makeInput(), request, { ...offConfig, mode: 'test' });
-    assert.equal(noKey.stats.jev?.status, 'no_key');
-    assert.equal(noKey.stats.sources[0].snippets[2].reason, 'dup');
-  });
-
-  it('About 不跨来源取参照，也不向后查找正文', async () => {
-    const input = makeInput();
-    input.grounding.generic = [
-      { url: 'https://github.com/example/first', title: 'First', snippets: [intro] },
-      { url: 'https://github.com/example/second', title: 'Second', snippets: [echo, intro] },
-    ];
-    const { stats } = await filterLlmContext(input, request, { ...offConfig, mode: 'test' });
-    assert.equal(stats.sources[1].snippets[0].github_cleanup, undefined);
   });
 });

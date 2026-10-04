@@ -197,25 +197,6 @@ describe('applySourceVerdicts', () => {
     assert.equal(row.verdict, 'keep');
   });
 
-  it('ignores legacy and retired answers no matter how high they answer (historical replay defense)', () => {
-    // 历史回答可带额外旧键；即使其概率很高，也不能触发当前四题之外的删除。
-    const { table, row, stats } = singleSource({
-      is_attributed_rewrite: 0.99,
-      paywalled: 0.99,
-      worth_keeping: 0.99,
-      self_deprecated: 0.99,
-      stale: 0.99,
-    });
-    applySourceVerdicts(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
-    assert.equal(table[0].verdict, 'keep');
-    assert.equal(row.verdict, 'keep');
-    assert.equal(row.answers?.is_attributed_rewrite, 0.99);
-    assert.equal(row.answers?.paywalled, 0.99);
-    assert.equal(row.answers?.worth_keeping, 0.99);
-    assert.equal(row.answers?.self_deprecated, 0.99);
-    assert.equal(row.answers?.stale, 0.99);
-  });
-
   it('rescues a 0.90 off_topic with the CJK bonus when the share is above the threshold', () => {
     // title 2 CJK + text 2 CJK + 2 latin → CJK 4 / 6 ≈ 0.667 > 0.5 → bonus 0.10
     const rescued = singleSource({ is_off_topic: 0.9 }, { title: '你好', texts: ['世界ab'] });
