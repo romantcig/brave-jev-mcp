@@ -184,7 +184,7 @@ const judgeCleanup = (
   // 比较页只剥完整的提交菜单后缀；SHA 是提交定位信息，保留其原始大小写。
   if (page.kind === 'compare') {
     const menu =
-      /(?:^|[ \t]+)Configuration menu Copy the full SHA ([a-fA-F0-9]{40}) View commit details Browse the repository at this point in the history[ \t]*$/;
+      /(?:^|[ \t]+)Configuration menu Copy the full SHA ([a-fA-F0-9]{7}|[a-fA-F0-9]{40}) View commit details Browse the repository at this point in the history[ \t]*$/;
     for (let index = 0; index < contents.length; index += 1) {
       if (guarded[index]) continue;
       const match = menu.exec(contents[index]);

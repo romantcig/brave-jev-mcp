@@ -3,6 +3,18 @@ import { describe, it } from 'node:test';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 
 describe('比较页菜单和 PR 加载占位清理', () => {
+  it('d3efa04b 日志：比较菜单使用七位短 SHA，保留提交事实与标识', () => {
+    const head = '1. remove hacks @joamatab joamatab committed Aug 11, 2023';
+    const text =
+      head +
+      ' Configuration menu Copy the full SHA b3193f7 View commit details Browse the repository at this point in the history';
+    const result = cleanGitHubBoilerplate(
+      text,
+      'https://github.com/gdsfactory/gdsfactory/compare/v7.2.1...v7.3.0'
+    );
+    assert.equal(result.text, head + ' b3193f7');
+    assert.deepEqual(result.actions, [{ rule: 'compare_commit_menu', line: 1, partial: true }]);
+  });
   const compare = 'https://github.com/team/project/compare/main...fix';
   const pull = 'https://github.com/team/project/pull/42';
   const sha = 'aB12'.repeat(10);
