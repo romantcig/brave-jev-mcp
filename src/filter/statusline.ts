@@ -1,10 +1,13 @@
 /**
  * 从最终统计生成单行英文摘要，供宿主作为第二个 text 块返回。
  * 来源按删除原因计数；片段只统计幸存来源内的删除，避免重复计算。
- * test/on 模式还提示保守保留但未完成 Jev 裁决的来源；无删除时不生成状态行。
+ * test/on 模式在出现 Jev 故障或未完成检查时报告结构化 [error] 标记；全通过且无删除时不生成状态行。
  */
 
-import type { FilterStats, SourceDropReason } from './types.js';
+import type { FilterStats, JevFailKind, SourceDropReason } from './types.js';
+
+/** 状态行识别的失败类型：per_source 的 fail_kind 加上熔断与无密钥。 */
+type StatusLineFailKind = JevFailKind | 'no_key' | 'circuit_breaker';
 
 /** 兼容旧 stale 记录时，intent 回显的最大长度。 */
 const INTENT_ECHO_MAX = 100;
@@ -42,16 +45,39 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
     }
   }
 
-  // 保留来源缺少回答、请求失败或来源裁决校验失败时，提示 Jev 未完成检查。
+  // 保留来源缺少回答、请求失败或来源裁决校验失败时，在状态行报告结构化 [error] 标记。
   // 收到可解析响应不等于取得有效裁决；off 模式不显示此提示。
   let unchecked = 0;
+  const failKinds = new Set<StatusLineFailKind>();
+  const failStatusMap = new Map<StatusLineFailKind, number>();
+
   if (stats.mode !== 'off') {
+    if (stats.jev?.status === 'no_key') {
+      failKinds.add('no_key');
+    }
+    if (stats.jev?.requests) {
+      for (const req of stats.jev.requests) {
+        if (req.fail_kind) {
+          const kind: StatusLineFailKind =
+            req.fail_kind === 'breaker_open' ? 'circuit_breaker' : req.fail_kind;
+          failKinds.add(kind);
+          if (req.http_status !== undefined && req.http_status !== 200) {
+            failStatusMap.set(kind, req.http_status);
+          }
+        }
+      }
+    }
     const bySrc = new Map((stats.jev?.per_source ?? []).map((row) => [row.src, row]));
     for (const source of stats.sources) {
       if (source.verdict !== 'keep') continue;
       const row = bySrc.get(`s${source.index}`);
       if (row === undefined || row.status !== 'answered' || row.fail_kind === 'validation') {
         unchecked += 1;
+        if (row?.status === 'breaker_open') {
+          failKinds.add('circuit_breaker');
+        } else if (row?.fail_kind !== undefined) {
+          failKinds.add(row.fail_kind);
+        }
       }
     }
   }
@@ -76,10 +102,85 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
   if (removedSnippets > 0) {
     parts.push(`${removedSnippets} ${plural(removedSnippets, 'snippet')} removed`);
   }
+
   if (unchecked > 0) {
-    parts.push(`${unchecked} ${plural(unchecked, 'source')} not checked by Jev (kept)`);
+    parts.push(formatFilterError(unchecked, failKinds, failStatusMap));
   }
+
   return `[filter] ${parts.join('; ')}`;
+}
+
+/** 格式化过滤失败报错信息为 [error] [内容] [报错数字] 格式。 */
+function formatFilterError(
+  unchecked: number,
+  failKinds: Set<StatusLineFailKind>,
+  failStatusMap: Map<StatusLineFailKind, number>
+): string {
+  const countDesc = `${unchecked} ${plural(unchecked, 'source')} unchecked`;
+  if (failKinds.size === 0) {
+    return `[error] [${countDesc}: filter check incomplete, raw sources kept] [500]`;
+  }
+
+  const PRIORITY: StatusLineFailKind[] = [
+    'no_key',
+    'auth',
+    'circuit_breaker',
+    'rate_limited',
+    'timeout',
+    'network',
+    'validation',
+  ];
+  let primaryKind: StatusLineFailKind | undefined;
+  for (const k of PRIORITY) {
+    if (failKinds.has(k)) {
+      primaryKind = k;
+      break;
+    }
+  }
+  if (!primaryKind) {
+    primaryKind = Array.from(failKinds)[0];
+  }
+
+  let reason = 'upstream error';
+  let defaultCode = 500;
+
+  switch (primaryKind) {
+    case 'rate_limited':
+      reason = 'rate limited';
+      defaultCode = 429;
+      break;
+    case 'timeout':
+      reason = 'timeout';
+      defaultCode = 408;
+      break;
+    case 'circuit_breaker':
+      reason = 'circuit breaker open';
+      defaultCode = 503;
+      break;
+    case 'no_key':
+      reason = 'missing API key';
+      defaultCode = 401;
+      break;
+    case 'auth':
+      reason = 'unauthorized';
+      defaultCode = 401;
+      break;
+    case 'validation':
+      reason = 'payload rejected';
+      defaultCode = 422;
+      break;
+    case 'network':
+      reason = 'upstream error';
+      defaultCode = 500;
+      break;
+    default:
+      reason = 'upstream error';
+      defaultCode = 500;
+      break;
+  }
+
+  const code = failStatusMap.get(primaryKind) ?? defaultCode;
+  return `[error] [${countDesc}: filter ${reason}, raw sources kept] [${code}]`;
 }
 
 /**

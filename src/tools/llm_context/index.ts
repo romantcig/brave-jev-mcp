@@ -83,7 +83,7 @@ const configFor = (): FilterConfig => {
 };
 
 // 跨请求共享分类器的并发与熔断状态，off 或缺密钥时不创建实例。
-// 缺密钥只告警一次；各次搜索仍记录 no_key，并提示未完成 Jev 检查。
+// 缺密钥只告警一次；各次搜索仍记录 no_key，并在状态行报告 [error] 错误。
 let jevClassifier: ClassifyDeps | undefined;
 let noKeyWarned = false;
 

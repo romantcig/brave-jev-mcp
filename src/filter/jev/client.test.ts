@@ -1678,7 +1678,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
         });
       }) as typeof fetch;
       const slow = createJevClassifier(
-        { ...jevConfig, timeoutMs: 1000 },
+        { ...jevConfig, timeoutMs: 30 },
         { TYPESAFE_API_KEY: 'k' },
         { random: () => 0 }
       );

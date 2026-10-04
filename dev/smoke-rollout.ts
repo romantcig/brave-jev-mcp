@@ -577,8 +577,8 @@ const runStubbedMode = async (runMode: SmokeMode): Promise<ModeResult> => {
       );
     }
     assert.ok(
-      !statusLine.includes('not checked by Jev'),
-      `status line: the unchecked segment must not appear in ${runMode} (default fixture is fully answered) — ${statusLine}`
+      !statusLine.includes('[error]'),
+      `status line: the error segment must not appear in ${runMode} (default fixture is fully answered) — ${statusLine}`
     );
     assert.equal(
       Object.hasOwn(payload, 'output'),
