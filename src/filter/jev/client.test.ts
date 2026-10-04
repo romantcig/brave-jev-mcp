@@ -10,7 +10,6 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseFilterConfigObject } from '../config.js';
 import { filterLlmContext } from '../pipeline.js';
-import { estimateTokens } from '../tokens.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
@@ -959,10 +958,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
         },
       ],
     };
-    assert.ok(
-      estimateTokens(JSON.stringify(bigState)) > 64_000,
-      '仅 state 已超过旧 64K token 限额'
-    );
+    assert.ok(JSON.stringify(bigState).length > 80_000, '仅 state 已超过 80_000 字符');
     const bigQuestions = makeQuestions(bigState, 1);
     let capturedBody: string | undefined;
     let calls = 0;

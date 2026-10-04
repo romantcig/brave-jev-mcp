@@ -467,6 +467,23 @@ export type SourceStats = {
   snippets: SnippetStats[];
 };
 
+/** Brave 原始规模统计。 */
+export type BraveStats = {
+  n_sources: number;
+  n_snippets: number;
+  chars: number;
+  /** 宿主测得的 Brave 请求耗时，单位毫秒。 */
+  latency_ms?: number;
+};
+
+/** 过滤后输出规模统计。 */
+export type OutputStats = {
+  n_sources: number;
+  n_snippets: number;
+  chars: number;
+  status_line?: string;
+};
+
 /**
  * 状态行与 JSONL 共用的统计对象。off 的 jev 为 null，test/on 由阶段 3 Jev 填充。
  * shadow_diff 仅兼容旧记录，当前恒为 null。
@@ -484,25 +501,11 @@ export type FilterStats = {
     /** Brave context_threshold_mode；请求未带时省略。 */
     context_threshold_mode?: string;
   };
-  brave: {
-    n_sources: number;
-    n_snippets: number;
-    chars: number;
-    /** 宿主测得的 Brave 请求耗时，单位毫秒。 */
-    latency_ms?: number;
-    /** 全部原始片段逐段估算后合计取整，与输出规模使用相同口径。 */
-    est_tokens: number;
-  };
+  brave: BraveStats;
   local: LocalStats;
   sources: SourceStats[];
   jev: JevStats | null;
-  output: {
-    n_sources: number;
-    n_snippets: number;
-    chars: number;
-    est_tokens: number;
-    status_line?: string;
-  };
+  output: OutputStats;
   /** 旧影子差异，读取语义见 ShadowDiff；当前恒为 null。 */
   shadow_diff: ShadowDiff | null;
   /** 旧影子链删除证据，当前省略此键；旧记录缺键表示证据不足。 */

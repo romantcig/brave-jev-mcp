@@ -12,14 +12,14 @@ const makeSource = (
 });
 
 describe('summarizeOutput', () => {
-  it('ceils the unrounded estimate sum (2.1 + 2.1 → 5, not a rounding to 4)', () => {
+  it('counts surviving sources and snippets', () => {
     const table = [makeSource(['abcd', 'efgh'], [true, false]), makeSource(['ijkl'], [true])];
 
-    const out = summarizeOutput(table, () => 2.1);
+    const out = summarizeOutput(table);
 
-    assert.equal(out.est_tokens, 5); // Math.ceil(4.2)；Math.round(4.2) 会给 4
     assert.equal(out.n_sources, 2);
     assert.equal(out.n_snippets, 2);
+    assert.equal(out.chars, 8);
   });
 
   it('sums chars over surviving snippets only, as String.length', () => {
@@ -28,16 +28,16 @@ describe('summarizeOutput', () => {
       makeSource(['ghijkl'], [true]),
     ];
 
-    const out = summarizeOutput(table, (text) => text.length * 0.5);
+    const out = summarizeOutput(table);
 
-    assert.deepEqual(out, { n_sources: 2, n_snippets: 2, chars: 10, est_tokens: 5 });
+    assert.deepEqual(out, { n_sources: 2, n_snippets: 2, chars: 10 });
   });
 
   it('skips dropped sources entirely', () => {
     const table = [makeSource(['abcd'], [true], 'keep'), makeSource(['efgh'], [true], 'drop')];
 
-    const out = summarizeOutput(table, (text) => text.length);
+    const out = summarizeOutput(table);
 
-    assert.deepEqual(out, { n_sources: 1, n_snippets: 1, chars: 4, est_tokens: 4 });
+    assert.deepEqual(out, { n_sources: 1, n_snippets: 1, chars: 4 });
   });
 });

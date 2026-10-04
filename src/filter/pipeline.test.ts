@@ -8,7 +8,6 @@ import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import { createNoKeyJevStats } from './stats.js';
-import { estimateTokens } from './tokens.js';
 import type {
   BraveLlmContextResponse,
   ClassifyDeps,
@@ -339,12 +338,6 @@ describe('filterLlmContext', () => {
       n_sources: 2,
       n_snippets: 3,
       chars: data.grounding.generic.flatMap((item) => item.snippets).join('').length,
-      // 逐段估算再合计取整，不能先 join；拼接边界可能改变分词。
-      est_tokens: Math.ceil(
-        data.grounding.generic
-          .flatMap((item) => item.snippets)
-          .reduce((sum, text) => sum + estimateTokens(text), 0)
-      ),
     });
     assert.deepEqual(
       stats.sources.map((source) => [source.index, source.url, source.hostname]),
@@ -363,7 +356,6 @@ describe('filterLlmContext', () => {
     assert.equal(stats.output.n_sources, 2);
     assert.equal(stats.output.n_snippets, 3);
     assert.equal(stats.output.chars, stats.brave.chars);
-    assert.ok(stats.output.est_tokens > 0);
     // 统计表不含片段正文
     assert.doesNotMatch(JSON.stringify(stats), /privacy-focused/);
   });

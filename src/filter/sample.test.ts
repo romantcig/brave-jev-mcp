@@ -152,11 +152,11 @@ const runPipeline = async (config: FilterConfig): Promise<FilterResult> =>
 const emptyStats = (mode: FilterStats['mode']): FilterStats => ({
   mode,
   request: { query: QUERY, intent: INTENT, max_urls: 20, max_tokens: 8192 },
-  brave: { n_sources: 0, n_snippets: 0, chars: 0, est_tokens: 0 },
+  brave: { n_sources: 0, n_snippets: 0, chars: 0 },
   local: { ...zeroLocal },
   sources: [],
   jev: null,
-  output: { n_sources: 0, n_snippets: 0, chars: 0, est_tokens: 0 },
+  output: { n_sources: 0, n_snippets: 0, chars: 0 },
   shadow_diff: null,
 });
 

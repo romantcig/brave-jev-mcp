@@ -347,7 +347,7 @@ describe(`${name} (status line and JSONL log)`, () => {
     assert.equal(Object.hasOwn(withoutRecord.request, 'context_threshold_mode'), false);
   });
 
-  it('books brave.latency_ms and the pre-filter est_tokens into the record', async () => {
+  it('books brave.latency_ms and the pre-filter chars into the record', async () => {
     const logDir = newLogDir();
     useFilterConfig({ mode: 'off', log_dir: logDir });
 
@@ -366,16 +366,16 @@ describe(`${name} (status line and JSONL log)`, () => {
     const lines = readFileSync(join(logDir, files[0]), 'utf8').split('\n').filter(Boolean);
     assert.equal(lines.length, 1);
     const record = JSON.parse(lines[0]) as {
-      brave: Record<string, unknown> & { est_tokens: number };
-      output: { est_tokens: number };
+      brave: Record<string, unknown> & { chars: number };
+      output: { chars: number };
     };
     // 成功路径的 Brave 耗时应由宿主回填且非负。
     assert.equal(Object.hasOwn(record.brave, 'latency_ms'), true);
     assert.equal(typeof record.brave.latency_ms, 'number');
     assert.ok((record.brave.latency_ms as number) >= 0);
-    // 核对过滤前后的规模估算使用相同口径。
-    assert.ok(record.brave.est_tokens > 0);
-    assert.ok(record.brave.est_tokens >= record.output.est_tokens);
+    // 核对过滤前后的规模统计。
+    assert.ok(record.brave.chars > 0);
+    assert.ok(record.brave.chars >= record.output.chars);
   });
 });
 

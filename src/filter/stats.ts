@@ -1,6 +1,5 @@
 /** 每次调用新建统计对象，隔离请求间状态；统计不存片段正文。 */
 
-import { estimateTokens } from './tokens.js';
 import type {
   BraveLlmContextResponse,
   FilterMode,
@@ -83,8 +82,6 @@ export function createFilterStats(
 
   let braveSnippets = 0;
   let braveChars = 0;
-  // 原始规模与输出规模共用 estimateTokens，先累加全部片段再向上取整。
-  let braveTokenSum = 0;
 
   const sources: SourceStats[] = items.map((item, index) => {
     const url = typeof item?.url === 'string' ? item.url : '';
@@ -98,7 +95,6 @@ export function createFilterStats(
       const chars = typeof text === 'string' ? text.length : 0;
       braveSnippets += 1;
       braveChars += chars;
-      braveTokenSum += typeof text === 'string' ? estimateTokens(text) : 0;
       return { index: snippetIndex, kept: true, chars };
     });
 
@@ -119,14 +115,13 @@ export function createFilterStats(
       n_sources: items.length,
       n_snippets: braveSnippets,
       chars: braveChars,
-      est_tokens: Math.ceil(braveTokenSum),
     },
     // novelty 另行新建：浅拷贝载体不共享 zeroLocal 的空数组引用（工厂每次调用
     // 新建对象的不变量；applyNovelty 的明细写回是替换式，双保险）
     local: { ...zeroLocal, novelty: [] },
     sources,
     jev: null,
-    output: { n_sources: 0, n_snippets: 0, chars: 0, est_tokens: 0 },
+    output: { n_sources: 0, n_snippets: 0, chars: 0 },
     shadow_diff: null,
   };
 }
@@ -142,16 +137,16 @@ export type SummarizeSourceRow = {
 };
 
 /**
- * 输出规模只统计幸存内容；chars 使用 String.length，est_tokens 将估算总和向上取整。
+ * 输出规模只统计幸存内容；chars 使用 String.length。
  */
-export function summarizeOutput(
-  table: SummarizeSourceRow[],
-  estimate: (text: string) => number
-): { n_sources: number; n_snippets: number; chars: number; est_tokens: number } {
+export function summarizeOutput(table: SummarizeSourceRow[]): {
+  n_sources: number;
+  n_snippets: number;
+  chars: number;
+} {
   let nSources = 0;
   let nSnippets = 0;
   let chars = 0;
-  let estimateSum = 0;
 
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
@@ -160,9 +155,8 @@ export function summarizeOutput(
       if (!snippet.kept) continue;
       nSnippets += 1;
       chars += snippet.text.length;
-      estimateSum += estimate(snippet.text);
     }
   }
 
-  return { n_sources: nSources, n_snippets: nSnippets, chars, est_tokens: Math.ceil(estimateSum) };
+  return { n_sources: nSources, n_snippets: nSnippets, chars };
 }

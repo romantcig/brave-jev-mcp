@@ -15,7 +15,6 @@ import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { applyNovelty, type JevSideDeletionFlags } from './jev/novelty.js';
 import { buildStatusLine } from './statusline.js';
 import { contentTerms, shingles, tokenize } from './tokenize.js';
-import { estimateTokens } from './tokens.js';
 import {
   BRAVE_DEFAULT_MAX_TOKENS,
   BRAVE_DEFAULT_MAX_URLS,
@@ -329,12 +328,11 @@ const projectSource = (source: WorkSource): SourceStats => {
 
 /**
  * 管道跑完后把工作表的最终裁决与输出规模写回统计对象。
- * `output.*` 由 summarizeOutput 从工作表算（幸存片段 `String.length` 之和、
- * 未取整估算和的 `Math.ceil`）。
+ * `output.*` 由 summarizeOutput 从工作表算（幸存片段 `String.length` 之和）。
  */
 const finalizeStats = (stats: FilterStats, table: WorkSource[]): void => {
   stats.sources = table.map(projectSource);
-  stats.output = summarizeOutput(table, estimateTokens);
+  stats.output = summarizeOutput(table);
 };
 
 /** 把适配行传入的请求归一成统计表的 `request` 摘要，上限缺省填 Brave 默认值。 */
