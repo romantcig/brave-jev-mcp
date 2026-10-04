@@ -22,6 +22,7 @@ describe('zeroLocal', () => {
       empty_dropped: 0,
       cross_source_dup_removed: 0,
       github_cleanup_actions: 0,
+      x_cleanup_actions: 0,
     });
     assert.equal('novelty_removed' in zeroLocal, false);
     assert.equal('novelty' in zeroLocal, false);

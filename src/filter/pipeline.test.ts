@@ -1487,6 +1487,82 @@ describe('GitHub 清洗接入', () => {
   });
 });
 
+describe('X (Twitter) 清洗接入', () => {
+  const url = 'https://x.com/CarterWChurch/status/2105167567706816690';
+  const headingSnip = '## Related Trending Stories on X\nBreaking news headline';
+  const showMoreSnip = 'From one prompt and one image, Astra deciphered the cipher. Show more';
+  const authSidebar = [
+    '## Log in or sign up for X',
+    '',
+    '## Relevant people',
+    'Avatar',
+    'Carter Church@CarterWChurch Follow',
+    'staff ai engineer',
+  ].join('\n');
+
+  const input: BraveLlmContextResponse = {
+    grounding: {
+      generic: [
+        {
+          url,
+          title: 'Carter Church on X',
+          snippets: [headingSnip, showMoreSnip, authSidebar],
+        },
+      ],
+    },
+    sources: {},
+  };
+
+  it('保留行内 Show more、剥离界面标题并保留人物资料，明细进统计表', async () => {
+    let sent: JevState | undefined;
+    const { result, stats } = await filterLlmContext(
+      input,
+      request,
+      { ...offConfig, mode: 'on' },
+      {
+        classify: async ({ state, questions }) => {
+          sent = state;
+          return {
+            status: 'answered',
+            model: DEFAULT_JEV_MODEL,
+            input_tokens: 10,
+            answers: Object.fromEntries(
+              Object.entries(questions).map(([key, question]) => [
+                key,
+                question.type === 'score'
+                  ? { kind: 'score', score: 2 }
+                  : { kind: 'noul', probability: 0 },
+              ])
+            ),
+          };
+        },
+      }
+    );
+
+    const expectedSnippets = [
+      'Breaking news headline',
+      showMoreSnip,
+      'Avatar\nCarter Church@CarterWChurch Follow\nstaff ai engineer',
+    ];
+    assert.deepEqual(sent?.sources[0].snippets, expectedSnippets);
+    assert.deepEqual(result.grounding.generic[0].snippets, expectedSnippets);
+
+    // 统计表记录平台清洗动作，人物资料仍保留供后续评分。
+    assert.ok(stats.local.x_cleanup_actions > 0);
+    const snipStats = stats.sources[0].snippets;
+    assert.equal(snipStats[0].kept, true);
+    assert.equal(snipStats[1].kept, true);
+    assert.equal(snipStats[2].kept, true);
+    assert.equal(stats.local.x_cleanup_actions, 3);
+    assert.ok(snipStats[2].x_cleanup !== undefined);
+  });
+
+  it('off 模式不应用 X 清洗', async () => {
+    const off = await filterLlmContext(input, request, offConfig);
+    assert.deepEqual(off.result.grounding.generic[0].snippets, input.grounding.generic[0].snippets);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 时间上下文端到端（all-only）：检索时间归一进 state、逐来源 brave_page_date、
 // 归并冲突置 null、非法检索时间省略；单候选同样走全量形状（无特殊模板）。

@@ -10,6 +10,7 @@ import { BOILERPLATE_PREFIXES } from './markers.js';
 import { isEmptySource, isOneLiner } from './nonArticle.js';
 import { stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
+import { cleanXBoilerplate } from './xCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
 import { applyCrossSourceDedup } from './dedup.js';
@@ -35,6 +36,7 @@ import type {
   FilterResult,
   FilterStats,
   GitHubCleanupAction,
+  XCleanupAction,
   JevCandidate,
   JevCandidateDetailed,
   JevDispatchRecord,
@@ -63,6 +65,8 @@ type WorkSnippet = {
   reason?: SnippetRemovalReason;
   /** 阶段 2 GitHub 界面清洗的动作明细（test/on 生效）；投影到统计表 github_cleanup */
   githubCleanup?: GitHubCleanupAction[];
+  /** 阶段 2 X (Twitter) 界面清洗的动作明细（test/on 生效）；投影到统计表 x_cleanup */
+  xCleanup?: XCleanupAction[];
 };
 
 /** 工作表里的一个来源。`url` 永远是 Brave 原始 URL。 */
@@ -148,11 +152,15 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
 
 /**
  * 阶段 2 固定顺序：样板行剥离 → 页内逐字去重。
- * 样板剥离内部依次为 GitHub 清洗、前缀行、标题重复行、引用块；GitHub 子步仅 test/on 应用。
+ * 样板剥离内部依次为 GitHub / X 清洗、前缀行、标题重复行、引用块；平台清洗仅 test/on 应用。
  * 去重只与同来源内已保留片段比较，被删片段仍留表供统计。
  * 空片段和样板删除合计入 snippets_prefiltered，重复删除单独计数。
  */
-const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub: boolean): void => {
+const prefilterSnippets = (
+  table: WorkSource[],
+  stats: FilterStats,
+  cleanPlatform: boolean
+): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
 
@@ -172,7 +180,7 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
       // GitHub 清洗：样板行剥离阶段内的专门子步，
       // 位于通用前缀/标题/引用剥离之前——先剥平台专属界面行，剩余文本再走通用
       // 子步。清空的 About 回声记 dup，其余记 boilerplate；动作明细进统计表。
-      if (cleanGitHub) {
+      if (cleanPlatform) {
         const github = cleanGitHubBoilerplate(snippet.text, source.url, survivorTexts);
         if (github.actions.length > 0) {
           snippet.githubCleanup = github.actions;
@@ -186,6 +194,19 @@ const prefilterSnippets = (table: WorkSource[], stats: FilterStats, cleanGitHub:
             continue;
           }
           snippet.text = github.text;
+        }
+
+        const xClean = cleanXBoilerplate(snippet.text, source.url);
+        if (xClean.actions.length > 0) {
+          snippet.xCleanup = xClean.actions;
+          stats.local.x_cleanup_actions += xClean.actions.length;
+          if (xClean.text === '') {
+            snippet.kept = false;
+            snippet.reason = 'boilerplate';
+            stats.local.snippets_prefiltered += 1;
+            continue;
+          }
+          snippet.text = xClean.text;
         }
       }
 
@@ -311,6 +332,7 @@ const projectSource = (source: WorkSource): SourceStats => {
     kept: snippet.kept,
     ...(snippet.reason !== undefined ? { reason: snippet.reason } : {}),
     ...(snippet.githubCleanup !== undefined ? { github_cleanup: snippet.githubCleanup } : {}),
+    ...(snippet.xCleanup !== undefined ? { x_cleanup: snippet.xCleanup } : {}),
     chars: snippet.text.length,
   }));
 

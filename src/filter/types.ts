@@ -364,6 +364,8 @@ export type LocalStats = {
   cross_source_dup_removed: number;
   /** GitHub 清洗动作总数，包含清空片段的动作；与逐片段 github_cleanup 明细对应。 */
   github_cleanup_actions: number;
+  /** X 清洗动作总数，包含清空片段的动作；与逐片段 x_cleanup 明细对应。 */
+  x_cleanup_actions: number;
 };
 
 /**
@@ -397,6 +399,26 @@ export type GitHubCleanupResult = {
   actions: GitHubCleanupAction[];
 };
 
+/**
+ * X (Twitter) 清洗动作规则名。
+ */
+export type XCleanupRule = 'show_more_button' | 'related_trending_heading' | 'auth_sidebar_card';
+
+/**
+ * X 清洗动作，仅记录规则与进入清洗时的片段行号，不含正文。
+ */
+export type XCleanupAction = {
+  rule: XCleanupRule;
+  /** 命中行号（1 起） */
+  line: number;
+};
+
+/** cleanXBoilerplate 的返回：清洗后文本（未命中为原文本）与逐动作清单。 */
+export type XCleanupResult = {
+  text: string;
+  actions: XCleanupAction[];
+};
+
 /** 逐片段裁决统计，仅含身份、标记与字符数。 */
 export type SnippetStats = {
   index: number;
@@ -409,6 +431,10 @@ export type SnippetStats = {
    * 可选字段，读取旧记录时允许缺失。
    */
   github_cleanup?: GitHubCleanupAction[];
+  /**
+   * test/on 的 X 清洗明细；整片清空或局部剥离均可带此键。
+   */
+  x_cleanup?: XCleanupAction[];
   chars: number;
 };
 
