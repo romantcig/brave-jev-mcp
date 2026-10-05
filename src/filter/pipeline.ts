@@ -641,7 +641,8 @@ const runJevStage = async (
           ...dispatchBase(candidate),
           request_id: record.request_id,
           array_index: entry.array_index,
-          dispatched: outcome.dispatch !== undefined,
+          // 生产分类器只要 answered 必然已派发，恒记 true
+          dispatched: true,
           answered: true,
           snippet_score_validity: projected.scoreValidity,
           snippet_scores_received: projected.scoresReceived,
