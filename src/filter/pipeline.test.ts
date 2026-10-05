@@ -278,6 +278,25 @@ describe('filterLlmContext', () => {
     assert.equal(stats.sources[2].reason, 'empty');
   });
 
+  it('counts a mainEntity text echo as jsonld_dropped and removes it from output', async () => {
+    const data = payload();
+    // 仿 dev.to 站点模板：mainEntity 为对象，text 是整篇文章正文回声
+    data.grounding.generic[0]!.snippets.push(
+      JSON.stringify({
+        mainEntity: { text: '<h2><a name="why">Why look for alternatives</a></h2>\n<p>Review notes.</p>' },
+      })
+    );
+
+    const { result, stats } = await filterLlmContext(data, request, offConfig);
+
+    assert.equal(stats.local.jsonld_dropped, 1);
+    assert.equal(stats.sources[0]?.snippets[2]?.reason, 'jsonld_meta');
+    assert.deepEqual(result.grounding.generic[0]?.snippets, [
+      'Brave is a privacy-focused browser and search engine.',
+      'Second snippet about Brave.',
+    ]);
+  });
+
   it('drops a one-liner source that only shares intent terms during step 8', async () => {
     const data = payload();
     data.grounding.generic.push({
