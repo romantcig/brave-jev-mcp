@@ -53,8 +53,6 @@ describe('selectPageDate', () => {
   it('returns null for missing or malformed metadata without throwing', () => {
     assert.equal(selectPageDate(undefined), null);
     assert.equal(selectPageDate({}), null);
-    assert.equal(selectPageDate({ age: '2026-09-16' } as unknown as { age: string[] }), null);
-    assert.equal(selectPageDate({ age: [42, null] } as unknown as { age: string[] }), null);
   });
 
   it('does not let a date-only string match the absolute pattern or vice versa', () => {

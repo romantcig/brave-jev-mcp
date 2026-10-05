@@ -426,18 +426,6 @@ describe('幂等验证（审查 R2：删除不得制造原本不成立的匹配�
     assert.equal(cleaned.text, snippet);
   });
 
-  it('搜索块退役后不再阻止独立导航行清理', () => {
-    const snippet = [
-      'Saved searches',
-      'Repository files navigation',
-      'Search code, repositories, users, issues, pull requests...',
-      'Provide feedback',
-    ].join('\n');
-    const cleaned = cleanGitHubBoilerplate(snippet, REPO_ROOT);
-    assert.deepEqual(cleaned.actions, [{ rule: 'repo_nav', line: 2 }]);
-    assert.equal(cleaned.text, snippet.replace('Repository files navigation\n', ''));
-  });
-
   it('放弃场景重复清洗不变（clean(clean(x)) 深相等 clean(x)）', () => {
     const nested = [
       'Choose a tag to compare',

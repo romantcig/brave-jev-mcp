@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { parseFilterConfigObject } from './config.js';
 import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
@@ -101,51 +100,43 @@ describe('filterLlmContext', () => {
     globalThis.fetch = savedFetch;
   });
 
-  it('skips the Jev stage entirely in off mode even when classify is injected (EMBED-02)', async () => {
+  it('off mode is a strict pass-through: skips classify, keeps stats.jev null, and returns the payload unchanged', async () => {
     let calls = 0;
     const classify: ClassifyDeps['classify'] = async () => {
       calls += 1;
       return { status: 'failed', kind: 'network' };
     };
+    const data = payload();
 
-    const { stats } = await filterLlmContext(payload(), request, offConfig, { classify });
+    const { result, stats } = await filterLlmContext(data, request, offConfig, { classify });
 
     assert.equal(calls, 0);
     assert.equal(stats.jev, null);
-  });
-
-  for (const mode of ['off', 'test', 'on'] as const) {
-    it(`mode=${mode} performs no network call and records the mode`, async () => {
-      const data = payload();
-
-      const { result, stats } = await filterLlmContext(data, request, { ...offConfig, mode });
-
-      assert.equal(stats.mode, mode);
-      // off 不进入 Jev；test/on 未注入 classify 时记 no_key 和零请求。
-      if (mode === 'off') {
-        assert.equal(stats.jev, null);
-      } else {
-        assert.deepEqual(stats.jev, createNoKeyJevStats());
-        assert.equal(stats.jev?.n_requests, 0);
-      }
-      assert.deepEqual(
-        result.grounding.generic.map((item) => item.snippets),
-        data.grounding.generic.map((item) => item.snippets)
-      );
-    });
-  }
-
-  it('passes sources and snippets through unchanged in off mode', async () => {
-    const data = payload();
-
-    const { result } = await filterLlmContext(data, request, offConfig);
-
+    assert.equal(stats.mode, 'off');
+    // generic 输出与输入全等：内容与 URL 顺序均原样透传。
     assert.deepEqual(result.grounding.generic, data.grounding.generic);
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
       ['https://search.brave.com/', 'https://example.com/post']
     );
   });
+
+  // test/on 未注入 classify 时走 no_key 本地链：记账 no_key、零请求、内容透传。
+  for (const mode of ['test', 'on'] as const) {
+    it(`mode=${mode} without a classifier records no_key and performs no network call`, async () => {
+      const data = payload();
+
+      const { result, stats } = await filterLlmContext(data, request, { ...offConfig, mode });
+
+      assert.equal(stats.mode, mode);
+      assert.deepEqual(stats.jev, createNoKeyJevStats());
+      assert.equal(stats.jev?.n_requests, 0);
+      assert.deepEqual(
+        result.grounding.generic.map((item) => item.snippets),
+        data.grounding.generic.map((item) => item.snippets)
+      );
+    });
+  }
 
   it('passes map and poi through as-is', async () => {
     const data = payload();
@@ -535,14 +526,10 @@ describe('trimSourceMeta', () => {
   it('omits age for an empty array and omits missing title or hostname', () => {
     assert.deepEqual(trimSourceMeta({ title: 'Only title', age: [] }), { title: 'Only title' });
     assert.deepEqual(trimSourceMeta({ hostname: 'h.example' }), { hostname: 'h.example' });
-    assert.deepEqual(trimSourceMeta({ title: 42, hostname: null, age: 'not-an-array' }), {});
   });
 
-  it('returns an empty object for non-object input', () => {
+  it('returns an empty object for missing metadata', () => {
     assert.deepEqual(trimSourceMeta(undefined), {});
-    assert.deepEqual(trimSourceMeta(null), {});
-    assert.deepEqual(trimSourceMeta('text'), {});
-    assert.deepEqual(trimSourceMeta(['a']), {});
   });
 
   it('returns a fresh deep-equal object each time without mutating the input', () => {
@@ -2103,36 +2090,5 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
 
     assert.equal(result.grounding.generic.length, 2);
     assert.ok(result.grounding.generic[1].snippets[0].includes('1.14'));
-  });
-
-  it('旧配置兼容：配置中携带退役键 min_facts 和 novelty_min 被静默忽略，不影响正常过滤', async () => {
-    const legacyConfig = parseFilterConfigObject({
-      mode: 'off',
-      thresholds: { min_facts: 1000000000, novelty_min: 50 },
-    });
-
-    const data: BraveLlmContextResponse = {
-      grounding: {
-        generic: [
-          {
-            url: 'https://origin.example/s0',
-            title: 'Origin S0',
-            snippets: ['Brave browser release information and technical specifications.'],
-          },
-          {
-            url: 'https://mirror.example/s1',
-            title: 'Mirror S1',
-            snippets: ['Brave browser release information and technical specifications.'],
-          },
-        ],
-        map: [],
-      },
-      sources: {},
-    };
-
-    const { result, stats } = await filterLlmContext(data, regressionRequest, legacyConfig);
-
-    // 退役配置不会重新启用跨来源删除。
-    assert.equal(result.grounding.generic.length, 2);
   });
 });

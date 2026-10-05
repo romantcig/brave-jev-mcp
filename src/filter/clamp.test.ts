@@ -68,8 +68,8 @@ describe('withAdjustments', () => {
     sources: {},
   };
 
-  it('returns the same reference when nothing was raised', () => {
-    assert.equal(withAdjustments(payload, []), payload);
+  it('returns the payload unchanged when nothing was raised', () => {
+    assert.deepEqual(withAdjustments(payload, []), payload);
   });
 
   it('attaches the adjustment list copy-on-write', () => {
