@@ -22,6 +22,7 @@ describe('zeroLocal', () => {
       empty_dropped: 0,
       github_cleanup_actions: 0,
       x_cleanup_actions: 0,
+      devto_cleanup_actions: 0,
     });
   });
 });

@@ -1,6 +1,6 @@
 /**
- * 步 1 JSON-LD 分流：能抽正文就拆成正文段，mainEntity.text 正文回声或只有元数据就删除，
- * 无法确定则原样保留。仅用 JSON.parse 和自有固定键读取，不展开或写回解析对象。
+ * 步 1 JSON-LD 分流：能抽正文就拆成正文段，只有元数据就删除，无法确定则原样保留。
+ * 仅用 JSON.parse 和自有固定键读取，不展开或写回解析对象。
  */
 
 /** 可判为纯元数据的键集合。 */
@@ -61,23 +61,6 @@ const asList = (value: unknown): unknown[] =>
 
 const nonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim() !== '';
-
-/**
- * 正文回声形状：`mainEntity` 为对象（非数组）且含非空字符串 `text`，text 是整篇文章
- * 正文的完整回声（如 dev.to 全站模板），与同页正常正文片段完全重复。`text` 不是抽取
- * 路径，回声对象本身也提不出任何正文，因此只在片段没有其他正文来源时判定。
- */
-const isMainEntityTextEcho = (node: unknown): boolean => {
-  if (!isRecord(node)) return false;
-  const entity = own(node, 'mainEntity');
-  return isRecord(entity) && nonEmptyString(own(entity, 'text'));
-};
-
-/**
- * 截断回声兜底：Brave 可能把回声 JSON 截断到 ~4K 导致 JSON.parse 失败，此时按片段
- * 开头的前缀识别。FAQPage 的 `mainEntity[]` 以 `[` 起始，天然不匹配该前缀。
- */
-const TRUNCATED_ECHO_RE = /^\{\s*"mainEntity"\s*:\s*\{\s*"text"\s*:\s*"/;
 
 /** 标题比较用的归一化：去首尾空白、去前导 `#`/`*`/`-`、压缩连续空白、小写。 */
 export const normalizeTitleForCompare = (text: string): string =>
@@ -177,22 +160,15 @@ const isMetadataOnly = (node: unknown, sourceTitle: string): boolean => {
 };
 
 /**
- * 按片段分流：非 JSON 当普通文本；可提取正文时替换；mainEntity.text 正文回声
- * （含截断前缀兜底）或只有元数据时删除；有未知键但提不出正文时原样保留。
+ * 按片段分流：非 JSON 当普通文本；可提取正文时替换；只有元数据时删除；
+ * 有未知键但提不出正文时原样保留。
  */
 export function splitJsonFragment(text: string, sourceTitle: string): JsonFragmentVerdict {
   const parsed = parseJsonFragment(text);
-  if (parsed === null) {
-    // 解析失败可能只是被 Brave 截断：以回声前缀开头仍判回声，其余当普通文本
-    return TRUNCATED_ECHO_RE.test(text.trim())
-      ? { action: 'dropped_meta' }
-      : { action: 'not_json' };
-  }
+  if (parsed === null) return { action: 'not_json' };
 
   const parts = extractBodyParts(parsed, sourceTitle);
   if (parts.length > 0) return { action: 'converted', parts };
-
-  if (isMainEntityTextEcho(parsed)) return { action: 'dropped_meta' };
 
   return isMetadataOnly(parsed, sourceTitle) ? { action: 'dropped_meta' } : { action: 'kept_raw' };
 }

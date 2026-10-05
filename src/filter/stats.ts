@@ -29,6 +29,7 @@ export const zeroLocal: Readonly<LocalStats> = Object.freeze({
   empty_dropped: 0,
   github_cleanup_actions: 0,
   x_cleanup_actions: 0,
+  devto_cleanup_actions: 0,
 });
 
 /** 防御性读取 `grounding.generic`：上游已过 zod，但库对畸形输入也不抛。 */

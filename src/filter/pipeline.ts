@@ -11,6 +11,7 @@ import { isEmptySource, isOneLiner } from './nonArticle.js';
 import { stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { cleanXBoilerplate } from './xCleanup.js';
+import { cleanDevToBoilerplate } from './devtoCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetJudgments, applySourceVerdicts } from './jev/verdict.js';
 import { buildStatusLine } from './statusline.js';
@@ -34,6 +35,7 @@ import type {
   FilteredResponse,
   FilterResult,
   FilterStats,
+  DevToCleanupAction,
   GitHubCleanupAction,
   XCleanupAction,
   JevCandidate,
@@ -67,6 +69,8 @@ type WorkSnippet = {
   githubCleanup?: GitHubCleanupAction[];
   /** 阶段 2 X (Twitter) 界面清洗的动作明细（test/on 生效）；投影到统计表 x_cleanup */
   xCleanup?: XCleanupAction[];
+  /** 阶段 1 dev.to 目录提纲清理（test/on 生效），在通用 JSON-LD 转换前判定。 */
+  devtoCleanup?: DevToCleanupAction[];
 };
 
 /** 工作表里的一个来源。`url` 永远是 Brave 原始 URL。 */
@@ -118,14 +122,31 @@ const buildWorkTable = (data: BraveLlmContextResponse): WorkSource[] => {
 };
 
 /**
- * 阶段 1 JSON-LD 分流：逐源逐片段按 Brave 序调 `splitJsonFragment`。
+ * 阶段 1 先清理 dev.to 目录提纲（仅 test/on），再逐源逐片段进行通用 JSON-LD 分流。
  * 转出的多段原地占据原片段位置（同一 `index`、`part` 从 0 递增），不重排；
  * 整片删的只翻 `kept`，片段行仍留在表里供统计投影。普通文本不计数。
  */
-const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
+const splitJsonLd = (table: WorkSource[], stats: FilterStats, cleanPlatform: boolean): void => {
   for (const source of table) {
-    source.snippets = source.snippets.flatMap((snippet): WorkSnippet[] => {
+    const originalTexts = source.snippets.map((snippet) => snippet.text);
+    source.snippets = source.snippets.flatMap((snippet, index): WorkSnippet[] => {
       if (!snippet.kept) return [snippet];
+
+      if (cleanPlatform) {
+        const cleaned = cleanDevToBoilerplate(
+          snippet.text,
+          source.url,
+          source.title,
+          originalTexts.filter((_, otherIndex) => otherIndex !== index)
+        );
+        if (cleaned.actions.length > 0) {
+          stats.local.devto_cleanup_actions += cleaned.actions.length;
+          stats.local.snippets_prefiltered += 1;
+          return [
+            { ...snippet, kept: false, reason: 'boilerplate', devtoCleanup: cleaned.actions },
+          ];
+        }
+      }
 
       const verdict = splitJsonFragment(snippet.text, source.title);
       switch (verdict.action) {
@@ -245,11 +266,11 @@ const dropEmptySources = (
 };
 
 /**
- * 本地阶段 1–2：JSON-LD 分流 → 片段预筛。
+ * 本地阶段 1–2：dev.to 目录提纲清理与 JSON-LD 分流 → 片段预筛。
  * 候选导出与实际过滤共用此顺序。
  */
 const runLocalRules = (table: WorkSource[], stats: FilterStats, config: FilterConfig): void => {
-  splitJsonLd(table, stats); // 阶段 1：JSON-LD 分流
+  splitJsonLd(table, stats, config.mode !== 'off'); // 阶段 1：站点提纲清理与 JSON-LD 分流
   prefilterSnippets(table, stats, config.mode !== 'off'); // 阶段 2：片段预筛
 };
 
@@ -318,6 +339,7 @@ const projectSource = (source: WorkSource): SourceStats => {
     ...(snippet.reason !== undefined ? { reason: snippet.reason } : {}),
     ...(snippet.githubCleanup !== undefined ? { github_cleanup: snippet.githubCleanup } : {}),
     ...(snippet.xCleanup !== undefined ? { x_cleanup: snippet.xCleanup } : {}),
+    ...(snippet.devtoCleanup !== undefined ? { devto_cleanup: snippet.devtoCleanup } : {}),
     chars: snippet.text.length,
   }));
 

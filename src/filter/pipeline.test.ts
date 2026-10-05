@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseJevResponse } from './jev/client.js';
@@ -8,6 +9,7 @@ import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeli
 import { createNoKeyJevStats } from './stats.js';
 import type {
   BraveLlmContextResponse,
+  BraveLlmContextGenericItem,
   ClassifyDeps,
   ClassifyOutcome,
   FilterCallContext,
@@ -276,25 +278,6 @@ describe('filterLlmContext', () => {
     assert.equal(Object.hasOwn(result.sources, 'https://example.org/meta'), false);
     assert.equal(stats.local.empty_dropped, 1);
     assert.equal(stats.sources[2].reason, 'empty');
-  });
-
-  it('counts a mainEntity text echo as jsonld_dropped and removes it from output', async () => {
-    const data = payload();
-    // 仿 dev.to 站点模板：mainEntity 为对象，text 是整篇文章正文回声
-    data.grounding.generic[0]!.snippets.push(
-      JSON.stringify({
-        mainEntity: { text: '<h2><a name="why">Why look for alternatives</a></h2>\n<p>Review notes.</p>' },
-      })
-    );
-
-    const { result, stats } = await filterLlmContext(data, request, offConfig);
-
-    assert.equal(stats.local.jsonld_dropped, 1);
-    assert.equal(stats.sources[0]?.snippets[2]?.reason, 'jsonld_meta');
-    assert.deepEqual(result.grounding.generic[0]?.snippets, [
-      'Brave is a privacy-focused browser and search engine.',
-      'Second snippet about Brave.',
-    ]);
   });
 
   it('drops a one-liner source that only shares intent terms during step 8', async () => {
@@ -2164,5 +2147,99 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
 
     assert.equal(result.grounding.generic.length, 2);
     assert.ok(result.grounding.generic[1].snippets[0].includes('1.14'));
+  });
+});
+
+/** 使用实际来源验证站点清理、通用分流和 Jev 派发的接入顺序。 */
+describe('dev.to 清理接入', () => {
+  const sources: BraveLlmContextGenericItem[] = JSON.parse(
+    readFileSync(new URL('../../fixtures/log-derived/devto-outlines.json', import.meta.url), 'utf8')
+  );
+  const input: BraveLlmContextResponse = { grounding: { generic: sources }, sources: {} };
+  // 通用预筛会剥掉 FAQ 栏目标题，问答内容仍逐字保留。
+  const expectedBodies = sources.map((source) =>
+    source.snippets.slice(0, -1).map((text) => text.replace('## Frequently Asked Questions\n', ''))
+  );
+  const req = {
+    params: { query: 'code review multi agent caveman' },
+    intent: 'Compare code review tools and multi-agent workflows.',
+  };
+
+  for (const mode of ['off', 'test', 'on'] as const) {
+    it(`${mode} 按模式清理提纲，保留正文顺序并准确记录动作`, async () => {
+      const filtered = await filterLlmContext(input, req, { ...offConfig, mode });
+      assert.equal(filtered.stats.local.devto_cleanup_actions, mode === 'off' ? 0 : 3);
+      assert.equal(filtered.stats.local.jsonld_dropped, 0);
+      assert.equal(filtered.stats.local.dup_removed, 0);
+      assert.equal(filtered.stats.local.jsonld_converted, mode === 'off' ? 2 : 0);
+      assert.deepEqual(
+        filtered.result.grounding.generic.map((item) => item.url),
+        sources.map((item) => item.url)
+      );
+      for (const [index, source] of sources.entries()) {
+        const stats = filtered.stats.sources[index].snippets.at(-1)!;
+        const snippets = filtered.result.grounding.generic[index].snippets;
+        if (mode === 'off') {
+          assert.equal(stats.devto_cleanup, undefined);
+          assert.equal(stats.kept, true);
+        } else {
+          assert.equal(stats.index, source.snippets.length - 1);
+          assert.equal(stats.part, undefined);
+          assert.equal(stats.reason, 'boilerplate');
+          assert.equal(stats.kept, false);
+          assert.deepEqual(stats.devto_cleanup, [{ rule: 'article_outline' }]);
+          assert.deepEqual(snippets, expectedBodies[index]);
+        }
+      }
+    });
+  }
+
+  it('Jev 和候选导出都接收清理后的正文，输入样本保持不变', async () => {
+    const original = structuredClone(input);
+    let sent: JevState | undefined;
+    const config = { ...offConfig, mode: 'on' as const };
+    const filtered = await filterLlmContext(input, req, config, {
+      classify: async ({ state, questions }) => {
+        sent = state;
+        return {
+          status: 'answered',
+          model: DEFAULT_JEV_MODEL,
+          input_tokens: 10,
+          answers: keepAllAnswers(questions),
+        };
+      },
+    });
+    assert.ok(sent);
+    const candidates = collectJevCandidates(input, req, config);
+    for (const [index, source] of sources.entries()) {
+      const expected = expectedBodies[index];
+      assert.deepEqual(candidates[index].snippets, expected);
+      assert.deepEqual(sent.sources[index].snippets, expected);
+      assert.deepEqual(filtered.result.grounding.generic[index].snippets, expected);
+    }
+    assert.deepEqual(input, original);
+  });
+
+  it('非 dev.to 的独有 text 正文保留，dev.to 只有提纲而缺少正文时也保留', async () => {
+    const text = JSON.stringify({
+      mainEntity: { text: 'Schema migration requires rebuilding the search index.' },
+    });
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [
+          { url: 'https://example.com/migration', title: 'Schema migration', snippets: [text] },
+          { ...sources[0], snippets: [sources[0].snippets.at(-1)!] },
+        ],
+      },
+      sources: {},
+    };
+    const filtered = await filterLlmContext(
+      data,
+      { params: { query: 'schema review migration' }, intent: 'Find migration evidence.' },
+      { ...offConfig, mode: 'test' }
+    );
+    assert.deepEqual(filtered.result.grounding.generic, data.grounding.generic);
+    assert.equal(filtered.stats.local.devto_cleanup_actions, 0);
+    assert.equal(filtered.stats.local.jsonld_dropped, 0);
   });
 });

@@ -263,70 +263,22 @@ describe('splitJsonFragment', () => {
   });
 });
 
-describe('mainEntity.text 正文回声（dev.to 站点模板）', () => {
-  /** 仿 dev.to 真实样本：text 装整篇文章 HTML 回声，开头是章节标记。 */
-  const echoHtml = (repeat: number): string =>
-    `<h2><a name="why-teams">Why Teams Look for Alternatives</a></h2>\n<p>${'Review notes. '.repeat(repeat)}</p>`;
-
-  it('drops an object-shaped mainEntity with a non-empty text as a body echo', () => {
-    const fragment = JSON.stringify({ mainEntity: { text: echoHtml(3) } });
-
-    assert.deepEqual(splitJsonFragment(fragment, TITLE), { action: 'dropped_meta' });
+describe('mainEntity.text 的通用分流', () => {
+  it('保留只有 text 的正文和含未知数据字段的对象', () => {
+    for (const node of [
+      { mainEntity: { text: 'Schema version 8 requires rebuilding the search index.' } },
+      { mainEntity: { text: 'Migration details.' }, rows: [['Latency', '12ms']] },
+    ]) {
+      assert.deepEqual(splitJsonFragment(JSON.stringify(node), TITLE), { action: 'kept_raw' });
+    }
   });
 
-  it('drops a truncated echo whose JSON.parse fails via the prefix fallback', () => {
-    // 仿 Brave 截断：~4K 处在正文字符串中途切断，无收尾引号和括号
-    const truncated = `{"mainEntity":{"text":"${echoHtml(300).slice(0, 4000)}`;
-    assert.deepEqual(splitJsonFragment(truncated, TITLE), { action: 'dropped_meta' });
-
-    // 键值间的空白变体同样兜底
-    assert.deepEqual(
-      splitJsonFragment('{"mainEntity": {"text": "Truncated mid-sentence…', TITLE),
-      { action: 'dropped_meta' }
-    );
-  });
-
-  it('still converts a FAQPage whose mainEntity is an array of questions', () => {
-    assert.deepEqual(splitJsonFragment(FAQ, TITLE), {
-      action: 'converted',
-      parts: ['Q: What is Jev?\nA: Jev is a decision model.', 'A: It returns typed decisions.'],
-    });
-    // 数组形态被截断时解析失败，也不匹配回声前缀，维持普通文本
-    assert.deepEqual(splitJsonFragment('{"mainEntity": [{"name": "What is', TITLE), {
-      action: 'not_json',
-    });
-  });
-
-  it('keeps the previous kept_raw verdict when mainEntity is not an echo shape', () => {
-    // 无 text、text 为空白、mainEntity 为数组但抽不出问答：都不是回声
-    assert.deepEqual(splitJsonFragment('{"mainEntity": {"@type": "WebPage"}}', TITLE), {
-      action: 'kept_raw',
-    });
-    assert.deepEqual(splitJsonFragment('{"mainEntity": {"text": "   "}}', TITLE), {
-      action: 'kept_raw',
-    });
-    assert.deepEqual(splitJsonFragment('{"mainEntity": [{"name": "No answer here"}]}', TITLE), {
-      action: 'kept_raw',
-    });
-  });
-
-  it('never drops a Question text that coexists with an acceptedAnswer', () => {
-    // acceptedAnswer 是真实答案：converted 优先，不整体误删
-    const fragment = JSON.stringify({
-      mainEntity: { text: 'How do I generate types?', acceptedAnswer: { text: 'Use the typegen CLI.' } },
-    });
-
-    assert.deepEqual(splitJsonFragment(fragment, TITLE), {
-      action: 'converted',
-      parts: ['A: Use the typegen CLI.'],
-    });
-  });
-
-  it('leaves plain text and non-leading echo shapes outside the JSON-LD branch', () => {
-    assert.deepEqual(splitJsonFragment('Plain prose about Jev.', TITLE), { action: 'not_json' });
-    // 前缀只锚定片段开头：正文里出现同形文本不算回声
-    assert.deepEqual(splitJsonFragment('Read this: {"mainEntity":{"text":"echo"}}', TITLE), {
-      action: 'not_json',
-    });
+  it('截断正文和截断问答按普通文本保留', () => {
+    for (const fragment of [
+      '{"mainEntity":{"text":"Truncated mid-sentence',
+      '{"mainEntity":{"text":"How to recover?","acceptedAnswer":{"text":"Rebuild the index',
+    ]) {
+      assert.deepEqual(splitJsonFragment(fragment, TITLE), { action: 'not_json' });
+    }
   });
 });

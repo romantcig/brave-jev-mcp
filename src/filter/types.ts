@@ -382,6 +382,8 @@ export type LocalStats = {
   github_cleanup_actions: number;
   /** X 清洗动作总数，包含清空片段的动作；与逐片段 x_cleanup 明细对应。 */
   x_cleanup_actions: number;
+  /** dev.to 目录提纲清理动作数；与逐片段 devto_cleanup 明细对应。 */
+  devto_cleanup_actions: number;
 };
 
 /** GitHub 清洗动作规则名。 */
@@ -435,6 +437,17 @@ export type XCleanupResult = {
   actions: XCleanupAction[];
 };
 
+/** dev.to 的整片清理动作，不使用 JSON 字符串内部的行号。 */
+export type DevToCleanupAction = {
+  rule: 'article_outline';
+};
+
+/** cleanDevToBoilerplate 的返回：清洗后文本与整片动作清单。 */
+export type DevToCleanupResult = {
+  text: string;
+  actions: DevToCleanupAction[];
+};
+
 /** 逐片段裁决统计，仅含身份、标记与字符数。 */
 export type SnippetStats = {
   index: number;
@@ -451,6 +464,8 @@ export type SnippetStats = {
    * test/on 的 X 清洗明细；整片清空或局部剥离均可带此键。
    */
   x_cleanup?: XCleanupAction[];
+  /** test/on 的 dev.to 整片清理明细。 */
+  devto_cleanup?: DevToCleanupAction[];
   chars: number;
 };
 
