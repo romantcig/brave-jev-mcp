@@ -1,0 +1,24 @@
+{
+  "044439-6DBfljTIOy.json": [
+    {
+      "verdict": "keep",
+      "kept": [false, true, true, true, true, true, false]
+    },
+    {
+      "verdict": "drop",
+      "kept": [true]
+    },
+    {
+      "verdict": "drop",
+      "kept": [true]
+    },
+    {
+      "verdict": "drop",
+      "kept": [true]
+    },
+    {
+      "verdict": "drop",
+      "kept": [true, true, true, true, true]
+    }
+  ]
+}

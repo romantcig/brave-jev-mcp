@@ -723,6 +723,143 @@ describe('three-mode semantic matrix (off / test / on)', () => {
   });
 });
 
+// 阈值附近的临界裁决：端到端覆盖页面先删与片段删空两条路径。
+
+describe('near-threshold verdict end to end', () => {
+  const nearPayload = (): BraveLlmContextResponse => ({
+    grounding: {
+      generic: [
+        {
+          url: 'https://near-page.example/',
+          title: 'Near Page Source',
+          snippets: ['Brave near page snippet with facts.'],
+        },
+        {
+          url: 'https://near-snippet.example/',
+          title: 'Near Snippet Source',
+          snippets: ['Brave near snippet body with facts.'],
+        },
+      ],
+      map: [],
+    },
+    sources: {},
+  });
+
+  const makeNearClassify =
+    (fillerProbabilities: Record<string, number>, snippetProbabilities: Record<string, number>) =>
+    async ({ state, questions }: { state: JevState; questions: Record<string, JevQuestion> }) => {
+      const script: Record<string, Record<string, JevAnswer>> = {};
+      for (const source of state.sources) {
+        script[source.id] = {
+          filler: { kind: 'noul', probability: fillerProbabilities[source.id]! },
+          group0: {
+            kind: 'choice',
+            probabilities: {
+              none: 1 - snippetProbabilities[source.id]!,
+              A: snippetProbabilities[source.id]!,
+            },
+          },
+        };
+      }
+      return {
+        status: 'answered' as const,
+        model: DEFAULT_JEV_MODEL,
+        answers: namespaced(state, questions, script),
+        input_tokens: 10,
+        dispatch: { state, questions },
+      };
+    };
+
+  it('page verdict within the gap drops the source and records near_threshold_gap without rewriting p', async () => {
+    // s0 页面 0.79：未达 0.8 原线，临界删除；s1 页面 0、片段 A=1 全保留
+    const { result, stats } = await filterLlmContext(
+      nearPayload(),
+      request,
+      { ...offConfig, mode: 'test' },
+      { classify: makeNearClassify({ s0: 0.79, s1: 0 }, { s0: 1, s1: 1 }) }
+    );
+
+    const rowOf = (src: string) => stats.jev?.per_source.find((row) => row.src === src);
+    assert.equal(rowOf('s0')?.verdict, 'drop');
+    assert.equal(rowOf('s0')?.reason, 'filler');
+    // 实际浮点距离如实记录（0.8 - 0.79），原概率不被改写
+    assert.equal(rowOf('s0')?.near_threshold_gap, 0.8 - 0.79);
+    assert.equal(rowOf('s0')?.answers?.filler, 0.79);
+    assert.equal(rowOf('s1')?.verdict, 'keep');
+    assert.equal(rowOf('s1')?.near_threshold_gap, undefined);
+
+    const stats0 = stats.sources.find((source) => source.url === 'https://near-page.example/');
+    assert.equal(stats0?.verdict, 'drop');
+    assert.equal(stats0?.reason, 'filler');
+    // 页面直接删除不伪造片段应用记录：片段行保持本地保留状态，无临界标记
+    assert.deepEqual(
+      stats0?.snippets.map((snippet) => [snippet.kept, snippet.near_threshold_gap ?? null]),
+      [[true, null]]
+    );
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://near-snippet.example/']
+    );
+  });
+
+  it('snippet verdict within the gap drops the snippet, empty source follows, gap 0 kept verbatim', async () => {
+    // s1 页面 0 保留，单片片段 A=0.5 恰达保留线：临界删除 gap 0，来源随后按 empty 删除
+    const { result, stats } = await filterLlmContext(
+      nearPayload(),
+      request,
+      { ...offConfig, mode: 'test' },
+      { classify: makeNearClassify({ s0: 0, s1: 0 }, { s0: 1, s1: 0.5 }) }
+    );
+
+    const stats1 = stats.sources.find((source) => source.url === 'https://near-snippet.example/');
+    assert.equal(stats1?.verdict, 'drop');
+    assert.equal(stats1?.reason, 'empty');
+    assert.deepEqual(
+      stats1?.snippets.map((snippet) => [
+        snippet.kept,
+        snippet.reason,
+        snippet.near_threshold_gap ?? null,
+      ]),
+      [[false, 'keep_probability', 0]]
+    );
+    // 页面行不带临界标记（原判定保留）；s1 删空消失，s0 照常保留
+    assert.equal(
+      stats.jev?.per_source.find((row) => row.src === 's1')?.near_threshold_gap,
+      undefined
+    );
+    assert.deepEqual(
+      result.grounding.generic.map((item) => item.url),
+      ['https://near-page.example/']
+    );
+  });
+
+  it('verdicts strictly outside the gap stay untouched (no near markers, content kept)', async () => {
+    // 页面 0.7799（差 0.0201）、片段 A=0.5201（差 0.0201）：全部保留且无标记
+    const { result, stats } = await filterLlmContext(
+      nearPayload(),
+      request,
+      { ...offConfig, mode: 'test' },
+      { classify: makeNearClassify({ s0: 0.7799, s1: 0 }, { s0: 1, s1: 0.5201 }) }
+    );
+
+    assert.equal(
+      stats.jev?.per_source.every((row) => row.near_threshold_gap === undefined),
+      true
+    );
+    assert.equal(
+      stats.sources.every((source) => source.verdict === 'keep'),
+      true
+    );
+    assert.deepEqual(
+      result.grounding.generic.map((item) => [item.url, item.snippets.length]),
+      [
+        ['https://near-page.example/', 1],
+        ['https://near-snippet.example/', 1],
+      ]
+    );
+  });
+});
+
 describe('jev status aggregation and breaker open trim-back', () => {
   // 全量共享请求下状态聚合只有三种路径：answered（ok）、已派发失败（degraded）、
   // 熔断短路（breaker_open）——来源行来自同一 outcome 的投影。
@@ -2141,7 +2278,10 @@ describe('dev.to 清理接入', () => {
     const candidates = collectJevCandidatesDetailed(input, req, config);
     for (const [index, source] of sources.entries()) {
       const expected = expectedBodies[index];
-      assert.deepEqual(candidates[index].snippets.map((snippet) => snippet.text), expected);
+      assert.deepEqual(
+        candidates[index].snippets.map((snippet) => snippet.text),
+        expected
+      );
       assert.deepEqual(sent.sources[index].snippets, expected);
       assert.deepEqual(filtered.result.grounding.generic[index].snippets, expected);
     }

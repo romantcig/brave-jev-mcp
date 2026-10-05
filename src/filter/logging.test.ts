@@ -6,6 +6,7 @@ import { after, before, describe, it } from 'node:test';
 import { THRESHOLD_SPECS, parseFilterConfigObject } from './config.js';
 import { createFilterStats } from './stats.js';
 import { createLogWriter, oneLineStderr } from './logging.js';
+import { FILTER_RULES_VERSION } from './version.js';
 import { DEFAULT_JEV_MODEL } from './jev/questions.js';
 import type { BraveLlmContextResponse, FilterConfig, FilterStats } from './types.js';
 
@@ -114,6 +115,9 @@ describe('createLogWriter', () => {
     for (const spec of THRESHOLD_SPECS) {
       assert.equal(thresholds[spec.key], config.thresholds[spec.configKey]);
     }
+    // 只读运行规则快照与规则版本：不依赖外部样本即可识别该记录的裁决语义。
+    assert.deepEqual(record.decision_rules, { near_threshold_max_gap: 0.02 });
+    assert.equal(record.filter_rules_version, FILTER_RULES_VERSION);
   });
 
   it('deduplicates model_reported across answered rows and drops failed rows', async () => {
@@ -160,6 +164,9 @@ describe('createLogWriter', () => {
       Object.keys(record.thresholds as Record<string, number>).sort(),
       THRESHOLD_SPECS.map((spec) => spec.key).sort()
     );
+    // 错误路径同样携带规则快照与版本，且不得凭空出现逐项临界标记。
+    assert.deepEqual(record.decision_rules, { near_threshold_max_gap: 0.02 });
+    assert.equal(record.filter_rules_version, FILTER_RULES_VERSION);
     assert.equal(record.model_config, DEFAULT_JEV_MODEL);
   });
 

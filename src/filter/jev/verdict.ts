@@ -5,6 +5,7 @@
  */
 
 import { PAGE_QUESTION_KEY } from './questions.js';
+import { snippetDropVerdict, sourceDropVerdict } from './threshold.js';
 import type {
   FilterStats,
   JevSnippetGroup,
@@ -20,6 +21,8 @@ export type VerdictSnippetRow = {
   text: string;
   kept: boolean;
   reason?: SnippetRemovalReason;
+  /** 临界规则删除时携带的实际补偿距离（含 0）；原判定删除不带。 */
+  nearThresholdGap?: number;
 };
 
 /** 工作表里的一个来源（最小形状；pipeline 的 WorkSource 结构上满足）。 */
@@ -51,7 +54,8 @@ export const snippetKeepThreshold = (groupSize: number, thresholds: JevThreshold
   groupSize >= 2 ? thresholds.groupKeepMin : thresholds.singleKeepMin;
 
 /**
- * 页面裁决：只判 filler，概率 >= fillerDrop 时整页删除，原因 filler。
+ * 页面裁决：只判 filler，概率 >= fillerDrop 时整页删除，原因 filler；
+ * 未达线但差距不超过临界上限时同样删除，并在来源统计行记录实际补偿距离。
  * 页面题缺答、错型、越界或非有限时保守保留整源，并将来源行标为 validation。
  */
 export function applySourceVerdicts(
@@ -77,11 +81,15 @@ export function applySourceVerdicts(
       continue;
     }
 
-    if (pFiller >= thresholds.fillerDrop) {
+    const verdict = sourceDropVerdict(pFiller, thresholds.fillerDrop);
+    if (verdict.drop) {
       source.verdict = 'drop';
       source.reason = 'filler';
       perSource.verdict = 'drop';
       perSource.reason = 'filler';
+      if (verdict.nearThresholdGap !== undefined) {
+        perSource.near_threshold_gap = verdict.nearThresholdGap;
+      }
     } else {
       perSource.verdict = 'keep';
     }
@@ -89,7 +97,9 @@ export function applySourceVerdicts(
 }
 
 /**
- * 按候选位置对齐片段保留概率，低于所在组门槛时删除，等于门槛保留。
+ * 按候选位置对齐片段保留概率，低于所在组门槛时删除；
+ * 门槛位于 (0,1) 内时，达到门槛且差距不超过临界上限也删除，记录实际距离（含 0）。
+ * 门槛为 0 或 1 时仅执行严格小于判定；其余有效片段保留。
  * 判断数组与幸存片段不等长时整源跳过，不能把短数组当成有效前缀。
  * null 判断（缺答或坏组）与无组映射的位置保守保留；
  * 组大小由映射提供：二/三片组用 groupKeepMin，单片组用 singleKeepMin。
@@ -123,9 +133,16 @@ export function applySnippetJudgments(
       if (judgment === null) continue;
       const group = groups.find((entry) => entry.start <= i && i < entry.start + entry.size);
       if (group === undefined) continue;
-      if (judgment.value < snippetKeepThreshold(group.size, thresholds)) {
+      const verdict = snippetDropVerdict(
+        judgment.value,
+        snippetKeepThreshold(group.size, thresholds)
+      );
+      if (verdict.drop) {
         survivors[i].kept = false;
         survivors[i].reason = 'keep_probability';
+        if (verdict.nearThresholdGap !== undefined) {
+          survivors[i].nearThresholdGap = verdict.nearThresholdGap;
+        }
       }
     }
   }

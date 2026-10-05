@@ -5,11 +5,7 @@ import { describe, it } from 'node:test';
 import { createFilterStats } from '../stats.js';
 import type { FilterStats, JevPerSourceStats, SnippetJudgments } from '../types.js';
 import { DEFAULT_THRESHOLDS } from './questions.js';
-import {
-  applySnippetJudgments,
-  applySourceVerdicts,
-  snippetKeepThreshold,
-} from './verdict.js';
+import { applySnippetJudgments, applySourceVerdicts, snippetKeepThreshold } from './verdict.js';
 import type { VerdictSourceRow } from './verdict.js';
 
 // ---------------------------------------------------------------------------
@@ -118,7 +114,7 @@ describe('snippetKeepThreshold', () => {
 // 页面裁决：只判 filler；无效概率保守保留并记 validation。
 
 describe('applySourceVerdicts', () => {
-  it('drops at exactly the filler threshold (p >= threshold) and keeps just below', () => {
+  it('drops at exactly the filler threshold by the original rule (no near marker)', () => {
     const dropped = singleSource(0.8);
     applySourceVerdicts(
       dropped.table,
@@ -130,12 +126,40 @@ describe('applySourceVerdicts', () => {
     assert.equal(dropped.table[0].reason, 'filler');
     assert.equal(dropped.row.verdict, 'drop');
     assert.equal(dropped.row.reason, 'filler');
+    assert.equal(dropped.row.near_threshold_gap, undefined);
+  });
 
-    const kept = singleSource(0.79);
+  it('keeps pages just outside the near-threshold gap (0.7799 vs 0.80)', () => {
+    const kept = singleSource(0.7799);
     applySourceVerdicts(kept.table, buildJudged([kept.row]), DEFAULT_THRESHOLDS, kept.stats);
     assert.equal(kept.table[0].verdict, 'keep');
     assert.equal(kept.row.verdict, 'keep');
     assert.equal(kept.row.reason, undefined);
+    assert.equal(kept.row.near_threshold_gap, undefined);
+  });
+
+  it('drops pages within the gap and records the actual distance on the stats row', () => {
+    // 端点 0.78：机器尾差 0.020000000000000018 夹回 0.02
+    const endpoint = singleSource(0.78);
+    applySourceVerdicts(
+      endpoint.table,
+      buildJudged([endpoint.row]),
+      DEFAULT_THRESHOLDS,
+      endpoint.stats
+    );
+    assert.equal(endpoint.table[0].verdict, 'drop');
+    assert.equal(endpoint.table[0].reason, 'filler');
+    assert.equal(endpoint.row.verdict, 'drop');
+    assert.equal(endpoint.row.near_threshold_gap, 0.02);
+
+    // 中间值保持实际浮点距离，不舍入
+    const inside = singleSource(0.79);
+    applySourceVerdicts(inside.table, buildJudged([inside.row]), DEFAULT_THRESHOLDS, inside.stats);
+    assert.equal(inside.row.verdict, 'drop');
+    assert.equal(inside.row.near_threshold_gap, 0.8 - 0.79);
+
+    // 概率本身不被改写
+    assert.equal(inside.row.answers?.filler, 0.79);
   });
 
   it('skips the page verdict and records validation for missing or out-of-range probabilities', () => {
@@ -192,9 +216,9 @@ describe('applySourceVerdicts', () => {
 // ---------------------------------------------------------------------------
 
 describe('applySnippetJudgments', () => {
-  it('keeps at exactly the group threshold and removes just below with reason keep_probability', () => {
+  it('drops at exactly the group threshold with gap 0 and below by the original rule', () => {
     const table = buildTable([{ texts: ['first', 'second', 'third'] }]);
-    // 三片组：0.25 边界保留，略低删除
+    // 三片组：0.25 恰达保留线（临界命中 gap 0），0.24 原规则删除（无标记），0.9 保留
     const row = answeredRow('s0', answersWith(FILLER_KEEP), judgmentsOf(0.25, 0.24, 0.9));
     const stats = buildStats([row]);
     const groups = new Map([['s0', [group('group0', 0, 3)]]]);
@@ -204,27 +228,89 @@ describe('applySnippetJudgments', () => {
     assert.deepEqual(
       table[0].snippets.map((snippet) => [snippet.kept, snippet.reason ?? null]),
       [
-        [true, null],
+        [false, 'keep_probability'],
         [false, 'keep_probability'],
         [true, null],
       ]
     );
+    assert.equal(table[0].snippets[0].nearThresholdGap, 0);
+    assert.equal(table[0].snippets[1].nearThresholdGap, undefined);
   });
 
-  it('uses the single gate for one-snippet groups (0.5 boundary keeps)', () => {
+  it('drops within the single gate gap and records the distance (0.52 endpoint)', () => {
     const table = buildTable([{ texts: ['first', 'second'] }]);
+    // 单片组：0.5 恰达线（gap 0）、0.52 端点（机器尾差夹回 0.02）、0.49 原规则删除
     const row = answeredRow('s0', answersWith(FILLER_KEEP), judgmentsOf(0.5, 0.49));
+    const row2 = answeredRow('s1', answersWith(FILLER_KEEP), judgmentsOf(0.52));
+    const stats = buildStats([row, row2]);
+    const groups = new Map([
+      ['s0', [group('group0', 0, 1), group('group1', 1, 1)]],
+      ['s1', [group('group0', 0, 1)]],
+    ]);
+    const table2 = buildTable([{ texts: ['only'] }]);
+    table2[0].index = 1;
+
+    applySnippetJudgments(table, buildJudged([row]), groups, DEFAULT_THRESHOLDS, stats);
+    applySnippetJudgments(table2, buildJudged([row2]), groups, DEFAULT_THRESHOLDS, stats);
+
+    assert.deepEqual(
+      table[0].snippets.map((snippet) => [snippet.kept, snippet.nearThresholdGap ?? null]),
+      [
+        [false, 0],
+        [false, null],
+      ]
+    );
+    assert.equal(table2[0].snippets[0].kept, false);
+    assert.equal(table2[0].snippets[0].nearThresholdGap, 0.02);
+  });
+
+  it('keeps snippets just outside the gap (0.2701 vs 0.25, 0.5201 vs 0.5)', () => {
+    const table = buildTable([{ texts: ['first', 'second', 'third', 'fourth'] }]);
+    // 前两片多片组（T=0.25）：0.2701 恰出端点保留，0.26 临界删除；
+    // 后两片单片组（T=0.5）：0.5201 恰出端点保留，0.49 原规则删除
+    const row = answeredRow(
+      's0',
+      answersWith(FILLER_KEEP),
+      judgmentsOf(0.2701, 0.26, 0.5201, 0.49)
+    );
     const stats = buildStats([row]);
-    const groups = new Map([['s0', [group('group0', 0, 1), group('group1', 1, 1)]]]);
+    const groups = new Map([
+      ['s0', [group('group0', 0, 2), group('group2', 2, 1), group('group3', 3, 1)]],
+    ]);
 
     applySnippetJudgments(table, buildJudged([row]), groups, DEFAULT_THRESHOLDS, stats);
 
     assert.deepEqual(
-      table[0].snippets.map((snippet) => [snippet.kept, snippet.reason ?? null]),
-      [
-        [true, null],
-        [false, 'keep_probability'],
-      ]
+      table[0].snippets.map((snippet) => snippet.kept),
+      [true, false, true, false]
+    );
+    assert.equal(table[0].snippets[1].nearThresholdGap, 0.26 - 0.25);
+    assert.deepEqual(
+      table[0].snippets
+        .filter((_, index) => index !== 1)
+        .map((snippet) => snippet.nearThresholdGap ?? null),
+      [null, null, null]
+    );
+  });
+
+  it('does not add near-threshold drops to sources already dropped at page level', () => {
+    const table = buildTable([{ texts: ['first', 'second'] }]);
+    const row = answeredRow('s0', answersWith(FILLER_KEEP), judgmentsOf(0.26, 0.52));
+    const stats = buildStats([row]);
+    const groups = new Map([['s0', [group('group0', 0, 1), group('group1', 1, 1)]]]);
+    // 页面裁决先删整源：片段临界规则不得再追加命中
+    table[0].verdict = 'drop';
+    table[0].reason = 'filler';
+
+    applySnippetJudgments(table, buildJudged([row]), groups, DEFAULT_THRESHOLDS, stats);
+
+    assert.deepEqual(
+      table[0].snippets.map((snippet) => snippet.kept),
+      [true, true]
+    );
+    assert.deepEqual(
+      table[0].snippets.map((snippet) => snippet.nearThresholdGap ?? null),
+      [null, null]
     );
   });
 

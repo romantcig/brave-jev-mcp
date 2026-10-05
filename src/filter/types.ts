@@ -229,6 +229,8 @@ export type JevPerSourceStats = {
   /** 来源级裁决。 */
   verdict?: 'keep' | 'drop';
   reason?: SourceDropReason;
+  /** 临界规则删除时携带的实际补偿距离（含 0）；原判定删除不带此键。 */
+  near_threshold_gap?: number;
   model?: string;
   input_tokens?: number;
   latency_ms?: number;
@@ -457,6 +459,8 @@ export type SnippetStats = {
   x_cleanup?: XCleanupAction[];
   /** test/on 的 dev.to 整片清理明细。 */
   devto_cleanup?: DevToCleanupAction[];
+  /** 临界规则删除时携带的实际补偿距离（含 0）；原判定删除不带此键。 */
+  near_threshold_gap?: number;
   chars: number;
 };
 

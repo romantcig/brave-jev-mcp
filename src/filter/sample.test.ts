@@ -11,6 +11,7 @@ import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { createJevClassifier } from './jev/client.js';
 import { filterLlmContext } from './pipeline.js';
 import { createSampleWriter, type SampleRecord } from './sample.js';
+import { createLogWriter } from './logging.js';
 import { FILTER_RULES_VERSION } from './version.js';
 import type {
   BraveLlmContextResponse,
@@ -184,6 +185,13 @@ describe('createSampleWriter', () => {
     );
     assert.match(String(sample.question_set_id), /^[0-9a-f]{12}$/);
     assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
+    // 只读运行规则快照：与配置阈值分开记录，不是可写配置组。
+    assert.deepEqual(sample.config_snapshot.decision_rules, { near_threshold_max_gap: 0.02 });
+    assert.deepEqual(sample.config_snapshot.thresholds, {
+      filler_drop: DEFAULT_THRESHOLDS.fillerDrop,
+      group_keep_min: DEFAULT_THRESHOLDS.groupKeepMin,
+      single_keep_min: DEFAULT_THRESHOLDS.singleKeepMin,
+    });
   });
 
   it('失败请求：如实保留已有实发证据（HTTP 422），不伪造成功', async () => {
@@ -348,11 +356,13 @@ describe('createSampleWriter', () => {
     assert.equal(jev.sent[1].snippets[3].invalid_reason, 'labels');
     assert.deepEqual(
       jev.sent[2].snippets.map((snippet) => snippet.verdict),
-      ['keep', 'keep', 'keep', 'drop', 'drop', 'drop', 'keep']
+      ['keep', 'keep', 'keep', 'drop', 'drop', 'drop', 'drop']
     );
     assert.equal(jev.sent[2].snippets[0].invalid_reason, 'missing');
     assert.equal(jev.sent[2].snippets[6].keep_probability, 0.5);
     assert.equal(jev.sent[2].snippets[6].threshold, 0.5);
+    // 0.5 恰达单片保留线：临界裁决删除，样本如实记录 gap 0，原概率与门槛不变。
+    assert.equal(jev.sent[2].snippets[6].near_threshold_gap, 0);
     // 片段裁决删空来源时，不能把已经应用的概率误记成未应用。
     assert.deepEqual(
       jev.sent[3].snippets.map((snippet) => [
@@ -379,6 +389,115 @@ describe('createSampleWriter', () => {
         ['s2__group6', 'A', true],
       ]
     );
+  });
+
+  it('临界裁决落盘：页面先删、片段删空和坏组保留与 JSONL 一致', async () => {
+    const config = configOf(join(root, 'near-threshold-audit'));
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [0, 1, 2, 3].map((source) => ({
+          url: 'https://same.example/article',
+          title: `Evidence ${source}`,
+          snippets: [`${articleBody} Source ${source}.`],
+        })),
+        map: [],
+      },
+      sources: {},
+    };
+    const rawAnswers = {
+      s0__filler: { type: 'noul', noul: 0.78 },
+      s0__group0: { type: 'choice', probabilities: { none: 0.5, A: 0.5 } },
+      s1__filler: { type: 'noul', noul: 0 },
+      s1__group0: { type: 'choice', probabilities: { none: 0.5, A: 0.5 } },
+      s2__filler: { type: 'noul', noul: 0 },
+      s2__group0: { type: 'choice', probabilities: { none: 0.48, A: 0.52 } },
+      s3__filler: { type: 'noul', noul: 0 },
+      // 单项概率落在临界带内，但组合概率和无效，不能参与临界裁决。
+      s3__group0: { type: 'choice', probabilities: { none: 0.6, A: 0.5 } },
+    };
+    const { captured, restore } = stubFetch(() => ({
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          model: DEFAULT_JEV_MODEL,
+          answers: rawAnswers,
+          usage: { input_tokens: 123 },
+        }),
+    }));
+    let filtered: FilterResult;
+    try {
+      filtered = await filterLlmContext(
+        data,
+        { params: { query: QUERY }, intent: INTENT },
+        config,
+        createJevClassifier(config.jev, { TYPESAFE_API_KEY: 'stub-key' })
+      );
+    } finally {
+      restore();
+    }
+    assert.equal(captured.length, 1);
+    const writer = createSampleWriter(config);
+    const requestId = '77777777-2222-3333-4444-555555555555';
+    const path = writer.allocatePath(requestId);
+    assert.equal(
+      writer.save({
+        requestId,
+        path,
+        originalParams: { query: QUERY },
+        braveParams: { query: QUERY },
+        filterParams: { query: QUERY },
+        intent: INTENT,
+        preFilter: data,
+        stats: filtered.stats,
+        jevDispatch: filtered.jev_dispatch,
+        jevRequests: filtered.jev_requests,
+        payload: filtered.result,
+        statusLine: filtered.stats.output.status_line ?? null,
+      }).status,
+      'saved'
+    );
+    createLogWriter(config).write(filtered.stats, { requestId });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as SampleRecord;
+    const logFile = readdirSync(config.logDir).find((file) => file.endsWith('.jsonl'))!;
+    const log = JSON.parse(readFileSync(join(config.logDir, logFile), 'utf8'));
+    const jev = sample.jev!;
+    assert.deepEqual(JSON.parse(jev.requests[0].state!), captured[0].state);
+    assert.deepEqual(jev.requests[0].questions, captured[0].questions);
+    for (const [key, raw] of Object.entries(rawAnswers)) {
+      if ('probabilities' in raw) {
+        assert.deepEqual(jev.requests[0].answers?.[key], {
+          kind: 'choice',
+          probabilities: raw.probabilities,
+        });
+      } else {
+        assert.deepEqual(jev.requests[0].answers?.[key], { kind: 'noul', probability: raw.noul });
+      }
+    }
+    assert.equal(jev.per_source[0].near_threshold_gap, 0.02);
+    assert.equal(jev.per_source[0].answers?.filler, 0.78);
+    assert.deepEqual(
+      jev.sent.map((source) => {
+        const sn = source.snippets[0];
+        return [sn.keep_probability, sn.threshold, sn.applied, sn.near_threshold_gap, sn.reason];
+      }),
+      [
+        [0.5, 0.5, false, undefined, 'filler'],
+        [0.5, 0.5, true, 0, 'empty'],
+        [0.52, 0.5, true, 0.02, 'empty'],
+        [null, 0.5, false, undefined, undefined],
+      ]
+    );
+    assert.equal(jev.sent[3].snippets[0].invalid_reason, 'sum');
+    assert.equal(jev.n_requests, 1);
+    assert.equal(jev.input_tokens, 123);
+    assert.deepEqual(log.jev.per_source, jev.per_source);
+    assert.deepEqual(log.sources, sample.outcome!.sources);
+    assert.deepEqual(log.decision_rules, sample.config_snapshot.decision_rules);
+    assert.equal(log.filter_rules_version, sample.filter_rules_version);
+    assert.equal(log.filter_rules_version, FILTER_RULES_VERSION);
+    assert.equal(JSON.stringify(filtered.result).includes('near_threshold'), false);
+    assert.deepEqual(filtered.result.grounding.generic, [data.grounding.generic[3]]);
   });
 
   it('写入失败：目标目录不可写时返回 failed，不抛异常，不留下样本文件', async () => {

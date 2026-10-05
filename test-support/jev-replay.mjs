@@ -1,4 +1,3 @@
-/** 冻结 state 直达生产解析、投影与裁决；不重复执行本地清洗。 */
 import assert from 'node:assert/strict';
 import { buildRequest, parseJevResponse } from '../src/filter/jev/client.ts';
 import { buildContextRequest, projectSourceAnswers } from '../src/filter/jev/context.ts';
@@ -6,7 +5,12 @@ import { applySourceVerdicts, applySnippetJudgments } from '../src/filter/jev/ve
 import { DEFAULT_THRESHOLDS } from '../src/filter/jev/questions.ts';
 import { createFilterStats } from '../src/filter/stats.ts';
 
-export function replayFrozen(recording) {
+/**
+ * 冻结 state 直达生产解析、投影与裁决；不重复执行本地清洗。
+ * expectedOverride 缺省用录制内 expected；传入时用当前规则的预期映射
+ * （fixtures/jev-three-in-one-current-expected.json），录制本体保持不变。
+ */
+export function replayFrozen(recording, expectedOverride) {
   const { state, model } = recording.request;
   const candidates = state.sources.map((source) => ({
     id: source.id,
@@ -17,7 +21,7 @@ export function replayFrozen(recording) {
   }));
   const built = buildContextRequest(candidates, state.query, state.intent, state.retrieval_time);
   // 深比较完整请求；criteria 的位掩码顺序单独钉住，不限制无语义的对象属性顺序。
-  // 历史冻结 state 可以缺页面日期；生产候选显式记 null。只归一此已知格式差异，
+  // 冻结 state 的页面日期允许缺失；生产候选显式记 null。只归一此格式差异，
   // 原始录制保持不变，正文、检索时间、题干和其余字段仍必须逐项相等。
   const expectedState = {
     ...state,
@@ -79,7 +83,11 @@ export function replayFrozen(recording) {
     verdict: source.verdict,
     kept: source.snippets.map((snippet) => snippet.kept),
   }));
-  assert.deepEqual(actual, recording.expected, '生产逐来源和逐片裁决必须与冻结实验一致');
+  assert.deepEqual(
+    actual,
+    expectedOverride ?? recording.expected,
+    '生产逐来源和逐片裁决必须与冻结实验一致'
+  );
   return {
     sources: table.length,
     snippets: table.reduce((n, source) => n + source.snippets.length, 0),

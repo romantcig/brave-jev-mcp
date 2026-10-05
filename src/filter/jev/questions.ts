@@ -111,9 +111,9 @@ export const snippetGroupsOf = (snippetCount: number): JevSnippetGroup[] => {
 };
 
 /**
- * 阈值默认值：页面 filler 概率 >= fillerDrop 时整页删除；
- * 片段保留概率 >= 组门槛时保留（二/三片组用 groupKeepMin，单片组用 singleKeepMin）。
- * 客户端不舍入概率。
+ * 基础阈值默认值：fillerDrop 用于页面删除，groupKeepMin / singleKeepMin
+ * 分别用于二/三片组与单片组的保留概率。最终删留由 threshold.ts 的纯判定决定，
+ * 包含阈值附近的临界删除；客户端不舍入概率。
  */
 export const DEFAULT_THRESHOLDS = Object.freeze({
   fillerDrop: 0.8,

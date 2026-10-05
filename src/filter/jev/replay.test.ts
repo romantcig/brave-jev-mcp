@@ -9,8 +9,16 @@ const files = readdirSync(root)
   .filter((name) => name.endsWith('.json'))
   .sort();
 assert.equal(files.length, 3);
+// 显式裁决预期按夹具文件名查找；没有对应项时使用录制内 expected。
+const currentExpected = JSON.parse(
+  readFileSync(
+    new URL('../../../fixtures/jev-three-in-one-current-expected.json', import.meta.url),
+    'utf8'
+  )
+) as Record<string, Array<{ verdict: 'keep' | 'drop'; kept: boolean[] }>>;
 for (const file of files) {
   it(`冻结组合题请求与逐片裁决：${file}`, () => {
-    replayFrozen(JSON.parse(readFileSync(new URL(file, root), 'utf8')));
+    const recording = JSON.parse(readFileSync(new URL(file, root), 'utf8'));
+    replayFrozen(recording, currentExpected[file]);
   });
 }

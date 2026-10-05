@@ -10,6 +10,7 @@ import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { CONTEXT_LAYOUT_ID, FILTER_RULES_VERSION } from './version.js';
 import { QUESTION_SET_ID } from './jev/questions.js';
+import { DECISION_RULES_SNAPSHOT } from './jev/threshold.js';
 import { snippetCountOfState } from './jev/context.js';
 import { snippetKeepThreshold } from './jev/verdict.js';
 import {
@@ -88,6 +89,8 @@ export type SampleJevSentSnippet = {
   threshold: number;
   /** 保留概率是否进入片段裁决；页面层已删时为 false，后续删空来源不改变应用事实。 */
   applied: boolean;
+  /** 该片段确实应用了临界裁决时的实际补偿距离（含 0）；原判定删除或不应用时不带。 */
+  near_threshold_gap?: number;
   /** 最终是否返回该片段；来源整页删除时也为 drop，缺少过程证据时为 null。 */
   verdict: 'keep' | 'drop' | null;
   /** 最终删除原因，优先记录整页删除原因。 */
@@ -184,10 +187,12 @@ export type SampleJev = {
   sent: SampleJevSentSource[];
 };
 
-/** 生效的过滤配置，不含认证材料或环境变量。 */
+/** 生效的过滤配置与只读运行规则快照，不含认证材料或环境变量。 */
 export type SampleConfigSnapshot = {
-  /** 五项生效阈值（THRESHOLD_SPECS 投影 snake_case） */
+  /** 三项生效阈值（THRESHOLD_SPECS 投影 snake_case） */
   thresholds: Record<string, number>;
+  /** 只读构建规则快照，不代表本次命中；读取时允许缺失，不是可写配置组。 */
+  decision_rules?: { near_threshold_max_gap: number };
   /** Jev 客户端配置：模型、单次尝试超时与并发上限。 */
   jev: {
     model: string;
@@ -462,6 +467,9 @@ const buildJevSection = (input: SampleInput, config: FilterConfig): SampleJev | 
             position < stateSnippetCount &&
             row?.verdict === 'keep' &&
             row.snippet_judgments?.length === record.snippet_keys.length,
+          ...(snippetOutcome?.near_threshold_gap !== undefined
+            ? { near_threshold_gap: snippetOutcome.near_threshold_gap }
+            : {}),
           verdict,
           ...(reason !== undefined ? { reason } : {}),
           text: record.snippet_texts[position] ?? '',
@@ -510,6 +518,7 @@ const buildRecord = (
   jev: buildJevSection(input, config),
   config_snapshot: {
     thresholds: thresholdSnapshot(config),
+    decision_rules: { ...DECISION_RULES_SNAPSHOT },
     jev: {
       model: config.jev.model,
       timeout_ms: config.jev.timeoutMs,
@@ -548,6 +557,7 @@ const buildErrorRecord = (
   jev: null,
   config_snapshot: {
     thresholds: thresholdSnapshot(config),
+    decision_rules: { ...DECISION_RULES_SNAPSHOT },
     jev: {
       model: config.jev.model,
       timeout_ms: config.jev.timeoutMs,

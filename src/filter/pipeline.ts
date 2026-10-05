@@ -69,6 +69,8 @@ type WorkSnippet = {
   xCleanup?: XCleanupAction[];
   /** 阶段 1 dev.to 目录提纲清理（test/on 生效），在通用 JSON-LD 转换前判定。 */
   devtoCleanup?: DevToCleanupAction[];
+  /** 阶段 5 临界规则删除时携带的实际补偿距离（含 0）；原判定删除不带。 */
+  nearThresholdGap?: number;
 };
 
 /** 工作表里的一个来源。`url` 永远是 Brave 原始 URL。 */
@@ -334,6 +336,9 @@ const projectSource = (source: WorkSource): SourceStats => {
     ...(snippet.githubCleanup !== undefined ? { github_cleanup: snippet.githubCleanup } : {}),
     ...(snippet.xCleanup !== undefined ? { x_cleanup: snippet.xCleanup } : {}),
     ...(snippet.devtoCleanup !== undefined ? { devto_cleanup: snippet.devtoCleanup } : {}),
+    ...(snippet.nearThresholdGap !== undefined
+      ? { near_threshold_gap: snippet.nearThresholdGap }
+      : {}),
     chars: snippet.text.length,
   }));
 

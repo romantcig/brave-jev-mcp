@@ -7,6 +7,8 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { THRESHOLD_SPECS } from './config.js';
+import { DECISION_RULES_SNAPSHOT } from './jev/threshold.js';
+import { FILTER_RULES_VERSION } from './version.js';
 import type { FilterConfig, FilterStats } from './types.js';
 
 /** 错误请求记录的 stage：Brave 请求层失败 / 响应 schema 校验失败。 */
@@ -15,7 +17,7 @@ export type LogErrorStage = 'brave' | 'schema';
 /** test 模式样本的相对路径与实际保存状态。 */
 export type LogSamplePointer = { path: string; status: 'saved' | 'failed' };
 
-/** write 的可选第二参数：request_id 与样本指针（旧调用缺省——记录不产这两个键）。 */
+/** write 的可选第二参数：request_id 与样本指针；缺省时记录不产生这两个键。 */
 export type LogWriteMeta = { requestId: string; sample?: LogSamplePointer };
 
 /** 日志写入器：成功请求与错误请求两种落账入口，共用同一条串行写入链。 */
@@ -116,6 +118,9 @@ export function createLogWriter(config: FilterConfig): LogWriter {
         model_config: config.jev.model,
         model_reported: modelReported(stats),
         thresholds: thresholdSnapshot(config),
+        // 只读运行规则快照与规则版本：不依赖外部样本文件即可识别该记录的裁决语义。
+        decision_rules: { ...DECISION_RULES_SNAPSHOT },
+        filter_rules_version: FILTER_RULES_VERSION,
         // 缺省 meta 不产生关联键，兼容没有样本指针的记录。
         ...(meta !== undefined ? { request_id: meta.requestId } : {}),
         ...(meta?.sample !== undefined ? { sample: meta.sample } : {}),
@@ -135,6 +140,8 @@ export function createLogWriter(config: FilterConfig): LogWriter {
         backend: 'typesafe',
         model_config: config.jev.model,
         thresholds: thresholdSnapshot(config),
+        decision_rules: { ...DECISION_RULES_SNAPSHOT },
+        filter_rules_version: FILTER_RULES_VERSION,
         mode: config.mode,
         // 与错误样本使用相同的 request_id。
         ...(entry.requestId !== undefined ? { request_id: entry.requestId } : {}),
