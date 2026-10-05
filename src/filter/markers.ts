@@ -4,8 +4,7 @@
  */
 
 /** 阶段 2 样板行剥离的前缀表：命中行整行删。匹配语义见 prefilter.ts 的 matchesPrefix——
- * 独立样板行整行相等、短行前缀带词边界（中文条目阈值更紧）；`Share`/`分享`/`广告`
- * 这类词出现在正文长句行首时不会命中。可增补。 */
+ * 独立样板行整行相等、短行前缀带词边界；`Share` 这类词出现在正文长句行首时不会命中。可增补。 */
 export const BOILERPLATE_PREFIXES: readonly string[] = [
   'Continue after ad',
   'Share',
@@ -29,10 +28,4 @@ export const BOILERPLATE_PREFIXES: readonly string[] = [
   // 媒体页内嵌的付费情报服务推广标记。
   'Go deeper with GlobalData',
   'Access deeper industry intelligence',
-  // 中文条目
-  '分享',
-  '广告',
-  '相关阅读',
-  '点击查看',
-  '本站使用 Cookie',
 ];

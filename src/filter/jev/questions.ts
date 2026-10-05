@@ -111,16 +111,14 @@ export const snippetGroupsOf = (snippetCount: number): JevSnippetGroup[] => {
 };
 
 /**
- * 阈值默认值：页面 filler 概率 >= fillerDrop（加 CJK 加成）时整页删除；
+ * 阈值默认值：页面 filler 概率 >= fillerDrop 时整页删除；
  * 片段保留概率 >= 组门槛时保留（二/三片组用 groupKeepMin，单片组用 singleKeepMin）。
- * CJK 占比 > cjkShare 时只给页面门槛加 cjkBonus；客户端不舍入概率。
+ * 客户端不舍入概率。
  */
 export const DEFAULT_THRESHOLDS = Object.freeze({
   fillerDrop: 0.8,
   groupKeepMin: 0.25,
   singleKeepMin: 0.5,
-  cjkBonus: 0.1,
-  cjkShare: 0.5,
 } as const);
 
 /** 钉住模型版本；切换版本前需跑样本回归，避免 latest 别名随发布漂移。 */

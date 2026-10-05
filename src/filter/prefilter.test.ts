@@ -11,7 +11,6 @@ import {
   TITLE_LINE_MIN,
   TITLE_RESIDUAL_MAX,
 } from './prefilter.js';
-import { tokenize } from './tokenize.js';
 
 /** 从入库夹具逐字取出的片段，用于直接验证预筛谓词。 */
 
@@ -63,21 +62,13 @@ describe('matchesPrefix', () => {
   });
 
   it('does not match long body lines that merely begin with a table entry', () => {
-    // Share、分享、广告等词可出现在正文句首，不能无条件 startsWith 删除。
+    // Share 这类词可出现在正文句首，不能无条件 startsWith 删除。
     assert.equal(
       matchesPrefix('Shares of Nvidia fell 5% on Tuesday after weaker guidance.', ['Share']),
       false
     );
     assert.equal(
       matchesPrefix('SharePoint Online now supports the new API for list formatting.', ['Share']),
-      false
-    );
-    assert.equal(
-      matchesPrefix('分享一下我的 Claude Code hooks 配置，关键是 PostToolUse 的写法。', ['分享']),
-      false
-    );
-    assert.equal(
-      matchesPrefix('广告投放的新规则从下个月开始生效，涉及所有搜索引擎。', ['广告']),
       false
     );
     assert.equal(
@@ -90,7 +81,7 @@ describe('matchesPrefix', () => {
     );
   });
 
-  it('still matches whole-line entries, short prefixed lines and Chinese short lines', () => {
+  it('still matches whole-line entries and short prefixed lines', () => {
     // 独立样板行（整行相等，行末标点忽略）
     assert.equal(matchesPrefix('Share', ['Share']), true);
     assert.equal(matchesPrefix('Read next.', ['Read next']), true);
@@ -98,9 +89,6 @@ describe('matchesPrefix', () => {
     // 短行 + 英文词边界：'Share' 不吞 'Shares'/'SharePoint'
     assert.equal(matchesPrefix('Share this article', ['Share']), true);
     assert.equal(matchesPrefix('READ MORE: the full story', ['Read more']), true);
-    // 中文表项只在短行命中（阈值远小于英文）
-    assert.equal(matchesPrefix('分享到微博', ['分享']), true);
-    assert.equal(matchesPrefix('相关阅读：往期回顾', ['相关阅读']), true);
   });
 });
 

@@ -3,15 +3,11 @@
  * 纯函数，不修改输入；前缀表由调用方统一传入。
  */
 
-import { CJK_SEGMENT, tokenize } from './tokenize.js';
 import { normalizeTitleForCompare } from './jsonld.js';
 
-/** 样板短行阈值（英文条目）：行归一化后不超过该长度才允许前缀命中——Share/分享/广告
- * 这类词常出现在正文句首，长行必须放过。 */
+/** 样板短行阈值（码元）：行归一化后不超过该长度才允许前缀命中——Share 这类词
+ * 常出现在正文句首，长行必须放过。 */
 export const BOILERPLATE_SHORT_LINE_MAX = 40;
-
-/** 样板短行阈值（中文条目）：中文正文句没有空格分隔，40 码元能装下一整句，阈值远小于英文。 */
-export const BOILERPLATE_SHORT_LINE_MAX_CJK = 12;
 
 /** 去掉行首 # / * / - 标记及其间空白，再 trim；不压缩内部空白或改变大小写。 */
 export function normalizeLine(line: string): string {
@@ -20,7 +16,7 @@ export function normalizeLine(line: string): string {
 
 /**
  * 行与前缀使用相同归一化，忽略大小写并剥掉末尾标点。
- * 整行相等时匹配；短行也可按前缀匹配，英文要求词边界，避免 Share 吞掉 Shares。
+ * 整行相等时匹配；短行也可按前缀匹配，要求词边界，避免 Share 吞掉 Shares。
  * 两侧都要归一化，因为前缀表自身可能带 Markdown 标记。
  */
 export function matchesPrefix(normalizedLine: string, prefixes: readonly string[]): boolean {
@@ -29,12 +25,7 @@ export function matchesPrefix(normalizedLine: string, prefixes: readonly string[
     const entry = stripTrailingPunctuation(normalizeLine(prefix).toLowerCase());
     if (line === entry) return true;
 
-    const max = CJK_SEGMENT.test(entry)
-      ? BOILERPLATE_SHORT_LINE_MAX_CJK
-      : BOILERPLATE_SHORT_LINE_MAX;
-    if (line.length > max || !line.startsWith(entry)) return false;
-    // 中文没有词边界概念，短行前缀即命中；英文要求条目后是非字母数字
-    if (CJK_SEGMENT.test(entry)) return true;
+    if (line.length > BOILERPLATE_SHORT_LINE_MAX || !line.startsWith(entry)) return false;
     const next = line[entry.length];
     return next === undefined || !/[a-z0-9]/.test(next);
   });

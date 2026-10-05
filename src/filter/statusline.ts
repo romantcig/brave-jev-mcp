@@ -9,9 +9,6 @@ import type { FilterStats, JevFailKind, SourceDropReason } from './types.js';
 /** 状态行识别的失败类型：per_source 的 fail_kind 加上熔断与无密钥。 */
 type StatusLineFailKind = JevFailKind | 'no_key' | 'circuit_breaker';
 
-/** 兼容旧 stale 记录时，intent 回显的最大长度。 */
-const INTENT_ECHO_MAX = 100;
-
 /** 主数字的英文复数规则；原因词不变形，不用本助手。 */
 const plural = (count: number, singular: string): string =>
   count === 1 ? singular : `${singular}s`;
@@ -20,19 +17,10 @@ const plural = (count: number, singular: string): string =>
 export function buildStatusLine(stats: FilterStats): string | undefined {
   const dropped = stats.sources.filter((source) => source.verdict === 'drop');
 
-  // 按原因首次出现的顺序聚合；兼容旧 stale 记录时逐来源回显 intent。
-  const intentEcho = `"${truncateIntent(stats.request.intent)}"`;
+  // 按原因首次出现的顺序聚合。
   const reasonCounts = new Map<SourceDropReason, number>();
-  type ListItem = { kind: 'count'; reason: SourceDropReason } | { kind: 'stale' };
-  const list: ListItem[] = [];
   for (const source of dropped) {
     const reason: SourceDropReason = source.reason ?? 'empty';
-    if (reason === 'stale') {
-      // 仅用于历史样本的 stale 原因兼容。
-      list.push({ kind: 'stale' });
-      continue;
-    }
-    if (!reasonCounts.has(reason)) list.push({ kind: 'count', reason });
     reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1);
   }
 
@@ -95,12 +83,8 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
 
   const parts: string[] = [];
   if (dropped.length > 0) {
-    const reasonList = list
-      .map((item) =>
-        item.kind === 'stale'
-          ? `1 stale (vs intent: ${intentEcho})`
-          : `${reasonCounts.get(item.reason)} ${item.reason}`
-      )
+    const reasonList = [...reasonCounts.entries()]
+      .map(([reason, count]) => `${count} ${reason}`)
       .join(', ');
     parts.push(
       `dropped ${dropped.length} of ${stats.brave.n_sources} ${plural(stats.brave.n_sources, 'source')}: ${reasonList}`
@@ -189,38 +173,3 @@ function formatFilterError(
   const code = failStatusMap.get(primaryKind) ?? defaultCode;
   return `[error] [${countDesc}: filter ${reason}, raw sources kept] [${code}]`;
 }
-
-/**
- * 只转义展示文本，不改传给 Jev 和日志的原 intent。
- * 引号、反斜杠、控制字符和孤立代理码元显示为转义串，保持状态行单行。
- */
-const escapeForEcho = (intent: string): string =>
-  intent.replace(
-    /[\u0000-\u001f\u007f\u2028\u2029"\\]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
-    (char) => {
-      switch (char) {
-        case '"':
-          return '\\"';
-        case '\\':
-          return '\\\\';
-        case '\n':
-          return '\\n';
-        case '\r':
-          return '\\r';
-        case '\t':
-          return '\\t';
-        default:
-          return `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`;
-      }
-    }
-  );
-
-/** 转义后截断 intent；若截断点劈开合法代理对则回退一位。 */
-const truncateIntent = (intent: string): string => {
-  const escaped = escapeForEcho(intent);
-  if (escaped.length <= INTENT_ECHO_MAX) return escaped;
-  let cut = escaped.slice(0, INTENT_ECHO_MAX);
-  const last = cut.charCodeAt(cut.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
-  return `${cut}…`;
-};

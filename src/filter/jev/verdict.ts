@@ -4,7 +4,6 @@
  * 使用最小结构类型，避免与 pipeline.ts 循环导入。
  */
 
-import { CJK_SEGMENT, SCRIPT_PATTERN } from '../tokenize.js';
 import { PAGE_QUESTION_KEY } from './questions.js';
 import type {
   FilterStats,
@@ -40,21 +39,6 @@ export type VerdictJudgedRow = {
   snippet_judgments?: SnippetJudgments;
 };
 
-/**
- * CJK 字符数占标题与片段总 UTF-16 码元数的比例；空输入为 0。
- * 复用 tokenize.ts 的字符分类，空格和标点只计入分母。
- */
-export function cjkShareOf(title: string, texts: readonly string[]): number {
-  const whole = title + texts.join('');
-  if (whole.length === 0) return 0;
-
-  let cjk = 0;
-  for (const { 0: segment } of whole.matchAll(SCRIPT_PATTERN)) {
-    if (CJK_SEGMENT.test(segment)) cjk += segment.length;
-  }
-  return cjk / whole.length;
-}
-
 /** 概率必须是 [0,1] 内的有限数，否则返回 undefined。 */
 const usableProbability = (value: number | undefined): number | undefined =>
   value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
@@ -67,8 +51,7 @@ export const snippetKeepThreshold = (groupSize: number, thresholds: JevThreshold
   groupSize >= 2 ? thresholds.groupKeepMin : thresholds.singleKeepMin;
 
 /**
- * 页面裁决：只判 filler，概率 >= fillerDrop + CJK 加成时整页删除，原因 filler。
- * CJK 占比 > cjkShare 时页面门槛加 cjkBonus（片段门槛不加成）。
+ * 页面裁决：只判 filler，概率 >= fillerDrop 时整页删除，原因 filler。
  * 页面题缺答、错型、越界或非有限时保守保留整源，并将来源行标为 validation。
  */
 export function applySourceVerdicts(
@@ -94,14 +77,7 @@ export function applySourceVerdicts(
       continue;
     }
 
-    // CJK 占比与 state 口径一致：标题加幸存片段文本（state 只发幸存片段）
-    const cjkShare = cjkShareOf(
-      source.title,
-      source.snippets.filter((snippet) => snippet.kept).map((snippet) => snippet.text)
-    );
-    const bonus = cjkShare > thresholds.cjkShare ? thresholds.cjkBonus : 0;
-
-    if (pFiller >= thresholds.fillerDrop + bonus) {
+    if (pFiller >= thresholds.fillerDrop) {
       source.verdict = 'drop';
       source.reason = 'filler';
       perSource.verdict = 'drop';
@@ -117,7 +93,6 @@ export function applySourceVerdicts(
  * 判断数组与幸存片段不等长时整源跳过，不能把短数组当成有效前缀。
  * null 判断（缺答或坏组）与无组映射的位置保守保留；
  * 组大小由映射提供：二/三片组用 groupKeepMin，单片组用 singleKeepMin。
- * CJK 加成不提高片段门槛，提高它会使删除更激进。
  */
 export function applySnippetJudgments(
   table: VerdictSourceRow[],

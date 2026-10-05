@@ -8,7 +8,6 @@ import { DEFAULT_THRESHOLDS } from './questions.js';
 import {
   applySnippetJudgments,
   applySourceVerdicts,
-  cjkShareOf,
   snippetKeepThreshold,
 } from './verdict.js';
 import type { VerdictSourceRow } from './verdict.js';
@@ -105,26 +104,6 @@ const singleSource = (
 };
 
 // ---------------------------------------------------------------------------
-// cjkShareOf：CJK 字符数 / 标题加全部文本总字符数
-// ---------------------------------------------------------------------------
-
-describe('cjkShareOf', () => {
-  it('counts CJK characters over title plus all text characters', () => {
-    // '世界ab' = 2 CJK + 2 latin；title 'Hello' 5 chars 全 latin
-    // CJK 2 / total (5 + 4) = 2/9
-    const share = cjkShareOf('Hello', ['世界ab']);
-
-    assert.ok(Math.abs(share - 2 / 9) < 1e-12, `expected 2/9, got ${share}`);
-  });
-
-  it('returns 0 when there are no CJK characters or no text at all', () => {
-    assert.equal(cjkShareOf('Hello', ['plain text']), 0);
-    assert.equal(cjkShareOf('', []), 0);
-    assert.equal(cjkShareOf('', ['']), 0);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // snippetKeepThreshold：组大小选择门槛——二/三片组 groupKeepMin，单片 singleKeepMin
 // ---------------------------------------------------------------------------
 
@@ -136,7 +115,7 @@ describe('snippetKeepThreshold', () => {
   });
 });
 
-// 页面裁决：只判 filler，CJK 占比严格大于阈值才加成；无效概率保守保留并记 validation。
+// 页面裁决：只判 filler；无效概率保守保留并记 validation。
 
 describe('applySourceVerdicts', () => {
   it('drops at exactly the filler threshold (p >= threshold) and keeps just below', () => {
@@ -157,42 +136,6 @@ describe('applySourceVerdicts', () => {
     assert.equal(kept.table[0].verdict, 'keep');
     assert.equal(kept.row.verdict, 'keep');
     assert.equal(kept.row.reason, undefined);
-  });
-
-  it('drops a 0.90 filler even with the CJK bonus when it reaches the raised gate', () => {
-    // title 2 CJK + text 2 CJK + 2 latin → CJK 4 / 6 ≈ 0.667 > 0.5 → bonus 0.10
-    const rescued = singleSource(0.9, { title: '你好', texts: ['世界ab'] });
-    applySourceVerdicts(
-      rescued.table,
-      buildJudged([rescued.row]),
-      DEFAULT_THRESHOLDS,
-      rescued.stats
-    );
-    // 0.90 >= 0.80 + 0.10 = 0.90 → drop（边界即删）
-    assert.equal(rescued.table[0].verdict, 'drop');
-    assert.equal(rescued.table[0].reason, 'filler');
-  });
-
-  it('keeps a 0.89 filler with the CJK bonus when the share is above the threshold', () => {
-    const rescued = singleSource(0.89, { title: '你好', texts: ['世界ab'] });
-    applySourceVerdicts(
-      rescued.table,
-      buildJudged([rescued.row]),
-      DEFAULT_THRESHOLDS,
-      rescued.stats
-    );
-    // 0.89 < 0.80 + 0.10 = 0.90 → keep（方向保守：中文来源更难被丢）
-    assert.equal(rescued.table[0].verdict, 'keep');
-    assert.equal(rescued.row.verdict, 'keep');
-  });
-
-  it('does not apply the bonus when the CJK share is exactly the threshold', () => {
-    // title '你好a' = 2 CJK + 1 latin；text '世bc' = 1 CJK + 2 latin → CJK 3 / 6 = 0.5
-    const { table, row, stats } = singleSource(0.85, { title: '你好a', texts: ['世bc'] });
-    applySourceVerdicts(table, buildJudged([row]), DEFAULT_THRESHOLDS, stats);
-    // 占比恰 0.5 不加成（严格大于），0.85 >= 0.80 → drop
-    assert.equal(table[0].verdict, 'drop');
-    assert.equal(table[0].reason, 'filler');
   });
 
   it('skips the page verdict and records validation for missing or out-of-range probabilities', () => {
@@ -245,8 +188,7 @@ describe('applySourceVerdicts', () => {
 
 // ---------------------------------------------------------------------------
 // applySnippetJudgments：保留概率 < 所在组门槛才删（边界保留）、
-// 判断数组与幸存片段等长才应用（等长契约）、null 判断与无组映射保守保留、
-// CJK 加成不抬片段门槛
+// 判断数组与幸存片段等长才应用（等长契约）、null 判断与无组映射保守保留
 // ---------------------------------------------------------------------------
 
 describe('applySnippetJudgments', () => {
@@ -365,29 +307,6 @@ describe('applySnippetJudgments', () => {
       table[0].snippets.map((snippet) => snippet.kept),
       [true, true]
     );
-  });
-
-  it('does not raise the snippet gates with the CJK bonus', () => {
-    // 卡在各档保留边界；若错误叠加 CJK 门槛，原本应留的片段会被删除。
-    for (const size of [1, 2, 3]) {
-      const table = buildTable([{ title: '你好', texts: Array(size).fill('世界ab') }]);
-      const probability = size === 1 ? 0.5 : 0.25;
-      const row = answeredRow(
-        's0',
-        answersWith(FILLER_KEEP),
-        judgmentsOf(...Array(size).fill(probability))
-      );
-      const stats = buildStats([row]);
-      const groups = new Map([['s0', [group('group0', 0, size)]]]);
-
-      applySnippetJudgments(table, buildJudged([row]), groups, DEFAULT_THRESHOLDS, stats);
-
-      assert.deepEqual(
-        table[0].snippets.map((snippet) => snippet.kept),
-        Array(size).fill(true)
-      );
-      assert.ok(table[0].snippets.every((snippet) => snippet.reason === undefined));
-    }
   });
 
   it('ignores failed rows and missing judgment arrays (judge failure keeps snippets)', () => {

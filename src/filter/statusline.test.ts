@@ -32,18 +32,14 @@ const dataOf = (...sources: { url: string; snippets: string[] }[]): BraveLlmCont
 
 const statsOf = (
   mode: FilterStats['mode'] = 'off',
-  overrides: { intent?: string; sources?: { url: string; snippets: string[] }[] } = {}
+  overrides: { sources?: { url: string; snippets: string[] }[] } = {}
 ): FilterStats => {
   const sources = overrides.sources ?? [
     { url: 'https://a.example/', snippets: ['one'] },
     { url: 'https://b.example/', snippets: ['two'] },
     { url: 'https://c.example/', snippets: ['three'] },
   ];
-  return createFilterStats(
-    mode,
-    { ...request, ...(overrides.intent ? { intent: overrides.intent } : {}) },
-    dataOf(...sources)
-  );
+  return createFilterStats(mode, { ...request }, dataOf(...sources));
 };
 
 /** 把统计表里的一个来源翻成丢弃（管道各步的最终落账形状）。 */
@@ -97,21 +93,10 @@ describe('buildStatusLine', () => {
 
   it('counts dropped sources by reason with SourceDropReason keys verbatim, in first-seen order', () => {
     const stats = statsOf();
-    dropSource(stats, 0, 'rewrite');
-    dropSource(stats, 1, 'rewrite');
+    dropSource(stats, 0, 'filler');
+    dropSource(stats, 1, 'filler');
     dropSource(stats, 2, 'empty');
-    assert.equal(buildStatusLine(stats), '[filter] dropped 3 of 3 sources: 2 rewrite, 1 empty');
-  });
-
-  it('keeps reason words undeformed and counts off_topic like any other reason', () => {
-    const stats = statsOf('off', {
-      sources: [
-        { url: 'https://a.example/', snippets: ['one'] },
-        { url: 'https://b.example/', snippets: ['two'] },
-      ],
-    });
-    dropSource(stats, 0, 'off_topic');
-    assert.equal(buildStatusLine(stats), '[filter] dropped 1 of 2 sources: 1 off_topic');
+    assert.equal(buildStatusLine(stats), '[filter] dropped 3 of 3 sources: 2 filler, 1 empty');
   });
 
   it('counts removed snippets inside surviving sources only, with English plurals', () => {
@@ -148,86 +133,6 @@ describe('buildStatusLine', () => {
     assert.equal(buildStatusLine(stats), '[filter] 1 snippet removed');
   });
 
-  it('echoes the intent verbatim for a stale drop', () => {
-    const stats = statsOf('off', {
-      intent: 'current Sanity Studio (v6, sanity.config.ts based)',
-      sources: [{ url: 'https://a.example/', snippets: ['one'] }],
-    });
-    dropSource(stats, 0, 'stale');
-    assert.equal(
-      buildStatusLine(stats),
-      '[filter] dropped 1 of 1 source: 1 stale (vs intent: "current Sanity Studio (v6, sanity.config.ts based)")'
-    );
-  });
-
-  it('truncates a long intent at 100 characters with an ellipsis', () => {
-    const longIntent = 'x'.repeat(150);
-    const stats = statsOf('off', {
-      intent: longIntent,
-      sources: [{ url: 'https://a.example/', snippets: ['one'] }],
-    });
-    dropSource(stats, 0, 'stale');
-    assert.equal(
-      buildStatusLine(stats),
-      `[filter] dropped 1 of 1 source: 1 stale (vs intent: "${'x'.repeat(100)}…")`
-    );
-  });
-
-  it('echoes control characters, line breaks and quotes as single-line escapes (A-01/A-02)', () => {
-    const build = (intent: string): string | undefined => {
-      const stats = statsOf('off', {
-        intent,
-        sources: [{ url: 'https://a.example/', snippets: ['one'] }],
-      });
-      dropSource(stats, 0, 'stale');
-      return buildStatusLine(stats);
-    };
-    // LF / CR / TAB / U+2028 / U+2029：单行转义，不跨行透传
-    assert.equal(
-      build('one\ntwo\rthree\tfour\u2028five'),
-      '[filter] dropped 1 of 1 source: 1 stale (vs intent: "one\\ntwo\\rthree\\tfour\\u2028five")'
-    );
-    // NUL 与 DEL 转成 \uXXXX 文本；直引号与反斜杠转义，包裹引号边界清楚
-    assert.equal(
-      build('a\u0000say "hi" b\\c\u007fd'),
-      '[filter] dropped 1 of 1 source: 1 stale (vs intent: "a\\u0000say \\"hi\\" b\\\\c\\u007fd")'
-    );
-    // 孤立代理对原样进来也转成 \uXXXX，不产生非法字符
-    assert.equal(
-      build('a\ud83db'),
-      '[filter] dropped 1 of 1 source: 1 stale (vs intent: "a\\ud83db")'
-    );
-  });
-
-  it('truncates without splitting a surrogate pair at the boundary', () => {
-    // 99 个 x 加一个双码元 emoji：截断落在高代理上时回退一位，不劈开 emoji
-    const intent = `${'x'.repeat(99)}😀`;
-    const stats = statsOf('off', {
-      intent,
-      sources: [{ url: 'https://a.example/', snippets: ['one'] }],
-    });
-    dropSource(stats, 0, 'stale');
-    assert.equal(
-      buildStatusLine(stats),
-      `[filter] dropped 1 of 1 source: 1 stale (vs intent: "${'x'.repeat(99)}…")`
-    );
-  });
-
-  it('echoes each stale drop on its own when several are dropped', () => {
-    const stats = statsOf('off', {
-      sources: [
-        { url: 'https://a.example/', snippets: ['one'] },
-        { url: 'https://b.example/', snippets: ['two'] },
-      ],
-    });
-    dropSource(stats, 0, 'stale');
-    dropSource(stats, 1, 'stale');
-    assert.equal(
-      buildStatusLine(stats),
-      '[filter] dropped 2 of 2 sources: 1 stale (vs intent: "test intent"), 1 stale (vs intent: "test intent")'
-    );
-  });
-
   it('reports error when sources not checked on mode on even with zero drops', () => {
     const stats = statsOf('on', {
       sources: [
@@ -260,11 +165,11 @@ describe('buildStatusLine', () => {
       { src: 's0', status: 'failed' },
       { src: 's1', status: 'failed' },
     ]);
-    dropSource(twoFailed, 0, 'stale');
+    dropSource(twoFailed, 0, 'filler');
     // s0 已被丢弃不参与未判定计数；keep 的 s1（failed）与 s2（缺行）都算未判定
     assert.equal(
       buildStatusLine(twoFailed),
-      '[filter] dropped 1 of 3 sources: 1 stale (vs intent: "test intent"); [error] [2 sources unchecked: filter check incomplete, raw sources kept] [500]'
+      '[filter] dropped 1 of 3 sources: 1 filler; [error] [2 sources unchecked: filter check incomplete, raw sources kept] [500]'
     );
   });
 
@@ -387,7 +292,6 @@ describe('buildStatusLine', () => {
   it('produces a byte-identical status line for test and on carriers of the same verdicts', () => {
     const build = (mode: FilterStats['mode']): string => {
       const stats = statsOf(mode, {
-        intent: 'current Sanity Studio (v6, sanity.config.ts based)',
         sources: [
           { url: 'https://a.example/', snippets: ['one', 'two'] },
           { url: 'https://b.example/', snippets: ['three'] },
@@ -395,9 +299,9 @@ describe('buildStatusLine', () => {
           { url: 'https://d.example/', snippets: ['five'] },
         ],
       });
-      dropSource(stats, 0, 'stale');
+      dropSource(stats, 0, 'filler');
       dropSource(stats, 1, 'empty');
-      dropSource(stats, 2, 'rewrite');
+      dropSource(stats, 2, 'filler');
       dropSnippet(stats, 0, 1);
       // 幸存的 d 来源未入 per_source：未判定段在 test/on 出现（同一裁决载体）
       withJev(stats, []);

@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseJevResponse } from './jev/client.js';
 import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
-import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
+import { collectJevCandidatesDetailed, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import { createNoKeyJevStats } from './stats.js';
 import type {
   BraveLlmContextResponse,
@@ -280,27 +280,6 @@ describe('filterLlmContext', () => {
     assert.equal(stats.sources[2].reason, 'empty');
   });
 
-  it('drops a one-liner source that only shares intent terms during step 8', async () => {
-    const data = payload();
-    data.grounding.generic.push({
-      url: 'https://example.org/oneliner',
-      title: 'Oneliner',
-      snippets: ['The current version.'],
-    });
-    data.sources['https://example.org/oneliner'] = { title: 'Oneliner', hostname: 'example.org' };
-    const req = {
-      params: { query: 'brave browser' },
-      intent: 'about the current version',
-    };
-
-    const { result, stats } = await filterLlmContext(data, req, offConfig);
-
-    // 片段含 intent 实词（current/version）所以步 3 保留，但不含 query 实词 → 步 8 丢
-    assert.equal(Object.hasOwn(result.sources, 'https://example.org/oneliner'), false);
-    assert.equal(stats.local.empty_dropped, 1);
-    assert.equal(stats.sources[2].reason, 'empty');
-  });
-
   it('drops a source whose snippets are all gone and cleans its sources entry', async () => {
     const data = payload();
     data.grounding.generic.push({ url: 'https://empty.example/', title: 'Empty', snippets: [] });
@@ -466,62 +445,6 @@ describe('filterLlmContext', () => {
       if (savedFile === undefined) delete process.env.JEV_FILTER_CONFIG_FILE;
       else process.env.JEV_FILTER_CONFIG_FILE = savedFile;
     }
-  });
-});
-
-describe('collectJevCandidates', () => {
-  // 两类情形内联载荷：s0 普通纯文本来源；s1 JSON-LD 转段来源（数组两个 articleBody，
-  // 步 1 转出各段都是候选片段）。片段都含 query 实词（brave / browser），预筛不误伤。
-  const jevPayload = (): BraveLlmContextResponse => ({
-    grounding: {
-      generic: [
-        {
-          url: 'https://search.brave.com/',
-          title: 'Brave Search',
-          snippets: [
-            'Brave is a privacy-focused browser and search engine.',
-            'Second snippet about Brave.',
-          ],
-        },
-        {
-          url: 'https://example.com/article',
-          title: 'Brave Release Notes',
-          snippets: [
-            '[{"@type":"NewsArticle","articleBody":"First body about Brave release details."},{"@type":"NewsArticle","articleBody":"Second body with more Brave analysis."}]',
-          ],
-        },
-      ],
-      map: [],
-    },
-    sources: {},
-  });
-
-  it('collects surviving sources with s{index} ids', () => {
-    const candidates = collectJevCandidates(jevPayload(), request, offConfig);
-
-    // 日期字段恒在：无元数据 → null
-    assert.deepEqual(candidates, [
-      {
-        id: 's0',
-        url: 'https://search.brave.com/',
-        title: 'Brave Search',
-        snippets: [
-          'Brave is a privacy-focused browser and search engine.',
-          'Second snippet about Brave.',
-        ],
-        brave_page_date: null,
-      },
-      {
-        id: 's1',
-        url: 'https://example.com/article',
-        title: 'Brave Release Notes',
-        snippets: [
-          'First body about Brave release details.',
-          'Second body with more Brave analysis.',
-        ],
-        brave_page_date: null,
-      },
-    ]);
   });
 });
 
@@ -1034,10 +957,10 @@ describe('跨来源内容独立保留', () => {
   });
 });
 
-describe('one-liner sources emptied by snippet verdicts are dropped in test mode (02-FIX batch D2)', () => {
-  it('reports a source that keeps only one query-term-free snippet after snippet verdicts', async () => {
+describe('snippet verdicts leave a single short snippet and the source survives', () => {
+  it('keeps a source that retains one query-term-free snippet after snippet verdicts', async () => {
     // s1 两个片段：组合题删掉含 query 实词的那条，只剩一条不含实词的短片段。
-    // off 链下它照常保留（off 不跑 Jev）；test 与 on 的链下步 8 判一句话来源丢掉。
+    // off 与 test 链下该来源均保留（不再判一句话来源）。
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -1063,7 +986,7 @@ describe('one-liner sources emptied by snippet verdicts are dropped in test mode
           filler: { kind: 'noul', probability: 0 },
         };
         if (source.id === 's1') {
-          // s1 的第一条（含实词）保留概率 0 被删，第二条（不含实词的短句）保留 → 一句话来源
+          // s1 的第一条（含实词）保留概率 0 被删，第二条（不含实词的短句）保留
           local.group0 = { kind: 'choice', probabilities: { none: 0, A: 0, B: 1, AB: 0 } };
         } else {
           local.group0 = { kind: 'choice', probabilities: { none: 0, A: 1 } };
@@ -1086,15 +1009,20 @@ describe('one-liner sources emptied by snippet verdicts are dropped in test mode
       { classify }
     );
 
-    // 组合题删掉含实词的片段后，剩余一句话来源被删除。
-    assert.equal(
-      offRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
-      true
+    // 组合题删掉含实词的片段；off 不跑 Jev（两条都在），test 只剩单条短片段。
+    const offSurviving = offRun.result.grounding.generic.find(
+      (item) => item.url === 'https://oneliner.example/'
     );
-    assert.equal(
-      testRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
-      false
+    assert.ok(offSurviving);
+    assert.deepEqual(offSurviving.snippets, [
+      'Brave beta fragment with query terms.',
+      'The current release timing.',
+    ]);
+    const testSurviving = testRun.result.grounding.generic.find(
+      (item) => item.url === 'https://oneliner.example/'
     );
+    assert.ok(testSurviving);
+    assert.deepEqual(testSurviving.snippets, ['The current release timing.']);
   });
 });
 
@@ -2210,10 +2138,10 @@ describe('dev.to 清理接入', () => {
       },
     });
     assert.ok(sent);
-    const candidates = collectJevCandidates(input, req, config);
+    const candidates = collectJevCandidatesDetailed(input, req, config);
     for (const [index, source] of sources.entries()) {
       const expected = expectedBodies[index];
-      assert.deepEqual(candidates[index].snippets, expected);
+      assert.deepEqual(candidates[index].snippets.map((snippet) => snippet.text), expected);
       assert.deepEqual(sent.sources[index].snippets, expected);
       assert.deepEqual(filtered.result.grounding.generic[index].snippets, expected);
     }

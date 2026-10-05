@@ -86,13 +86,11 @@ describe('parseFilterConfigObject: shape and defaults', () => {
     assert.deepEqual(fromNull, defaults());
   });
 
-  it('carries the five DEFAULT_THRESHOLDS values verbatim', () => {
+  it('carries the three DEFAULT_THRESHOLDS values verbatim', () => {
     assert.deepEqual(parseFilterConfigObject({}).thresholds, {
       fillerDrop: 0.8,
       groupKeepMin: 0.25,
       singleKeepMin: 0.5,
-      cjkBonus: 0.1,
-      cjkShare: 0.5,
     });
   });
 
@@ -158,13 +156,16 @@ describe('parseFilterConfigObject: jev group', () => {
     }
   });
 
-  it('accepts integer timeouts inside [1000, 60000] and rejects everything else', () => {
-    assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 1000 } }).jev.timeoutMs, 1000);
-    assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 60000 } }).jev.timeoutMs, 60000);
+  it('accepts any positive integer timeout up to the runtime cap and rejects everything else', () => {
+    assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 1 } }).jev.timeoutMs, 1);
     assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 30000 } }).jev.timeoutMs, 30000);
+    assert.equal(
+      parseFilterConfigObject({ jev: { timeout_ms: 2147483647 } }).jev.timeoutMs,
+      2147483647
+    );
 
-    // 超时必须是范围内的整数，避免 AbortSignal.timeout 在运行时抛 RangeError。
-    for (const value of [15000.5, 999, 60001, 0, -5, '15000', null, true]) {
+    // 超时必须是 [1, 2^31-1] 的整数：AbortSignal.timeout 对更大值会截成 1ms 或抛 ERR_OUT_OF_RANGE。
+    for (const value of [2147483648, 4294967296, 15000.5, 0, -5, '15000', null, true]) {
       const lines: string[] = [];
       const config = parseFilterConfigObject({ jev: { timeout_ms: value } }, (line) =>
         lines.push(line)
@@ -175,12 +176,12 @@ describe('parseFilterConfigObject: jev group', () => {
     }
   });
 
-  it('accepts integer concurrency inside [1, 64] and rejects everything else', () => {
+  it('accepts any positive integer concurrency and rejects everything else', () => {
     assert.equal(parseFilterConfigObject({ jev: { concurrency: 1 } }).jev.concurrency, 1);
-    assert.equal(parseFilterConfigObject({ jev: { concurrency: 64 } }).jev.concurrency, 64);
     assert.equal(parseFilterConfigObject({ jev: { concurrency: 6 } }).jev.concurrency, 6);
+    assert.equal(parseFilterConfigObject({ jev: { concurrency: 200 } }).jev.concurrency, 200);
 
-    for (const value of [0, -2, 65, 12.5, '12', null, true]) {
+    for (const value of [0, -2, 12.5, '12', null, true]) {
       const lines: string[] = [];
       const config = parseFilterConfigObject({ jev: { concurrency: value } }, (line) =>
         lines.push(line)
@@ -212,17 +213,16 @@ describe('parseFilterConfigObject: thresholds group', () => {
         thresholds: {
           filler_drop: 0.85,
           group_keep_min: 0.3,
-          cjk_share: 0,
+          single_keep_min: 0.45,
         },
       },
       (line) => lines.push(line)
     );
     assert.equal(lines.length, 0, lines.join('\n'));
     assert.deepEqual(config.thresholds, {
-      ...DEFAULT_THRESHOLDS,
       fillerDrop: 0.85,
       groupKeepMin: 0.3,
-      cjkShare: 0,
+      singleKeepMin: 0.45,
     });
     assert.ok(Object.isFrozen(config.thresholds));
   });
@@ -235,8 +235,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
           filler_drop: 0,
           group_keep_min: 1,
           single_keep_min: 0,
-          cjk_bonus: 1,
-          cjk_share: 0,
         },
       },
       (line) => lines.push(line)
@@ -246,8 +244,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
       fillerDrop: 0,
       groupKeepMin: 1,
       singleKeepMin: 0,
-      cjkBonus: 1,
-      cjkShare: 0,
     });
   });
 
@@ -259,7 +255,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
           filler_drop: 1.5,
           group_keep_min: -0.1,
           single_keep_min: 0.6,
-          cjk_share: 0.2,
         },
       },
       (line) => lines.push(line)
@@ -268,38 +263,18 @@ describe('parseFilterConfigObject: thresholds group', () => {
     assert.equal(config.thresholds.fillerDrop, DEFAULT_THRESHOLDS.fillerDrop);
     assert.equal(config.thresholds.groupKeepMin, DEFAULT_THRESHOLDS.groupKeepMin);
     assert.equal(config.thresholds.singleKeepMin, 0.6);
-    assert.equal(config.thresholds.cjkShare, 0.2);
     assert.ok(lines.some((line) => line.includes('thresholds.filler_drop=1.5')));
     assert.ok(lines.some((line) => line.includes('thresholds.group_keep_min=-0.1')));
-  });
-
-  it('静默忽略未知阈值键，不影响有效配置', () => {
-    const lines: string[] = [];
-    const config = parseFilterConfigObject(
-      {
-        thresholds: {
-          unknown_threshold: 0.9,
-          filler_drop: 0.85,
-        },
-      },
-      (line) => lines.push(line)
-    );
-    assert.equal(lines.length, 0, lines.join('\n'));
-    assert.equal(config.thresholds.fillerDrop, 0.85);
-    assert.deepEqual(
-      { ...config.thresholds, fillerDrop: DEFAULT_THRESHOLDS.fillerDrop },
-      { ...DEFAULT_THRESHOLDS }
-    );
   });
 
   it('falls back for non-numeric and string values, warning once per key', () => {
     const lines: string[] = [];
     const config = parseFilterConfigObject(
-      { thresholds: { single_keep_min: 'high', cjk_bonus: 0.2, group_keep_min: 'bad' } },
+      { thresholds: { single_keep_min: 'high', filler_drop: 0.7, group_keep_min: 'bad' } },
       (line) => lines.push(line)
     );
     assert.equal(config.thresholds.singleKeepMin, DEFAULT_THRESHOLDS.singleKeepMin);
-    assert.equal(config.thresholds.cjkBonus, 0.2);
+    assert.equal(config.thresholds.fillerDrop, 0.7);
     assert.equal(config.thresholds.groupKeepMin, DEFAULT_THRESHOLDS.groupKeepMin);
     assert.equal(lines.length, 2, lines.join('\n'));
   });
@@ -394,14 +369,14 @@ describe('parseFilterConfigObject: warning format', () => {
     parseFilterConfigObject(
       {
         mode: 'banana',
-        jev: { model: '', timeout_ms: 15000.5, concurrency: 65 },
-        thresholds: { single_keep_min: 2.01, group_keep_min: 2, cjk_bonus: 7 },
+        jev: { model: '', timeout_ms: 15000.5, concurrency: 0 },
+        thresholds: { single_keep_min: 2.01, group_keep_min: 2 },
         log_dir: '',
       },
       (line) => lines.push(line)
     );
 
-    assert.equal(lines.length, 8, lines.join('\n'));
+    assert.equal(lines.length, 7, lines.join('\n'));
     for (const line of lines) {
       assert.ok(line.startsWith('[jev-filter] config: '), line);
       assert.ok(line.includes('; using default '), line);

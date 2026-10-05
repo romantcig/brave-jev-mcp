@@ -202,13 +202,11 @@ export type ClassifyDeps = {
   }): Promise<ClassifyOutcome>;
 };
 
-/** 五项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
+/** 三项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
 export type JevThresholds = {
   fillerDrop: number;
   groupKeepMin: number;
   singleKeepMin: number;
-  cjkBonus: number;
-  cjkShare: number;
 };
 
 /** per_source 失败种类；熔断短路另用 status `'breaker_open'` 表达，不重复计。 */
@@ -316,14 +314,7 @@ export type JevStats = {
 };
 
 /** 整源删除原因。 */
-export type SourceDropReason =
-  | 'empty'
-  | 'off_topic'
-  | 'listing'
-  | 'self_deprecated'
-  | 'stale'
-  | 'filler'
-  | 'rewrite';
+export type SourceDropReason = 'empty' | 'filler';
 
 /** 片段删除原因。 */
 export type SnippetRemovalReason =

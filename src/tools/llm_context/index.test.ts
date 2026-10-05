@@ -211,9 +211,7 @@ describe(`${name} (status line and JSONL log)`, () => {
     },
   };
 
-  // 有丢弃的载荷：第二个来源只有空白片段（预筛删光 → 空来源丢弃）；
-  // 幸存来源的片段长过 200 字符，避免一句话来源规则把它也丢掉
-  // （drop case 的 query 实词不在片段里，短片段会被 isOneLiner 判丢）
+  // 有丢弃的载荷：第二个来源只有空白片段（预筛删光 → 空来源丢弃）。
   const dropResponse = {
     grounding: {
       generic: [

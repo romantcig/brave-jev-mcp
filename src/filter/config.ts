@@ -23,16 +23,14 @@ const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'test', 'on']);
 
 const isFilterMode = (value: string): value is FilterMode => MODES.has(value);
 
-/** `timeout_ms` 的合法区间（整数）：保证 `AbortSignal.timeout()` 永不因参数抛 RangeError。 */
-export const JEV_TIMEOUT_MIN_MS = 1000;
-export const JEV_TIMEOUT_MAX_MS = 60000;
-
-/** `concurrency` 的合法区间（整数）。 */
-export const JEV_CONCURRENCY_MIN = 1;
-export const JEV_CONCURRENCY_MAX = 64;
-
 /** 默认 JSONL 目录，~ 展开为本机主目录。 */
 export const DEFAULT_LOG_DIR = '~/.brave-jev/logs';
+
+/**
+ * `timeout_ms` 的运行时上限：`AbortSignal.timeout()` 只接受 32 位有符号整数毫秒，
+ * 超界时 Node 会把 2^31 截成 1ms 或对 2^32 直接抛 ERR_OUT_OF_RANGE。
+ */
+export const JEV_TIMEOUT_MAX_MS = 2147483647;
 
 /** 坏值告警出口；缺省写 stderr（stdout 是 stdio 协议通道）。 */
 export type ConfigWarn = (line: string) => void;
@@ -65,6 +63,10 @@ const inRange = (value: unknown, min: number, max: number, integer = false): val
   value <= max &&
   (!integer || Number.isInteger(value));
 
+/** 正整数；`timeout_ms` 传给 `AbortSignal.timeout()`，并发名额都只要求有意义。 */
+const isPositiveInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isInteger(value) && value > 0;
+
 /** 路径值 trim 后非空才接受；只展开 ~、~/ 和 ~\ 前缀，~foo 原样保留。 */
 const optionalPath = (file: Record<string, unknown>, key: string): string | undefined => {
   const value = file[key];
@@ -85,7 +87,7 @@ const configFileRecord = (raw: unknown): Record<string, unknown> => (isRecord(ra
 
 /**
  * 配置键、内部阈值键与合法范围的统一映射，日志和样本快照复用此表。
- * 全部阈值（概率与 CJK 参数）都在 [0,1]。
+ * 全部阈值都是 [0,1] 内的概率。
  */
 export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly key: string;
@@ -97,8 +99,6 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
   { key: 'filler_drop', configKey: 'fillerDrop', min: 0, max: 1 },
   { key: 'group_keep_min', configKey: 'groupKeepMin', min: 0, max: 1 },
   { key: 'single_keep_min', configKey: 'singleKeepMin', min: 0, max: 1 },
-  { key: 'cjk_bonus', configKey: 'cjkBonus', min: 0, max: 1 },
-  { key: 'cjk_share', configKey: 'cjkShare', min: 0, max: 1 },
 ]);
 
 /**
@@ -141,14 +141,14 @@ export function parseFilterConfigObject(
   let timeoutMs = DEFAULT_JEV_TIMEOUT_MS;
   if (Object.hasOwn(jevRecord, 'timeout_ms')) {
     const value = jevRecord.timeout_ms;
-    if (inRange(value, JEV_TIMEOUT_MIN_MS, JEV_TIMEOUT_MAX_MS, true)) timeoutMs = value;
+    if (isPositiveInteger(value) && value <= JEV_TIMEOUT_MAX_MS) timeoutMs = value;
     else warn(ignored('jev.timeout_ms', value, DEFAULT_JEV_TIMEOUT_MS));
   }
 
   let concurrency = DEFAULT_JEV_CONCURRENCY;
   if (Object.hasOwn(jevRecord, 'concurrency')) {
     const value = jevRecord.concurrency;
-    if (inRange(value, JEV_CONCURRENCY_MIN, JEV_CONCURRENCY_MAX, true)) concurrency = value;
+    if (isPositiveInteger(value)) concurrency = value;
     else warn(ignored('jev.concurrency', value, DEFAULT_JEV_CONCURRENCY));
   }
 

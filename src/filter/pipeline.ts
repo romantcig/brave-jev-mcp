@@ -7,7 +7,7 @@
 import { parseFilterConfigObject } from './config.js';
 import { splitJsonFragment } from './jsonld.js';
 import { BOILERPLATE_PREFIXES } from './markers.js';
-import { isEmptySource, isOneLiner } from './nonArticle.js';
+import { isEmptySource } from './nonArticle.js';
 import { stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { cleanXBoilerplate } from './xCleanup.js';
@@ -15,7 +15,6 @@ import { cleanDevToBoilerplate } from './devtoCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetJudgments, applySourceVerdicts } from './jev/verdict.js';
 import { buildStatusLine } from './statusline.js';
-import { contentTerms } from './tokenize.js';
 import {
   BRAVE_DEFAULT_MAX_TOKENS,
   BRAVE_DEFAULT_MAX_URLS,
@@ -38,7 +37,6 @@ import type {
   DevToCleanupAction,
   GitHubCleanupAction,
   XCleanupAction,
-  JevCandidate,
   JevCandidateDetailed,
   JevDispatchRecord,
   JevPerSourceStats,
@@ -244,20 +242,16 @@ const prefilterSnippets = (
 };
 
 /**
- * 阶段 6 删除空来源和不含 query 实词的一句话来源；intent 不参与本阶段。
+ * 阶段 6 删除空来源：所有片段被前序步骤剥光的来源。
  * 删除只更新工作表标记，不移除行。
  * 删除归因为 empty，并计入 empty_dropped。
  */
-const dropEmptySources = (
-  table: WorkSource[],
-  stats: FilterStats,
-  queryTerms: ReadonlySet<string>
-): void => {
+const dropEmptySources = (table: WorkSource[], stats: FilterStats): void => {
   for (const source of table) {
     if (source.verdict !== 'keep') continue;
 
     const surviving = source.snippets.filter((snippet) => snippet.kept);
-    if (!isEmptySource(surviving) && !isOneLiner(surviving, queryTerms)) continue;
+    if (!isEmptySource(surviving)) continue;
 
     source.verdict = 'drop';
     source.reason = 'empty';
@@ -396,8 +390,6 @@ export async function filterLlmContext(
 ): Promise<FilterResult> {
   const table = buildWorkTable(data);
   const stats = createFilterStats(config.mode, toStatsRequest(request), data);
-  // 阶段 6 只看 query 实词（intent 不参与本阶段判定）
-  const queryTerms = contentTerms(request.params.query);
   // 阶段 3 填充派发证据，off / no_key 保持空表。
   let dispatches: JevDispatchRecord[] = [];
   // 请求级记录每次逻辑调用一条，off / no_key 保持空表。
@@ -406,11 +398,11 @@ export async function filterLlmContext(
   runLocalRules(table, stats, config);
   if (config.mode === 'off') {
     // off：整段跳过 Jev（stats.jev 保持 null），只跑本地链
-    runOffChain(table, stats, queryTerms);
+    runOffChain(table, stats);
   } else if (deps?.classify === undefined) {
     // 缺少分类器时走本地链，幸存内容保持 Brave 原序。
     stats.jev = createNoKeyJevStats();
-    runOffChain(table, stats, queryTerms);
+    runOffChain(table, stats);
   } else {
     // 阶段 3 Jev 请求派发：非空候选组织一次全量共享请求（§3.1）——test 与 on 共用
     // 此分支；裁决消费与记账形状完全一致
@@ -424,7 +416,7 @@ export async function filterLlmContext(
         groupsBySource.set(entry.source_id, entry.snippet_groups);
       }
     }
-    runOnChain(table, judged.rows, groupsBySource, config.thresholds, stats, queryTerms);
+    runOnChain(table, judged.rows, groupsBySource, config.thresholds, stats);
     // 来源裁决完成后再记有效性，复用实际校验结果；非裁决题缺答不应冒充校验失败。
     for (const record of dispatches) {
       const row = judged.rows.get(record.src);
@@ -446,16 +438,6 @@ export async function filterLlmContext(
  */
 const snippetKeyOf = (snippet: WorkSnippet): string =>
   `${snippet.index}${snippet.part !== undefined ? `.${snippet.part}` : ''}`;
-
-/** 带身份候选 → 纯文本候选（探测/重录与阶段 3 派发的既有消费形状）。 */
-const toPlainCandidates = (detailed: JevCandidateDetailed[]): JevCandidate[] =>
-  detailed.map(({ id, url, title, snippets, bravePageDate }) => ({
-    id,
-    url,
-    title,
-    snippets: snippets.map((snippet) => snippet.text),
-    brave_page_date: bravePageDate,
-  }));
 
 /**
  * 收集 keep 且仍有片段的来源，ID 为 s{原始索引}，文本取工作表当前值。
@@ -750,38 +732,21 @@ const runOnChain = (
   judged: ReadonlyMap<string, JevPerSourceStats>,
   groupsBySource: ReadonlyMap<string, readonly JevSnippetGroup[]>,
   thresholds: JevThresholds,
-  stats: FilterStats,
-  queryTerms: ReadonlySet<string>
+  stats: FilterStats
 ): void => {
   applySourceVerdicts(table, judged, thresholds, stats);
   applySnippetJudgments(table, judged, groupsBySource, thresholds, stats);
-  dropEmptySources(table, stats, queryTerms);
+  dropEmptySources(table, stats);
 };
 
 /** off 或缺少 classify 时：执行阶段 6 删除空来源。 */
-const runOffChain = (
-  table: WorkSource[],
-  stats: FilterStats,
-  queryTerms: ReadonlySet<string>
-): void => {
-  dropEmptySources(table, stats, queryTerms);
+const runOffChain = (table: WorkSource[], stats: FilterStats): void => {
+  dropEmptySources(table, stats);
 };
 
 /**
- * 跑本地阶段 1–2 后收集候选，供开发导出与请求构造核对。
+ * 跑本地阶段 1–2 后收集带身份候选，供开发冒烟与请求构造核对。
  * 不修改输入；实际样本使用客户端派发证据，不在保存时重新调用此函数。
- */
-export function collectJevCandidates(
-  data: BraveLlmContextResponse,
-  request: FilterCallContext,
-  config: FilterConfig
-): JevCandidate[] {
-  return toPlainCandidates(collectJevCandidatesDetailed(data, request, config));
-}
-
-/**
- * 带片段身份的候选导出；与 collectJevCandidates 共用本地处理和候选口径。
- * 供其包装及开发冒烟使用，样本保存不依赖此导出。
  */
 export function collectJevCandidatesDetailed(
   data: BraveLlmContextResponse,
