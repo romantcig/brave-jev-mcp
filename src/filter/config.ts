@@ -128,8 +128,6 @@ export function parseFilterConfigObject(
     else warn(ignored('mode', value, 'off'));
   }
 
-  // 遗留 overfetch_factor / blocklist_file / context_mode / temporal_context 按未知键忽略，不影响请求或题目。
-
   // jev 组：model / timeout_ms / concurrency
   let jevRecord: Record<string, unknown> = {};
   if (Object.hasOwn(file, 'jev')) {

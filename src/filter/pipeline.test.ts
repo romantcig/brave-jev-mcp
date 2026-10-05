@@ -1953,7 +1953,7 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
     assert.equal(result.grounding.generic.length, 4);
   });
 
-  it('完整重复只在页内删除，跨来源短片段保留', async () => {
+  it('完整重复不进行本地删除，独立保留出处', async () => {
     const textA = 'Brave browser official release announcement.';
     const shortText = 'Release v1.14';
 
@@ -1978,9 +1978,9 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
 
     const { result, stats } = await filterLlmContext(data, regressionRequest, offConfig);
 
-    // s0 页内第二个 textA 被删（dup_removed = 1）
-    assert.equal(result.grounding.generic[0].snippets.length, 2);
-    assert.equal(stats.local.dup_removed, 1);
+    // 完整重复不进行本地删除，原样保留（dup_removed = 0）
+    assert.equal(result.grounding.generic[0].snippets.length, 3);
+    assert.equal(stats.local.dup_removed, 0);
 
     // s1 保留独立来源的相同短片段。
     assert.equal(result.grounding.generic.length, 2);

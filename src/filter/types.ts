@@ -286,7 +286,7 @@ export type JevStats = {
   requests: JevRequestSummary[];
 };
 
-/** 整源删除原因；self_deprecated / stale / rewrite 仅为读取旧记录保留，当前不产生。 */
+/** 整源删除原因。 */
 export type SourceDropReason =
   | 'empty'
   | 'off_topic'
@@ -296,7 +296,7 @@ export type SourceDropReason =
   | 'filler'
   | 'rewrite';
 
-/** 片段删除原因；time_mismatch 仅为读取旧记录保留，当前不产生。 */
+/** 片段删除原因。 */
 export type SnippetRemovalReason =
   | 'jsonld_meta'
   | 'nav'
@@ -355,9 +355,7 @@ export type LocalStats = {
   x_cleanup_actions: number;
 };
 
-/**
- * GitHub 清洗动作规则名；退役名称仅保留为旧样本兼容类型，新运行不再产出。
- */
+/** GitHub 清洗动作规则名。 */
 export type GitHubCleanupRule =
   | 'repo_nav'
   | 'copy_branch_button'

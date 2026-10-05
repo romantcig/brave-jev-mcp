@@ -277,9 +277,8 @@ export const RequestHeadersSchema = z.object({
 // Whitelist of upstream query parameters exposed to the model. `.pick()` keys must
 // exist on RequestParamsSchema, so a renamed upstream parameter fails at compile time
 // and a newly added one stays hidden until deliberately listed here.
-// 四个数值旋钮不在这里复用：对外声明去掉 `.min()`（下限由 applyMinimumValues 钳位，
-// 越界不再报错），`.max()` 保留（上限越界仍被 SDK 拒绝），因此改在下方显式声明，
-// 与 RequestParamsSchema 的 `.min()` 数值一致性由 index.test.ts 锁定。
+// 四个数值旋钮对外声明不设 .min()，下限由 applyMinimumValues 统一钳位；保留 .max() 校验，
+// 与 RequestParamsSchema 的数值一致性由测试锁定。
 const Picked = RequestParamsSchema.pick({
   query: true,
   country: true,

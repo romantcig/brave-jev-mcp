@@ -150,10 +150,9 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats): void => {
 };
 
 /**
- * 阶段 2 固定顺序：样板行剥离 → 页内逐字去重。
+ * 阶段 2 固定顺序：样板行剥离。
  * 样板剥离内部依次为 GitHub / X 清洗、前缀行、标题重复行、引用块；平台清洗仅 test/on 应用。
- * 去重只与同来源内已保留片段比较，被删片段仍留表供统计。
- * 空片段和样板删除合计入 snippets_prefiltered，重复删除单独计数。
+ * 空片段和样板删除合计入 snippets_prefiltered。
  */
 const prefilterSnippets = (
   table: WorkSource[],
@@ -164,7 +163,6 @@ const prefilterSnippets = (
     if (source.verdict !== 'keep') continue;
 
     const survivorTexts: string[] = [];
-    const survivorTextSet = new Set<string>();
     for (const snippet of source.snippets) {
       if (!snippet.kept) continue;
 
@@ -218,14 +216,6 @@ const prefilterSnippets = (
       }
       snippet.text = stripped.text;
 
-      // 页内严格字符串全等去重，保留 Brave 原生顺序靠前的片段
-      if (survivorTextSet.has(snippet.text)) {
-        snippet.kept = false;
-        snippet.reason = 'dup';
-        stats.local.dup_removed += 1;
-        continue;
-      }
-      survivorTextSet.add(snippet.text);
       survivorTexts.push(snippet.text);
     }
   }
