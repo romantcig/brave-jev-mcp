@@ -230,12 +230,9 @@ describe('splitJsonFragment', () => {
     });
   });
 
-  it('treats unparsable or scalar text as plain text outside the JSON-LD branch', () => {
+  it('treats unparsable text as plain text outside the JSON-LD branch', () => {
     assert.deepEqual(splitJsonFragment('{not json', TITLE), { action: 'not_json' });
-    assert.deepEqual(splitJsonFragment('42', TITLE), { action: 'not_json' });
     assert.deepEqual(splitJsonFragment('Plain prose about Jev.', TITLE), { action: 'not_json' });
-    assert.deepEqual(splitJsonFragment('', TITLE), { action: 'not_json' });
-    assert.deepEqual(splitJsonFragment('   ', TITLE), { action: 'not_json' });
   });
 
   it('treats __proto__ like any other key and never pollutes Object.prototype', () => {

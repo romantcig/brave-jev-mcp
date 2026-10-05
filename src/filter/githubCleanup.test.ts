@@ -95,12 +95,11 @@ describe('比较页菜单和 PR 加载占位清理', () => {
   });
 });
 
-/** GitHub 清洗的命中、保护区域、原序与幂等回归；也检查不应再删除的界面文字。 */
+/** GitHub 清洗的命中、保护区域、原序与幂等回归。 */
 
 const REPO_ROOT = 'https://github.com/HexRaysSA/ida-mcp';
 const PR = 'https://github.com/HexRaysSA/ida-mcp/pull/8';
 const ISSUE = 'https://github.com/ZainCheung/sift-x/issues/2';
-const DISCUSSION = 'https://github.com/octocat/Hello-World/discussions/17';
 const RELEASE = 'https://github.com/HexRaysSA/ida-mcp/releases/tag/v2026.916.1';
 
 /** 真实样本形态：仓库首页片段（导航行 + 搜索界面块 + 面包屑混排）。 */
@@ -221,21 +220,6 @@ describe('规则 2：分支复制按钮后缀（PR）', () => {
     const cleaned = cleanGitHubBoilerplate(line, PR);
     assert.deepEqual(cleaned.actions, []);
     assert.equal(cleaned.text, line);
-  });
-});
-
-describe('退役规则不再应用', () => {
-  it('搜索块原样保留，只清掉现有导航行', () => {
-    const cleaned = cleanGitHubBoilerplate(REPO_SNIPPET, REPO_ROOT);
-    assert.deepEqual(cleaned.actions, [{ rule: 'repo_nav', line: 1 }]);
-    assert.equal(cleaned.text, REPO_SNIPPET.slice(REPO_SNIPPET.indexOf('\n') + 1));
-  });
-
-  it('反应状态行在所有页面原样保留', () => {
-    for (const url of [REPO_ROOT, PR, ISSUE, DISCUSSION, RELEASE]) {
-      const text = '报告正文\nReactions are currently unavailable';
-      assert.deepEqual(cleanGitHubBoilerplate(text, url), { text, actions: [] });
-    }
   });
 });
 

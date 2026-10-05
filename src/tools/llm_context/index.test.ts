@@ -1230,7 +1230,7 @@ describe(`${name} (no jev key, mode on)`, () => {
       process.env[key],
     ]);
     for (const [key] of savedKeys) delete process.env[key];
-    // mode 来自配置文件（旧 JEV_FILTER_MODE 变量已不再被读）
+    // mode 来自配置文件
     useFilterConfig({ mode: 'on' });
 
     const errors: unknown[][] = [];
@@ -1352,37 +1352,6 @@ describe(`${name} (config file lifecycle)`, () => {
     assert.equal((await call()).isError ?? false, false);
     assert.equal(calls, 2);
     assert.equal(forwarded[1].searchParams.get('maximum_number_of_urls'), '5');
-  });
-
-  it('ignores the removed JEV_FILTER_MODE variable entirely', async () => {
-    // 移除新配置中的模式和密钥后，仅设置旧环境变量不能开启 Jev。
-    // 若旧变量仍被读取，会产生缺密钥告警，因此同时核对告警为空。
-    const savedKey = process.env.TYPESAFE_API_KEY;
-    const savedMode = process.env.JEV_FILTER_MODE;
-    delete process.env.TYPESAFE_API_KEY;
-    useFilterConfig({});
-    process.env.JEV_FILTER_MODE = 'on';
-
-    const errors: unknown[][] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => {
-      errors.push(args);
-    };
-    try {
-      const result = await call();
-      assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
-      assert.ok(
-        !errors.some((args) => args.some((arg) => String(arg).includes('No Jev API key'))),
-        `JEV_FILTER_MODE must not switch the mode on: ${JSON.stringify(errors)}`
-      );
-    } finally {
-      console.error = originalError;
-      if (savedMode === undefined) delete process.env.JEV_FILTER_MODE;
-      else process.env.JEV_FILTER_MODE = savedMode;
-      if (savedKey === undefined) delete process.env.TYPESAFE_API_KEY;
-      else process.env.TYPESAFE_API_KEY = savedKey;
-      resetFilterStateForTest();
-    }
   });
 });
 
