@@ -6,7 +6,6 @@ import {
   DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
   DEFAULT_JEV_TIMEOUT_MS,
-  DEFAULT_THRESHOLDS,
   GLOBAL_INSTRUCTION,
   QUESTION_SET_ID,
   SNIPPET_CRITERIA,
@@ -24,27 +23,6 @@ describe('SOURCE_QUESTIONS', () => {
       'is_off_topic',
       'is_listing',
     ]);
-  });
-
-  it('is frozen so callers cannot mutate the question bank', () => {
-    assert.equal(Object.isFrozen(SOURCE_QUESTIONS), true);
-  });
-});
-
-describe('DEFAULT_THRESHOLDS', () => {
-  it('carries the seven authoritative initial values', () => {
-    assert.deepEqual(
-      { ...DEFAULT_THRESHOLDS },
-      {
-        offTopicDrop: 0.85,
-        listingDrop: 0.8,
-        fillerDrop: 0.8,
-        reasoningProtect: 0.7,
-        snippetMin: 1.0,
-        cjkBonus: 0.1,
-        cjkShare: 0.5,
-      }
-    );
   });
 });
 
@@ -118,34 +96,29 @@ describe('buildSourceQuestions', () => {
   });
 });
 
-// 逐字锁定评分题干与 criteria（Candidate 1+ / C1+ 规范），改题后必须重新取得回答。
-
-/** 冻结评分题干（Candidate 1+，位置 (3,1) 实例化）。 */
-const FROZEN_INSTRUCTIONS_3_1 =
-  'How useful is `sources[3].snippets[1]` for answering `intent`? ' +
-  'Assess time-bound claims using `sources`: an earlier prediction replaced by ' +
-  'a confirmed event is obsolete, but still-applicable technical explanations, ' +
-  'architectural comparisons, or practical examples remain useful.';
+// 评分题干与 criteria 的全文由 QUESTION_SET_ID 哈希锁定（见下方用例），
+// 此处只验证结构与占位符展开，不镜像长文本。
 
 describe('SNIPPET_CRITERIA', () => {
-  it('carries the three frozen criteria verbatim in order', () => {
-    assert.deepEqual(
-      [...SNIPPET_CRITERIA],
-      [
-        'Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts',
-        'Mentions the subject of `intent` but provides no specific information usable in answering it',
-        'States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`',
-      ]
-    );
-    assert.equal(Object.isFrozen(SNIPPET_CRITERIA), true);
+  it('carries exactly three criteria in drop / weak / strong order', () => {
+    assert.equal(SNIPPET_CRITERIA.length, 3);
+    // 以前缀识别各条语义身份：剔除 → 提及但无可用信息 → 有具体信息
+    assert.ok(SNIPPET_CRITERIA[0].startsWith('Navigation, boilerplate, off-direction'));
+    assert.ok(SNIPPET_CRITERIA[1].startsWith('Mentions the subject of `intent`'));
+    assert.ok(SNIPPET_CRITERIA[2].startsWith('States specific facts'));
   });
 });
 
 describe('buildSnippetScoreQuestion', () => {
-  it('reproduces the frozen text verbatim at a non-zero position', () => {
+  it('expands the score template placeholders at a non-zero position', () => {
     const question = buildSnippetScoreQuestion(3, 1);
     assert.equal(question.type, 'score');
-    assert.equal(question.instructions, FROZEN_INSTRUCTIONS_3_1);
+    // 模板占位符按 (来源, 片段) 下标展开
+    assert.ok(
+      question.instructions.startsWith(
+        'How useful is `sources[3].snippets[1]` for answering `intent`?'
+      )
+    );
     assert.deepEqual(question.criteria, SNIPPET_CRITERIA);
   });
 

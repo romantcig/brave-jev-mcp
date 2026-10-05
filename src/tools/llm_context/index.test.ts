@@ -648,7 +648,6 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           if (url.pathname === '/res/v1/llm/context') {
             assert.equal(url.searchParams.has('retrieval_time'), false);
             assert.equal(url.searchParams.has('retrievalTime'), false);
-            assert.equal(url.searchParams.has('temporal_context'), false);
             assert.equal(Date.now(), start.getTime(), '捕获发生在 Brave 出站之前');
             t.mock.timers.setTime(start.getTime() + 200);
             return new Response(JSON.stringify(braveResponse));
@@ -1453,7 +1452,7 @@ describe(`${name} (malformed upstream response)`, () => {
     const error = record.error as { stage: string };
     assert.equal(error.stage, 'schema');
     // 无伪造成功统计：错误记录没有 stats 主体（sources / output / jev 全不在）
-    for (const key of ['sources', 'output', 'jev', 'local', 'shadow_diff']) {
+    for (const key of ['sources', 'output', 'jev', 'local']) {
       assert.ok(!(key in record), `${key} must not appear in an error record`);
     }
   });

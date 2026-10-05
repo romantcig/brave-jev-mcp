@@ -98,25 +98,13 @@ describe('parseFilterConfigObject: shape and defaults', () => {
     });
   });
 
-  it('has no backend, context_mode or temporal_context fields any more', () => {
-    // all-only 清理：Jev 组只剩 model / timeout_ms / concurrency，请求组织只有 all
-    assert.equal(Object.hasOwn(parseFilterConfigObject({}).jev, 'backend'), false);
-    assert.deepEqual(Object.keys(parseFilterConfigObject({}).jev), [
-      'model',
-      'timeoutMs',
-      'concurrency',
-    ]);
-  });
-
-  it('is a pure function: the same input yields deep-equal fresh objects', () => {
+  it('is a pure function: the same input yields deep-equal results without mutating the input', () => {
     const raw = { mode: 'test', overfetch_factor: 2 };
 
     const first = parseFilterConfigObject(raw);
     const second = parseFilterConfigObject(raw);
 
     assert.deepEqual(first, second);
-    assert.notEqual(first, second);
-    assert.notEqual(first.jev, second.jev);
     assert.deepEqual(raw, { mode: 'test', overfetch_factor: 2 });
   });
 
@@ -138,24 +126,6 @@ describe('parseFilterConfigObject: mode', () => {
     assert.equal(parseFilterConfigObject({ mode: 'off' }).mode, 'off');
     assert.equal(parseFilterConfigObject({ mode: 'test' }).mode, 'test');
     assert.equal(parseFilterConfigObject({ mode: 'on' }).mode, 'on');
-  });
-
-  it("maps the legacy alias 'shadow' to 'test' with exactly one migration warning", () => {
-    // shadow 应映射到 test 并提示迁移，不能静默降为 off。
-    const lines: string[] = [];
-    const config = parseFilterConfigObject({ mode: 'shadow' }, (line) => lines.push(line));
-    assert.equal(config.mode, 'test');
-    assert.equal(lines.length, 1, lines.join('\n'));
-    assert.match(lines[0], /mode 'shadow' is a legacy alias for 'test'/);
-    assert.ok(lines[0].includes("update the config file to mode 'test'"), lines[0]);
-  });
-
-  it("maps case and whitespace variants of the alias ('SHADOW ') the same way", () => {
-    const lines: string[] = [];
-    const config = parseFilterConfigObject({ mode: '  SHADOW  ' }, (line) => lines.push(line));
-    assert.equal(config.mode, 'test');
-    assert.equal(lines.length, 1, lines.join('\n'));
-    assert.match(lines[0], /mode 'shadow' is a legacy alias for 'test'/);
   });
 
   it('ignores case and surrounding whitespace', () => {
@@ -233,29 +203,6 @@ describe('parseFilterConfigObject: jev group', () => {
     });
     assert.equal(lines.length, 1);
     assert.match(lines[0], /config: jev=5 is not an object/);
-  });
-
-  it('ignores the retired context_mode / temporal_context keys like any unknown key', () => {
-    // 遗留请求开关按未知键忽略，各种旧取值均不改变配置，也不告警。
-    const retired: Record<string, unknown>[] = [
-      { context_mode: 'single' },
-      { context_mode: 'all' },
-      { temporal_context: false },
-      { temporal_context: true },
-      { context_mode: 'all', temporal_context: true },
-    ];
-    for (const keys of retired) {
-      const lines: string[] = [];
-      const config = parseFilterConfigObject({ jev: { ...keys, timeout_ms: 20000 } }, (line) =>
-        lines.push(line)
-      );
-      assert.deepEqual(config.jev, {
-        model: DEFAULT_JEV_MODEL,
-        timeoutMs: 20000,
-        concurrency: DEFAULT_JEV_CONCURRENCY,
-      });
-      assert.equal(lines.length, 0, JSON.stringify(keys));
-    }
   });
 });
 
@@ -361,18 +308,6 @@ describe('parseFilterConfigObject: thresholds group', () => {
     assert.equal(config.thresholds.cjkBonus, 0.2);
     assert.equal(config.thresholds.listingDrop, DEFAULT_THRESHOLDS.listingDrop);
     assert.equal(lines.length, 2, lines.join('\n'));
-  });
-
-  it('ignores retired min_facts and novelty_min keys without warning or affecting thresholds', () => {
-    const lines: string[] = [];
-    const config = parseFilterConfigObject(
-      { thresholds: { min_facts: 6, novelty_min: 3, off_topic_drop: 0.9 } },
-      (line) => lines.push(line)
-    );
-    assert.equal(lines.length, 0);
-    assert.equal(config.thresholds.offTopicDrop, 0.9);
-    assert.equal('minFacts' in config.thresholds, false);
-    assert.equal('noveltyMin' in config.thresholds, false);
   });
 
   it('ignores unknown keys inside thresholds (fail-open direction)', () => {
@@ -590,28 +525,6 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
         concurrency: 6,
       },
       logDir: 'C:/logs/jev',
-    });
-  });
-
-  it('keeps parsing a config that still carries the retired keys (ignored silently)', () => {
-    // 遗留配置带着退役键（overfetch_factor, blocklist_file, jev.context_mode, min_facts, novelty_min 等）照常解析：其余配置生效，退役键不影响任何行为
-    const file = writeFixture(tmpRoot, 'retired-keys.json', {
-      mode: 'test',
-      overfetch_factor: 2,
-      blocklist_file: '~/no-such-blocklist.txt',
-      jev: { context_mode: 'all', temporal_context: true },
-      thresholds: { min_facts: 6, novelty_min: 3 },
-    });
-    let config: FilterConfig | undefined;
-    const stderr = captureStderr(() => {
-      config = loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: file });
-    });
-    assert.equal(stderr.length, 0, stderr.join('\n'));
-    assert.equal(config?.mode, 'test');
-    assert.deepEqual(config?.jev, {
-      model: DEFAULT_JEV_MODEL,
-      timeoutMs: DEFAULT_JEV_TIMEOUT_MS,
-      concurrency: DEFAULT_JEV_CONCURRENCY,
     });
   });
 

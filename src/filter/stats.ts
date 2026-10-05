@@ -68,7 +68,7 @@ const metaOf = (
 
 /**
  * 按 Brave 原序建立来源和片段统计，初始均为保留。
- * 输出规模初始为 0，由管道结束时填入；jev 与兼容字段 shadow_diff 初始为 null。
+ * 输出规模初始为 0，由管道结束时填入；jev 初始为 null。
  */
 export function createFilterStats(
   mode: FilterMode,
@@ -117,7 +117,6 @@ export function createFilterStats(
     sources,
     jev: null,
     output: { n_sources: 0, n_snippets: 0, chars: 0 },
-    shadow_diff: null,
   };
 }
 

@@ -18,16 +18,8 @@ import type { FilterConfig, FilterMode, JevThresholds } from './types.js';
 /** 指向配置文件的唯一配置类环境变量；未设 → 全部默认（mode off）。 */
 export const JEV_CONFIG_FILE_ENV = 'JEV_FILTER_CONFIG_FILE';
 
-/** 模式归一为 off/test/on；旧 shadow 映射为 test 并提示迁移，不能静默退为 off。 */
+/** 合法模式仅 off/test/on；其他值告警并回退 off。 */
 const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'test', 'on']);
-
-/** 旧别名到新值的映射（配置键 mode 不变；'shadow' 语义重定义为实际应用裁决的 test）。 */
-const LEGACY_MODE_ALIASES: ReadonlyMap<string, FilterMode> = new Map([['shadow', 'test']]);
-
-/** 识别旧 shadow 别名时的迁移提示。 */
-const SHADOW_ALIAS_MIGRATION =
-  `[jev-filter] config: mode 'shadow' is a legacy alias for 'test'; ` +
-  `update the config file to mode 'test'.`;
 
 const isFilterMode = (value: string): value is FilterMode => MODES.has(value);
 
@@ -127,16 +119,13 @@ export function parseFilterConfigObject(
   }
   const file = configFileRecord(raw);
 
-  // 归一模式，shadow 每次解析至多提示一次迁移；宿主初始化后复用配置。
+  // 归一模式：合法值照常使用，其他任何值告警并回退 off；宿主初始化后复用配置。
   let mode: FilterMode = 'off';
   if (Object.hasOwn(file, 'mode')) {
     const value = file.mode;
     const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (isFilterMode(text)) mode = text;
-    else if (LEGACY_MODE_ALIASES.has(text)) {
-      mode = LEGACY_MODE_ALIASES.get(text) as FilterMode;
-      warn(SHADOW_ALIAS_MIGRATION);
-    } else warn(ignored('mode', value, 'off'));
+    else warn(ignored('mode', value, 'off'));
   }
 
   // 遗留 overfetch_factor / blocklist_file / context_mode / temporal_context 按未知键忽略，不影响请求或题目。

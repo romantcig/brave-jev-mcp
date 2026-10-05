@@ -4,8 +4,8 @@
  */
 
 /**
+ * 合法模式仅 off/test/on；其他值告警并回退 off。
  * off 只跑本地规则；test/on 共用实际 Jev 过滤链，test 额外保存样本。
- * 配置解析将旧 shadow 值映射为 test。
  */
 export type FilterMode = 'off' | 'test' | 'on';
 
@@ -286,17 +286,6 @@ export type JevStats = {
   requests: JevRequestSummary[];
 };
 
-/**
- * 仅用于读取旧 shadow 日志：当时返回 off 结果并计算 would 差异。
- * 当前记录的 shadow_diff 恒为 null。
- */
-export type ShadowDiff = {
-  would_drop: string[];
-  would_remove_snippets: number;
-  would_restore: string[];
-  would_restore_snippets: number;
-};
-
 /** 整源删除原因；self_deprecated / stale / rewrite 仅为读取旧记录保留，当前不产生。 */
 export type SourceDropReason =
   | 'empty'
@@ -468,7 +457,6 @@ export type OutputStats = {
 
 /**
  * 状态行与 JSONL 共用的统计对象。off 的 jev 为 null，test/on 由阶段 3 Jev 填充。
- * shadow_diff 仅兼容旧记录，当前恒为 null。
  */
 export type FilterStats = {
   mode: FilterMode;
@@ -488,8 +476,6 @@ export type FilterStats = {
   sources: SourceStats[];
   jev: JevStats | null;
   output: OutputStats;
-  /** 旧影子差异，读取语义见 ShadowDiff；当前恒为 null。 */
-  shadow_diff: ShadowDiff | null;
 };
 
 /** `filterLlmContext` 的返回：过滤后的响应加统计对象。 */
