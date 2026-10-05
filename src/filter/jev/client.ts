@@ -158,33 +158,16 @@ const backoffDelayMs = (attempt: number, random: () => number): number => {
 };
 
 /**
- * 解析 Retry-After 的等待毫秒数：先 `retry-after-ms`（毫秒，可小数），再
- * `retry-after`（秒数，或 HTTP 日期——按 `now` 换算成距现在的毫秒数）。
- * 头缺失、空、非数或换算成负数 → undefined（用普通退避）。
+ * 解析 Retry-After 的等待毫秒数，只认标准"秒数"格式（可含小数）。
+ * 头缺失、空、非数或负数 → undefined（用普通退避）。
+ * 不解析 `retry-after-ms` 与 HTTP-date 两种无实证形态（PLAN 第 5 节"兜底"行 2026-10-05 口径）。
  */
-export const parseRetryAfterMs = (response: Response, now: () => number): number | undefined => {
-  const header = (name: string): string | null => {
-    const value = response.headers.get(name);
-    return value !== null && value.trim() !== '' ? value.trim() : null;
-  };
-
-  const msHeader = header('retry-after-ms');
-  if (msHeader !== null) {
-    const ms = Number(msHeader);
-    return Number.isFinite(ms) && ms >= 0 ? ms : undefined;
-  }
-
-  const secondsHeader = header('retry-after');
-  if (secondsHeader === null) return undefined;
-
-  // 纯数字（含小数）= 秒数；解析不了再按 HTTP 日期试
-  const seconds = Number(secondsHeader);
-  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : undefined;
-
-  const date = Date.parse(secondsHeader);
-  if (!Number.isFinite(date)) return undefined;
-  const delta = date - now();
-  return delta >= 0 ? delta : undefined;
+export const parseRetryAfterMs = (response: Response): number | undefined => {
+  const raw = response.headers.get('retry-after');
+  if (raw === null || raw.trim() === '') return undefined;
+  const seconds = Number(raw.trim());
+  if (!Number.isFinite(seconds)) return undefined;
+  return seconds >= 0 ? seconds * 1000 : undefined;
 };
 
 /** HTTP 失败详情仅保留状态码与正文前 200 字符。 */
@@ -200,7 +183,7 @@ const httpFailure = (
 
 /** 测试注入的时钟、睡眠与随机数（缺省用全局实现）。 */
 export type JevClassifierHooks = {
-  /** 当前时间戳：用于熔断窗口与 Retry-After 日期换算；缺省 Date.now。 */
+  /** 当前时间戳：用于熔断窗口；缺省 Date.now。 */
   now?: () => number;
   /** 退避睡眠；缺省 `setTimeout`。测试注入立即 resolve 以做下限断言。 */
   sleep?: (ms: number) => Promise<void>;
@@ -325,7 +308,10 @@ export function createJevClassifier(
       ): { kind: ClassifyFailKind; retryable: boolean } | undefined => {
         if (status === 401 || status === 403) return { kind: 'auth', retryable: false };
         if (status === 408) return { kind: 'timeout', retryable: true };
-        if (status === 429 || status === 529) return { kind: 'rate_limited', retryable: true };
+        // 429 是上游自身限流，等待与重试没有意义（PLAN 第 5 节"兜底"行 2026-10-05 口径）：
+        // 单次尝试即按 rate_limited 失败，不读 Retry-After，照旧计入熔断。
+        if (status === 429) return { kind: 'rate_limited', retryable: false };
+        if (status === 529) return { kind: 'rate_limited', retryable: true };
         if (status >= 500 && status <= 599) return { kind: 'network', retryable: true };
         return { kind: 'validation', retryable: false };
       };
@@ -400,8 +386,8 @@ export function createJevClassifier(
           return withDispatch(httpFailure(mapped?.kind ?? 'validation', status, bodyText), attempt);
         }
 
-        // Retry-After 优先于普通退避；要求等超上限就干脆不再重试
-        const retryAfterMs = parseRetryAfterMs(response, now);
+        // 仅可重试状态会走到这里；Retry-After 优先于普通退避，要求等超上限就干脆不再重试
+        const retryAfterMs = parseRetryAfterMs(response);
         if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) {
           recordFailure(mapped.kind);
           return withDispatch(httpFailure(mapped.kind, status, bodyText), attempt);

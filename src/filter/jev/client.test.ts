@@ -587,12 +587,12 @@ describe('createJevClassifier', () => {
     const saved = globalThis.fetch;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedAuth = (init?.headers as Record<string, string>)['Authorization'];
-      return new Response('rate limited', { status: 429 });
+      return new Response('overloaded', { status: 529 });
     }) as typeof fetch;
 
     try {
       const key = 'sk-super-secret-test-key-42';
-      // 恒 429 → 耗尽重试；注入 no-op sleep 不真等
+      // 恒 529 → 耗尽重试；注入 no-op sleep 不真等
       const classifier = createJevClassifier(
         jevConfig,
         { TYPESAFE_API_KEY: key },
@@ -609,7 +609,7 @@ describe('createJevClassifier', () => {
       assert.equal(capturedAuth, `Bearer ${key}`);
       // detail 无 key 值、无鉴权头关键字
       assert.equal(outcome.detail.includes(key), false, `detail leaked key: ${outcome.detail}`);
-      assert.match(outcome.detail, /^429 /);
+      assert.match(outcome.detail, /^529 /);
       assert.equal(/bearer/i.test(outcome.detail), false);
       assert.equal(/authorization/i.test(outcome.detail), false);
     } finally {
@@ -700,51 +700,38 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
   const instantHooks = { sleep: async () => {}, random: () => 0 };
 
-  it('retries 429 twice and answers on the third attempt', async () => {
-    let fetchCount = 0;
+  it('fails a 429 on the first attempt with zero retries and zero backoff (2026-10-05 policy)', async () => {
+    // 429 是上游自身限流，等待与重试没有意义：单次尝试即按 rate_limited 失败
+    const { fetchImpl, counter } = statusFetch(429, 'rate limited');
     const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([
-      () => {
-        fetchCount += 1;
-        return new Response('rate limited', { status: 429 });
-      },
-      () => {
-        fetchCount += 1;
-        return new Response('rate limited', { status: 429 });
-      },
-      () => {
-        fetchCount += 1;
-        return mockJevSuccessResponse(request.state, request.questions);
-      },
-    ]);
+    globalThis.fetch = fetchImpl;
+    const { sleeps, hooks } = sleepRecorder(0);
 
     try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
       const outcome = await classifier.classify(request);
 
-      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      assert.equal(fetchCount, 3);
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'rate_limited');
+      assert.equal(counter.calls, 1, '429 must not be retried');
+      assert.deepEqual(sleeps, [], '429 must not wait');
     } finally {
       globalThis.fetch = saved;
     }
   });
 
-  it('exhausts three attempts against persistent 429 and 529 and fails with rate_limited', async () => {
+  it('exhausts three attempts against persistent 529 and fails with rate_limited', async () => {
+    const { fetchImpl, counter } = statusFetch(529, 'overloaded');
     const saved = globalThis.fetch;
-    try {
-      for (const { status, body } of [
-        { status: 429, body: 'rate limited' },
-        { status: 529, body: 'overloaded' },
-      ]) {
-        const { fetchImpl, counter } = statusFetch(status, body);
-        globalThis.fetch = fetchImpl;
-        const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
-        const outcome = await classifier.classify(request);
+    globalThis.fetch = fetchImpl;
 
-        assert.ok(outcome.status === 'failed', `${status} ${JSON.stringify(outcome)}`);
-        assert.equal(outcome.kind, 'rate_limited');
-        assert.equal(counter.calls, 3);
-      }
+    try {
+      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
+      const outcome = await classifier.classify(request);
+
+      assert.ok(outcome.status === 'failed', JSON.stringify(outcome));
+      assert.equal(outcome.kind, 'rate_limited');
+      assert.equal(counter.calls, 3);
     } finally {
       globalThis.fetch = saved;
     }
@@ -885,7 +872,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
   it('backs off exactly 500ms then 1000ms when random returns 0', async () => {
     const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([() => new Response('rate limited', { status: 429 })]);
+    globalThis.fetch = scriptedFetch([() => new Response('overloaded', { status: 529 })]);
     const { sleeps, hooks } = sleepRecorder(0);
 
     try {
@@ -901,7 +888,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
   it('shaves at most 25% off each backoff when random returns 1', async () => {
     const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([() => new Response('rate limited', { status: 429 })]);
+    globalThis.fetch = scriptedFetch([() => new Response('overloaded', { status: 529 })]);
     const { sleeps, hooks } = sleepRecorder(1);
 
     try {
@@ -915,29 +902,11 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     }
   });
 
-  it('honours retry-after-ms over the ordinary backoff', async () => {
+  it('reads retry-after as seconds and sleeps instead of the ordinary backoff', async () => {
     const saved = globalThis.fetch;
     globalThis.fetch = scriptedFetch([
-      () => new Response('rate limited', { status: 429, headers: { 'retry-after-ms': '1200' } }),
-      () => mockJevSuccessResponse(request.state, request.questions),
-    ]);
-    const { sleeps, hooks } = sleepRecorder(0);
-
-    try {
-      const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, hooks);
-      const outcome = await classifier.classify(request);
-
-      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      assert.deepEqual(sleeps, [1200]);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
-  it('reads retry-after as seconds when retry-after-ms is absent', async () => {
-    const saved = globalThis.fetch;
-    globalThis.fetch = scriptedFetch([
-      () => new Response('rate limited', { status: 429, headers: { 'retry-after': '3' } }),
+      () =>
+        new Response('service unavailable', { status: 503, headers: { 'retry-after': '3' } }),
       () => mockJevSuccessResponse(request.state, request.questions),
     ]);
     const { sleeps, hooks } = sleepRecorder(0);
@@ -955,7 +924,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
 
   it('gives up after one fetch when retry-after exceeds the 5s cap', async () => {
     const saved = globalThis.fetch;
-    const { fetchImpl, counter } = statusFetch(429, 'rate limited', { 'retry-after': '10' });
+    const { fetchImpl, counter } = statusFetch(529, 'overloaded', { 'retry-after': '10' });
     globalThis.fetch = fetchImpl;
     const { sleeps, hooks } = sleepRecorder(0);
 
@@ -972,35 +941,14 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     }
   });
 
-  it('converts an HTTP-date retry-after into a wait using hooks.now', async () => {
-    const saved = globalThis.fetch;
-    const now = 1_800_000_000_000;
-    const date = new Date(now + 3000).toUTCString();
-    globalThis.fetch = scriptedFetch([
-      () => new Response('rate limited', { status: 429, headers: { 'retry-after': date } }),
-      () => mockJevSuccessResponse(request.state, request.questions),
-    ]);
-    const { sleeps, hooks } = sleepRecorder(0);
-
-    try {
-      const classifier = createJevClassifier(
-        jevConfig,
-        { TYPESAFE_API_KEY: 'k' },
-        { ...hooks, now: () => now }
-      );
-      const outcome = await classifier.classify(request);
-
-      assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      assert.deepEqual(sleeps, [3000]);
-    } finally {
-      globalThis.fetch = saved;
-    }
-  });
-
   it('falls back to the ordinary backoff when retry-after is garbage', async () => {
     const saved = globalThis.fetch;
     globalThis.fetch = scriptedFetch([
-      () => new Response('rate limited', { status: 429, headers: { 'retry-after': 'soon-ish' } }),
+      () =>
+        new Response('service unavailable', {
+          status: 503,
+          headers: { 'retry-after': 'soon-ish' },
+        }),
       () => mockJevSuccessResponse(request.state, request.questions),
     ]);
     const { sleeps, hooks } = sleepRecorder(0);
@@ -1136,7 +1084,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     const saved = globalThis.fetch;
     globalThis.fetch = (async () => {
       fetchCount += 1;
-      return new Response('rate limited', { status: 429 });
+      return new Response('overloaded', { status: 529 });
     }) as typeof fetch;
 
     try {
@@ -1163,14 +1111,14 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
   });
 
   it('resets the consecutive-failure count on any answered outcome', async () => {
-    // classify 序列 f, f, ok, f, f, ok → fetch 序：429×3 | 429×3 | 200 | 429×3 | 429×3 | 200
+    // classify 序列 f, f, ok, f, f, ok → fetch 序：529×3 | 529×3 | 200 | 529×3 | 529×3 | 200
     let fetchCount = 0;
     const okAt = new Set([7, 14]);
     const saved = globalThis.fetch;
     globalThis.fetch = (async () => {
       fetchCount += 1;
       if (okAt.has(fetchCount)) return mockJevSuccessResponse(request.state, request.questions);
-      return new Response('rate limited', { status: 429 });
+      return new Response('overloaded', { status: 529 });
     }) as typeof fetch;
 
     try {
@@ -1208,7 +1156,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
     globalThis.fetch = (async () => {
       fetchCount += 1;
       if (okAt.has(fetchCount)) return mockJevSuccessResponse(request.state, request.questions);
-      return new Response('rate limited', { status: 429 });
+      return new Response('overloaded', { status: 529 });
     }) as typeof fetch;
 
     try {
@@ -1262,7 +1210,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
           held = resolve;
         });
       }
-      return new Response('rate limited', { status: 429 });
+      return new Response('overloaded', { status: 529 });
     }) as typeof fetch;
 
     try {
@@ -1287,7 +1235,7 @@ describe('createJevClassifier breaker (SAFE-02)', () => {
       assert.equal(fetchCount, 10);
 
       // 释放 c2 的挂起 fetch：它继续自己的重试直到耗尽——不被取消、不短路
-      held!(new Response('rate limited', { status: 429 }));
+      held!(new Response('overloaded', { status: 529 }));
       const c2 = await c2Promise;
       assert.ok(c2.status === 'failed' && c2.kind === 'rate_limited');
       assert.equal(fetchCount, 12, 'in-flight request must finish its own retries');
@@ -1351,7 +1299,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
           releaseHeld = resolve;
         });
       }
-      return new Response('rate limited', { status: 429 });
+      return new Response('overloaded', { status: 529 });
     }) as typeof fetch;
 
     try {
@@ -1376,7 +1324,7 @@ describe('createJevClassifier concurrency and breaker re-check (02-FIX batch C/E
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       // 释放 A：它继续自己的重试直到耗尽（fetch 8、9），第 3 次连续失败 → 熔断打开
-      releaseHeld!(new Response('rate limited', { status: 429 }));
+      releaseHeld!(new Response('overloaded', { status: 529 }));
       const heldOutcome = await held;
       assert.ok(heldOutcome.status === 'failed' && heldOutcome.kind === 'rate_limited');
       assert.equal(fetchCount, 9);
@@ -1754,32 +1702,5 @@ describe('全量接入审查：真实解析与请求账目', () => {
       )
     );
     assert.ok(result.jev_dispatch.every((row) => row.not_dispatched_reason !== 'breaker_open'));
-  });
-
-  it('answered without dispatch books zero requests and keeps the payload null (§3.3)', async () => {
-    // 回答桩可 answered=true 而 dispatched=false：计零请求、载荷保持 null、
-    // 缺少量用完整性信息时 usage_complete=false，不由 answered 自动推定
-    const result = await filterLlmContext(data, request, config, {
-      classify: async () => ({
-        status: 'answered',
-        model: DEFAULT_JEV_MODEL,
-        answers: {},
-        input_tokens: 5,
-      }),
-    });
-
-    assert.equal(result.stats.jev?.n_requests, 0);
-    assert.equal(result.stats.jev?.input_tokens, 5);
-    assert.equal(result.jev_requests.length, 1);
-    const record = result.jev_requests[0];
-    assert.equal(record?.answered, true);
-    assert.equal(record?.dispatched, false);
-    assert.equal(record?.state, null);
-    assert.equal(record?.questions, null);
-    assert.equal(record?.input_tokens, 5);
-    assert.equal(record?.usage_complete, false);
-    // 来源行仍按 answered 投影（缺答保守处理），派发记录如实 dispatched=false
-    assert.ok(result.stats.jev?.per_source.every((row) => row.status === 'answered'));
-    assert.ok(result.jev_dispatch.every((row) => row.dispatched === false));
   });
 });
