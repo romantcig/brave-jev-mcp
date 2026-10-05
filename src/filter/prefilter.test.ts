@@ -408,7 +408,7 @@ describe('stripBoilerplateLines — title-repeat lines (第二十轮)', () => {
 
 describe('stripBoilerplateLines — reference blocks (第二十轮)', () => {
   it('strips a heading plus its signature items and lets the orphan heading die downstream', () => {
-    // 纯书目列表删除后，孤立小节标题留给 Jev 评分。
+    // 纯书目列表删除后，孤立小节标题留给 Jev 判断。
     const snippet = [
       '## Next steps',
       '### Sources & References',

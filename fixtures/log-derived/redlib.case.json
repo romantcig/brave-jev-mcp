@@ -20,7 +20,8 @@
       "maximum_number_of_tokens": 3000,
       "maximum_number_of_tokens_per_url": 600
     },
-    "intent": "Find alternative open-source web frontends and tools for Reddit in 2026."
+    "intent": "Find alternative open-source web frontends and tools for Reddit in 2026.",
+    "retrievalTime": "2026-10-01T04:27:57.451+08:00"
   },
   "config": {},
   "data": {

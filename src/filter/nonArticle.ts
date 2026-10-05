@@ -17,7 +17,7 @@ export function isEmptySource(survivingSnippets: readonly SurvivingSnippet[]): b
 
 /**
  * 恰好一条片段、长度 < maxLength 且不含 query 实词时判为一句话来源。
- * 本规则只使用 query；intent 的匹配由 Jev 评分处理。queryTerms 为空时保守保留。
+ * 本规则只使用 query；intent 的匹配由 Jev 判断处理。queryTerms 为空时保守保留。
  */
 export function isOneLiner(
   survivingSnippets: readonly SurvivingSnippet[],

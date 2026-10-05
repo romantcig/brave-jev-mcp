@@ -93,12 +93,13 @@ export type JevCandidateDetailed = {
 
 // Jev 契约类型由客户端、上下文构造器与管道共用。
 
-/** 单道题：noul 是来源级是/否判定，score 是片段级三档打分（criteria 是三档 legend）。 */
-export type JevQuestion = {
-  type: 'noul' | 'score';
-  instructions: string;
-  criteria?: readonly string[];
-};
+/**
+ * 单道题：noul 是来源级是/否判定，choice 是片段组合题。
+ * choice 的 criteria 是选项标签到 null 的映射，标签按位掩码序生成（none, A, B, AB …）。
+ */
+export type JevQuestion =
+  | { type: 'noul'; instructions: string }
+  | { type: 'choice'; instructions: string; criteria: Record<string, null> };
 
 /**
  * 共享请求上下文：sources 按 Brave 原序放入全部候选，不包含预筛删除的内容。
@@ -113,8 +114,34 @@ export type JevState = {
   retrieval_time?: string;
 };
 
-/** 库内答案：noul 为概率，score 为连续分值；noul 不含 confidence。 */
-export type JevAnswer = { kind: 'noul'; probability: number } | { kind: 'score'; score: number };
+/** 库内答案：noul 为概率，choice 为完整选项概率分布（键为选项标签）。 */
+export type JevAnswer =
+  | { kind: 'noul'; probability: number }
+  | { kind: 'choice'; choice?: string; probabilities: Record<string, number> };
+
+/** 逐片段保留概率判断（本地从 choice 概率分布派生，不是模型原始 score）。 */
+export type SnippetJudgment = { kind: 'keep_probability'; value: number };
+
+/** 逐片段判断数组：与实发片段位置等长，null 表示无可用答案，不压缩、不左移。 */
+export type SnippetJudgments = Array<SnippetJudgment | null>;
+
+/**
+ * choice 概率分布的本地无效原因。形状问题（非对象、非有限、越界值）在客户端解析层
+ * 已隔离为缺答；投影层只区分缺答、标签不符与概率和偏离。
+ */
+export type ChoiceInvalidReason = 'missing' | 'labels' | 'sum';
+
+/** 来源内组合组定义：连续片段 [start, start+size) 组成一道 choice 题。 */
+export type JevSnippetGroup = {
+  /** 局部题键：`group{start}` */
+  key: string;
+  /** 组内首个片段在候选中的位置 */
+  start: number;
+  /** 组大小（1–3） */
+  size: number;
+  /** 组内各片段位置对应的选项字母（A 起，与片段位置对齐） */
+  letters: string[];
+};
 
 /** 失败分类；具体重试与熔断策略由客户端处理。 */
 export type ClassifyFailKind =
@@ -175,13 +202,11 @@ export type ClassifyDeps = {
   }): Promise<ClassifyOutcome>;
 };
 
-/** 七项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
+/** 五项 Jev 阈值（库内部 camelCase；默认值与出处见 questions.ts 的 `DEFAULT_THRESHOLDS`）。 */
 export type JevThresholds = {
-  offTopicDrop: number;
-  listingDrop: number;
   fillerDrop: number;
-  reasoningProtect: number;
-  snippetMin: number;
+  groupKeepMin: number;
+  singleKeepMin: number;
   cjkBonus: number;
   cjkShare: number;
 };
@@ -197,10 +222,12 @@ export type JevPerSourceStats = {
   status: 'answered' | 'failed' | 'skipped' | 'breaker_open';
   /** 失败种类；answered 也可能带 validation，表示收到响应但来源裁决无效。 */
   fail_kind?: JevFailKind;
-  /** 来源题概率，键随当次题库；读取历史记录时允许额外旧键。 */
+  /** 来源题概率，键随当次题库（现行只有 filler）；读取历史记录时允许额外旧键。 */
   answers?: Record<string, number>;
-  /** 片段 score，snip0..snipN 顺序，与 state 片段序对齐 */
-  snippet_scores?: number[];
+  /** 逐片段保留概率，与实发片段序等长；null 表示无可用答案，不压缩 */
+  snippet_judgments?: SnippetJudgments;
+  /** 组合题无效原因（局部组键 → 原因）；无效组覆盖的片段保守保留 */
+  snippet_validation?: Record<string, ChoiceInvalidReason>;
   /** 来源级裁决。 */
   verdict?: 'keep' | 'drop';
   reason?: SourceDropReason;
@@ -219,8 +246,10 @@ export type JevRequestMappingEntry = {
   array_index: number;
   /** 候选片段配对身份（与 JevDispatchRecord.snippet_keys 同源同序） */
   snippet_keys: string[];
-  /** 局部题键（四题、snip{i}）→ 请求级全局题键 */
+  /** 局部题键（filler、group{start}）→ 请求级全局题键 */
   question_keys: Record<string, string>;
+  /** 实发组合组定义（与 question_keys 的组键对应，按起始位置升序） */
+  snippet_groups: JevSnippetGroup[];
 };
 
 /**
@@ -302,7 +331,7 @@ export type SnippetRemovalReason =
   | 'nav'
   | 'boilerplate'
   | 'dup'
-  | 'score'
+  | 'keep_probability'
   | 'time_mismatch';
 
 /** `grounding.generic[]` 的一条：一个来源与它的片段。 */
@@ -493,7 +522,7 @@ export type FilterResult = {
 };
 
 /**
- * 来源与共享请求的对应关系、片段身份及评分状态，通过 request_id 关联完整载荷。
+ * 来源与共享请求的对应关系、片段身份及保留概率判断，通过 request_id 关联完整载荷。
  * 派发、响应和逐片段有效性分别记录；无内容可发与熔断未发分别标记。
  */
 export type JevDispatchRecord = {
@@ -516,16 +545,13 @@ export type JevDispatchRecord = {
   /** 是否收到可解析响应；来源裁决是否有效另见 source_verdict_valid。 */
   answered: boolean;
   /**
-   * 逐题评分有效性：有限数且在 [0,2] 内为 true，不从题数推断。
-   * 按片段题位对齐；未派发或未收到可解析响应时为 null。
+   * 逐片段保留概率（与候选片段位置等长，null 表示无可用答案）。
+   * 未派发或未收到可解析响应时为 null。
    */
-  snippet_score_validity: boolean[] | null;
-  /** 按题位保留实际收到的有限评分（含越界值供复查）；缺答/错误类型/非有限为 null。
-   * 整体 null 表示没有可解析响应；部分缺答不压缩数组、不丢弃其他题的值。 */
-  snippet_scores_received: Array<number | null> | null;
+  snippet_judgments: SnippetJudgments | null;
   /**
-   * 来源级裁决有效：从 applySourceVerdicts 完成后的真实裁决读取；四道关键题通过
-   * 校验且已产生裁决，不是 validation 兜底。仅作观察的题缺失不令此值变为 false。
+   * 来源级裁决有效：从 applySourceVerdicts 完成后的真实裁决读取；页面题通过
+   * 校验且已产生裁决，不是 validation 兜底。
    */
   source_verdict_valid: boolean;
   /** 未派发原因；已派发时省略。防御分支（classify 契约外 reject）也省略 */

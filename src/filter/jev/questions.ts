@@ -1,53 +1,124 @@
 /**
  * Jev 题库、阈值默认值与客户端默认配置。
- * 每个来源四道来源题，每个片段一道时间上下文评分题；全部候选共享上下文。
+ * 每来源一道模板垃圾页面题；同来源连续片段按最多三片组成一道 choice 组合题。
  * 配置解析见 config.ts，坏值回落到本模块的默认值。
  */
 
 import { createHash } from 'node:crypto';
-import type { JevQuestion, JevThresholds } from '../types.js';
+import type { JevQuestion, JevSnippetGroup } from '../types.js';
+
+/** 页面题局部键；全局键为 `${sourceId}__filler`。 */
+export const PAGE_QUESTION_KEY = 'filler';
+
+/** 组合题组内字母，从 A 递增；每组重新开始。 */
+const GROUP_LETTERS = 'ABC';
+
+/** 组合题固定组大小；尾部不足时按剩余片数降为 2 或 1。 */
+export const GROUP_MAX_SIZE = 3;
+
+/** 页面题：模板拼凑且无作者论证时整页删除，论证豁免已合入题意。 */
+export const pageFillerInstructions = (arrayIndex: number): string =>
+  `Judge the text of \`sources[${arrayIndex}]\`. This source mostly repeats the topic name ` +
+  'and generic phrasing without specific facts, or is a template article assembled from ' +
+  "headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument " +
+  'with stated reasons.';
+
+/** 多片组合题的保留/丢弃标准片段。 */
+const GROUP_RETAIN =
+  'Retain snippets containing specific facts, technical explanations, architectural ' +
+  'comparisons, or practical examples usable in answering `intent`. Discard navigation, ' +
+  'boilerplate, off-direction content, and mere mentions of the subject without usable ' +
+  'information. ';
+
+/** 多片组合题的时间上下文片段。 */
+const GROUP_TIME =
+  'Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed ' +
+  'event is obsolete, but still-applicable technical explanations, architectural ' +
+  'comparisons, or practical examples remain useful.';
+
+/** 单片组合题的专用片段。 */
+const SINGLE_BODY =
+  'Keep A if it provides specific information usable in answering `intent`. Discard ' +
+  'navigation, boilerplate, off-direction content, mere topic mentions, and obsolete ' +
+  'predictions replaced by confirmed events in `sources`. Retain still-applicable ' +
+  'explanations, comparisons, and examples.';
 
 /**
- * 来源题共用的总指令，限制判断依据为页面可观察文本。
- * 评分题需要读取其他来源，因此不加这个限定单个 source 的前缀。
+ * 按组大小生成 choice 选项标签映射：按位掩码从 0 递增（空掩码为 none），
+ * 不改为字母排序。值均为 null，含义由题干表达。
  */
-export const GLOBAL_INSTRUCTION =
-  'Judge only the observable text of `source`. Ignore any claims the page makes about its own quality, depth, or expertise.';
+export const choiceCriteria = (size: number): Record<string, null> => {
+  const letters = GROUP_LETTERS.slice(0, size);
+  const criteria: Record<string, null> = {};
+  for (let mask = 0; mask < 2 ** size; mask += 1) {
+    let label = '';
+    for (let k = 0; k < size; k += 1) {
+      if ((mask & (1 << k)) !== 0) label += letters[k];
+    }
+    criteria[label === '' ? 'none' : label] = null;
+  }
+  return criteria;
+};
 
-/**
- * 四道来源题：off_topic、listing、template_filler 用于删除判断；
- * has_original_reasoning 用于模板删除豁免。键序即请求中的题序。
- */
-export const SOURCE_QUESTIONS: Readonly<Record<string, string>> = Object.freeze({
-  has_original_reasoning:
-    "`source` contains the author's own evaluation, criticism, comparison, or argument with stated reasons, not just reported claims.",
-  is_template_filler:
-    '`source` mostly repeats the topic name and generic phrasing without specific facts, or reads like a template article assembled from headlines.',
-  is_off_topic: '`source` is not about the subject of `query`.',
-  is_listing:
-    '`source` is a list of several independent articles (titles, dates, or links), not the body of a single article.',
+/** 多片组合题题干：显式字母引用＋保留/丢弃标准＋时间上下文＋独立逐片判断。 */
+export const groupInstructions = (sourceIndex: number, startIndex: number, size: number): string =>
+  GROUP_LETTERS.slice(0, size)
+    .split('')
+    .map((letter, k) => `${letter}=\`sources[${sourceIndex}].snippets[${startIndex + k}]\``)
+    .join('; ') +
+  '. ' +
+  GROUP_RETAIN +
+  GROUP_TIME +
+  ' Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.';
+
+/** 单片组合题题干：与多片同一组映射与解码结构，仅题干收短。 */
+export const singleInstructions = (sourceIndex: number, startIndex: number): string =>
+  `A=\`sources[${sourceIndex}].snippets[${startIndex}]\`. ` + SINGLE_BODY;
+
+/** 按数组位置构造页面模板垃圾题（noul）。 */
+export const buildPageFillerQuestion = (arrayIndex: number): JevQuestion => ({
+  type: 'noul',
+  instructions: pageFillerInstructions(arrayIndex),
 });
 
-/**
- * 时间上下文评分的三档标准（Candidate 1+ / C1+ 规范），与题干一起纳入 QUESTION_SET_ID。
- * 改动题意后必须重新取得回答，不能沿用旧题结果。
- */
-export const SNIPPET_CRITERIA: readonly string[] = Object.freeze([
-  'Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts',
-  'Mentions the subject of `intent` but provides no specific information usable in answering it',
-  'States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`',
-]);
+/** 按数组位置、片段起始位置与组大小构造组合题（choice）。 */
+export const buildSnippetGroupQuestion = (
+  sourceIndex: number,
+  startIndex: number,
+  size: number
+): JevQuestion => ({
+  type: 'choice',
+  instructions:
+    size === 1
+      ? singleInstructions(sourceIndex, startIndex)
+      : groupInstructions(sourceIndex, startIndex, size),
+  criteria: choiceCriteria(size),
+});
+
+/** 按片段数把候选片段切成组定义：三片一组，尾部两片/一片降档；组键为 `group{start}`。 */
+export const snippetGroupsOf = (snippetCount: number): JevSnippetGroup[] => {
+  const groups: JevSnippetGroup[] = [];
+  for (let start = 0; start < snippetCount; start += GROUP_MAX_SIZE) {
+    const size = Math.min(GROUP_MAX_SIZE, snippetCount - start);
+    groups.push({
+      key: `group${start}`,
+      start,
+      size,
+      letters: GROUP_LETTERS.slice(0, size).split(''),
+    });
+  }
+  return groups;
+};
 
 /**
- * 阈值默认值：来源丢弃概率 >= 门槛时删除，片段 score < snippetMin 时删除。
- * CJK 占比 > cjkShare 时三道来源丢弃门槛各加 cjkBonus；客户端不再舍入概率。
+ * 阈值默认值：页面 filler 概率 >= fillerDrop（加 CJK 加成）时整页删除；
+ * 片段保留概率 >= 组门槛时保留（二/三片组用 groupKeepMin，单片组用 singleKeepMin）。
+ * CJK 占比 > cjkShare 时只给页面门槛加 cjkBonus；客户端不舍入概率。
  */
 export const DEFAULT_THRESHOLDS = Object.freeze({
-  offTopicDrop: 0.85,
-  listingDrop: 0.8,
   fillerDrop: 0.8,
-  reasoningProtect: 0.7,
-  snippetMin: 1.0,
+  groupKeepMin: 0.25,
+  singleKeepMin: 0.5,
   cjkBonus: 0.1,
   cjkShare: 0.5,
 } as const);
@@ -62,60 +133,20 @@ export const DEFAULT_JEV_TIMEOUT_MS = 15000;
 export const DEFAULT_JEV_CONCURRENCY = 12;
 
 /**
- * 按来源数组位置与片段位置生成评分题（Candidate 1+ / C1+ 规范）。
- * 只插入两个下标，不对整段题干替换 source。
- * 题干自行限定时间证据和跨来源比较范围，不加来源题的总指令。
- */
-export const snippetScoreInstructions = (sourceIndex: number, snippetIndex: number): string =>
-  `How useful is \`sources[${sourceIndex}].snippets[${snippetIndex}]\` for answering ` +
-  '`intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by ' +
-  'a confirmed event is obsolete, but still-applicable technical explanations, ' +
-  'architectural comparisons, or practical examples remain useful.';
-
-/** 按实际数组位置构造片段评分题，使用统一的三档 criteria。 */
-export const buildSnippetScoreQuestion = (
-  sourceIndex: number,
-  snippetIndex: number
-): JevQuestion => ({
-  type: 'score',
-  instructions: snippetScoreInstructions(sourceIndex, snippetIndex),
-  criteria: SNIPPET_CRITERIA,
-});
-
-/**
- * 将来源题的 source 引用转换为 sources[i]；i 是数组位置，不是来源 ID。
- * 仅用于来源题及其总指令，评分题由 snippetScoreInstructions 单独构造。
- */
-const toNamespaceInstructions = (instructions: string, arrayIndex: number): string =>
-  instructions.replace(/\bsource\b/g, `sources[${arrayIndex}]`);
-
-/**
- * 按数组位置构造四道来源题：总指令加空格前缀后统一转换 source 引用。
- * 题键与 SOURCE_QUESTIONS 同序；片段题由 buildSnippetScoreQuestion 构造。
- */
-export function buildSourceQuestions(arrayIndex: number): Record<string, JevQuestion> {
-  const questions: Record<string, JevQuestion> = {};
-  for (const [key, text] of Object.entries(SOURCE_QUESTIONS)) {
-    questions[key] = {
-      type: 'noul',
-      instructions: toNamespaceInstructions(`${GLOBAL_INSTRUCTION} ${text}`, arrayIndex),
-    };
-  }
-  return questions;
-}
-
-/**
- * 题库标识：总指令、来源题、评分题完整模板及 criteria 的规范化 JSON 哈希前 12 位。
- * 评分模板用 (0, 0) 实例化即可覆盖全部固定文字；自由变量只有下标。
- * 依赖的模板函数与常量必须先初始化。
+ * 题库标识：页面题、一/二/三片组合题完整模板及各档选项顺序的规范化 JSON 哈希前 12 位。
+ * 组合模板用 (0, 0) 实例化即可覆盖全部固定文字；自由变量只有下标。
+ * 阈值与解码规则由配置快照与规则版本表达，不进入本哈希。
  */
 export const QUESTION_SET_ID = createHash('sha256')
   .update(
     JSON.stringify([
-      GLOBAL_INSTRUCTION,
-      SOURCE_QUESTIONS,
-      snippetScoreInstructions(0, 0),
-      SNIPPET_CRITERIA,
+      pageFillerInstructions(0),
+      singleInstructions(0, 0),
+      groupInstructions(0, 0, 2),
+      groupInstructions(0, 0, 3),
+      choiceCriteria(1),
+      choiceCriteria(2),
+      choiceCriteria(3),
     ])
   )
   .digest('hex')

@@ -1,8 +1,8 @@
 {
-  "recorded_at": "2026-10-04T17:55:35.096Z",
-  "filter_rules_version": "filter-rules-17",
-  "question_set_id": "a03ab5c2506c",
-  "request_sha256": "79d627a4aa4cef5bf6bc08800e6c530b3b7209c1a8edbd1332d7fc8777f2cfc9",
+  "recorded_at": "2026-10-05T17:44:12.241Z",
+  "question_set_id": "da31568304ee",
+  "filter_rules_version": "filter-rules-21",
+  "context_layout_id": "jev-context-4",
   "request": {
     "model": "jev-1.13.0",
     "state": {
@@ -42,154 +42,75 @@
       "retrieval_time": "2026-10-04T07:13:03.532+08:00"
     },
     "questions": {
-      "s0__has_original_reasoning": {
+      "s0__filler": {
         "type": "noul",
-        "instructions": "Judge only the observable text of `sources[0]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[0]` contains the author's own evaluation, criticism, comparison, or argument with stated reasons, not just reported claims."
+        "instructions": "Judge the text of `sources[0]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
       },
-      "s0__is_template_filler": {
+      "s0__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[0]`; B=`sources[0].snippets[1]`; C=`sources[0].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[3]`; B=`sources[0].snippets[4]`; C=`sources[0].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s0__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[6]`; B=`sources[0].snippets[7]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s1__filler": {
         "type": "noul",
-        "instructions": "Judge only the observable text of `sources[0]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[0]` mostly repeats the topic name and generic phrasing without specific facts, or reads like a template article assembled from headlines."
+        "instructions": "Judge the text of `sources[1]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
       },
-      "s0__is_off_topic": {
-        "type": "noul",
-        "instructions": "Judge only the observable text of `sources[0]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[0]` is not about the subject of `query`."
+      "s1__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[0]`; B=`sources[1].snippets[1]`; C=`sources[1].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
       },
-      "s0__is_listing": {
-        "type": "noul",
-        "instructions": "Judge only the observable text of `sources[0]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[0]` is a list of several independent articles (titles, dates, or links), not the body of a single article."
-      },
-      "s0__snip0": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[0]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s0__snip1": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[1]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s0__snip2": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[2]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s0__snip3": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[3]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s0__snip4": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[4]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s0__snip5": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[5]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s0__snip6": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[6]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s0__snip7": {
-        "type": "score",
-        "instructions": "How useful is `sources[0].snippets[7]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s1__has_original_reasoning": {
-        "type": "noul",
-        "instructions": "Judge only the observable text of `sources[1]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[1]` contains the author's own evaluation, criticism, comparison, or argument with stated reasons, not just reported claims."
-      },
-      "s1__is_template_filler": {
-        "type": "noul",
-        "instructions": "Judge only the observable text of `sources[1]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[1]` mostly repeats the topic name and generic phrasing without specific facts, or reads like a template article assembled from headlines."
-      },
-      "s1__is_off_topic": {
-        "type": "noul",
-        "instructions": "Judge only the observable text of `sources[1]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[1]` is not about the subject of `query`."
-      },
-      "s1__is_listing": {
-        "type": "noul",
-        "instructions": "Judge only the observable text of `sources[1]`. Ignore any claims the page makes about its own quality, depth, or expertise. `sources[1]` is a list of several independent articles (titles, dates, or links), not the body of a single article."
-      },
-      "s1__snip0": {
-        "type": "score",
-        "instructions": "How useful is `sources[1].snippets[0]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s1__snip1": {
-        "type": "score",
-        "instructions": "How useful is `sources[1].snippets[1]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s1__snip2": {
-        "type": "score",
-        "instructions": "How useful is `sources[1].snippets[2]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s1__snip3": {
-        "type": "score",
-        "instructions": "How useful is `sources[1].snippets[3]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
-      },
-      "s1__snip4": {
-        "type": "score",
-        "instructions": "How useful is `sources[1].snippets[4]` for answering `intent`? Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful.",
-        "criteria": [
-          "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        ]
+      "s1__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[3]`; B=`sources[1].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
       }
     }
   },
@@ -197,237 +118,85 @@
   "body": {
     "model": "jev-1.13.0",
     "answers": {
-      "s0__has_original_reasoning": {
+      "s0__filler": {
         "type": "noul",
-        "noul": 0.8
+        "noul": 0.18
       },
-      "s0__is_template_filler": {
+      "s0__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.42,
+        "probabilities": {
+          "ABC": 0.49,
+          "BC": 0.03,
+          "AC": 0.26,
+          "A": 0.08,
+          "AB": 0.07,
+          "C": 0.05,
+          "none": 0.01,
+          "B": 0.01
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.43,
+        "probabilities": {
+          "ABC": 0.5,
+          "BC": 0.13,
+          "A": 0.05,
+          "AC": 0.1,
+          "AB": 0.12,
+          "C": 0.05,
+          "none": 0.01,
+          "B": 0.04
+        }
+      },
+      "s0__group6": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.43,
+        "probabilities": {
+          "B": 0.17,
+          "none": 0.05,
+          "A": 0.21,
+          "AB": 0.57
+        }
+      },
+      "s1__filler": {
         "type": "noul",
-        "noul": 0.12
+        "noul": 0.06
       },
-      "s0__is_off_topic": {
-        "type": "noul",
-        "noul": 0.12
-      },
-      "s0__is_listing": {
-        "type": "noul",
-        "noul": 0.16
-      },
-      "s0__snip0": {
-        "type": "score",
-        "score": 1.93,
-        "confidence": 0.89,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.01,
-          "1": 0.05,
-          "2": 0.94
-        }
-      },
-      "s0__snip1": {
-        "type": "score",
-        "score": 1.73,
-        "confidence": 0.6,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.07,
-          "1": 0.12,
-          "2": 0.81
-        }
-      },
-      "s0__snip2": {
-        "type": "score",
-        "score": 1.9,
-        "confidence": 0.86,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.01,
-          "1": 0.07,
-          "2": 0.92
-        }
-      },
-      "s0__snip3": {
-        "type": "score",
-        "score": 1.91,
-        "confidence": 0.86,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.01,
-          "1": 0.06,
-          "2": 0.93
-        }
-      },
-      "s0__snip4": {
-        "type": "score",
-        "score": 1.86,
-        "confidence": 0.79,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.03,
-          "1": 0.08,
-          "2": 0.89
-        }
-      },
-      "s0__snip5": {
-        "type": "score",
-        "score": 1.82,
-        "confidence": 0.73,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.04,
-          "1": 0.1,
-          "2": 0.86
-        }
-      },
-      "s0__snip6": {
-        "type": "score",
-        "score": 1.78,
+      "s1__group0": {
+        "type": "choice",
+        "choice": "ABC",
         "confidence": 0.67,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
         "probabilities": {
-          "0": 0.06,
-          "1": 0.1,
-          "2": 0.84
+          "ABC": 0.71,
+          "BC": 0.07,
+          "A": 0.03,
+          "AC": 0.08,
+          "AB": 0.07,
+          "C": 0.03,
+          "B": 0.01,
+          "none": 0
         }
       },
-      "s0__snip7": {
-        "type": "score",
-        "score": 1.83,
-        "confidence": 0.75,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
+      "s1__group3": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.66,
         "probabilities": {
-          "0": 0.04,
-          "1": 0.08,
-          "2": 0.88
-        }
-      },
-      "s1__has_original_reasoning": {
-        "type": "noul",
-        "noul": 0.93
-      },
-      "s1__is_template_filler": {
-        "type": "noul",
-        "noul": 0.09
-      },
-      "s1__is_off_topic": {
-        "type": "noul",
-        "noul": 0.13
-      },
-      "s1__is_listing": {
-        "type": "noul",
-        "noul": 0.04
-      },
-      "s1__snip0": {
-        "type": "score",
-        "score": 1.89,
-        "confidence": 0.84,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.02,
-          "1": 0.08,
-          "2": 0.9
-        }
-      },
-      "s1__snip1": {
-        "type": "score",
-        "score": 1.78,
-        "confidence": 0.68,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.04,
-          "1": 0.14,
-          "2": 0.82
-        }
-      },
-      "s1__snip2": {
-        "type": "score",
-        "score": 1.85,
-        "confidence": 0.78,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.03,
-          "1": 0.09,
-          "2": 0.88
-        }
-      },
-      "s1__snip3": {
-        "type": "score",
-        "score": 1.74,
-        "confidence": 0.61,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.05,
-          "1": 0.16,
-          "2": 0.79
-        }
-      },
-      "s1__snip4": {
-        "type": "score",
-        "score": 1.74,
-        "confidence": 0.62,
-        "legend": {
-          "0": "Navigation, boilerplate, off-direction, or an obsolete prediction replaced by confirmed facts",
-          "1": "Mentions the subject of `intent` but provides no specific information usable in answering it",
-          "2": "States specific facts, technical explanations, architectural comparisons, or practical examples that answer `intent`"
-        },
-        "probabilities": {
-          "0": 0.05,
-          "1": 0.15,
-          "2": 0.8
+          "none": 0.04,
+          "B": 0.08,
+          "A": 0.13,
+          "AB": 0.75
         }
       }
     },
     "usage": {
-      "input_tokens": 3921,
-      "output_tokens": 410
+      "input_tokens": 2684,
+      "output_tokens": 357
     }
   }
 }

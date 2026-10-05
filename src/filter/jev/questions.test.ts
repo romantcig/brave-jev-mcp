@@ -6,25 +6,17 @@ import {
   DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
   DEFAULT_JEV_TIMEOUT_MS,
-  GLOBAL_INSTRUCTION,
+  GROUP_MAX_SIZE,
+  PAGE_QUESTION_KEY,
   QUESTION_SET_ID,
-  SNIPPET_CRITERIA,
-  SOURCE_QUESTIONS,
-  buildSnippetScoreQuestion,
-  buildSourceQuestions,
-  snippetScoreInstructions,
+  buildPageFillerQuestion,
+  buildSnippetGroupQuestion,
+  choiceCriteria,
+  groupInstructions,
+  pageFillerInstructions,
+  singleInstructions,
+  snippetGroupsOf,
 } from './questions.js';
-
-describe('SOURCE_QUESTIONS', () => {
-  it('has exactly the four source-level keys after the 2026-10-03 slimming', () => {
-    assert.deepEqual(Object.keys(SOURCE_QUESTIONS), [
-      'has_original_reasoning',
-      'is_template_filler',
-      'is_off_topic',
-      'is_listing',
-    ]);
-  });
-});
 
 describe('pinned model and fallback constants', () => {
   it('pins the model id and never uses the drifting latest alias', () => {
@@ -39,110 +31,170 @@ describe('pinned model and fallback constants', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 来源级四题生成器（唯一生成接口之一）：按请求 sources[] 数组位置生成，题意、
-// 顺序与总指令前缀不变；`\bsource\b` 命名空间转换与第十六 / 十九轮口径逐字一致。
+// 页面题：每来源一道模板垃圾题，局部键 filler，noul 无 criteria。
 // ---------------------------------------------------------------------------
 
-describe('buildSourceQuestions', () => {
-  it('returns exactly the four source-level questions with their keys in bank order', () => {
-    const questions = buildSourceQuestions(0);
-    assert.deepEqual(Object.keys(questions), [
-      'has_original_reasoning',
-      'is_template_filler',
-      'is_off_topic',
-      'is_listing',
+describe('pageFillerInstructions / buildPageFillerQuestion', () => {
+  it('expands only the array position and keeps the exact frozen wording', () => {
+    assert.equal(
+      pageFillerInstructions(0),
+      'Judge the text of `sources[0]`. This source mostly repeats the topic name and ' +
+        'generic phrasing without specific facts, or is a template article assembled from ' +
+        "headlines, AND it lacks the author's own evaluation, criticism, comparison, or " +
+        'argument with stated reasons.'
+    );
+    assert.ok(pageFillerInstructions(4).startsWith('Judge the text of `sources[4]`.'));
+  });
+
+  it('types the page question as noul with the filler key and no criteria', () => {
+    const question = buildPageFillerQuestion(2);
+    assert.equal(question.type, 'noul');
+    assert.equal('criteria' in question, false);
+    assert.equal(question.instructions, pageFillerInstructions(2));
+    assert.equal(PAGE_QUESTION_KEY, 'filler');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// choice 组合题：criteria 按位掩码从 0 递增（none, A, B, AB, C, AC, BC, ABC），
+// 不改为字母排序；组内字母每组从 A 重新开始。
+// ---------------------------------------------------------------------------
+
+describe('choiceCriteria', () => {
+  it('generates bitmask order labels for one, two and three snippet groups', () => {
+    assert.deepEqual(Object.keys(choiceCriteria(1)), ['none', 'A']);
+    assert.deepEqual(Object.keys(choiceCriteria(2)), ['none', 'A', 'B', 'AB']);
+    assert.deepEqual(Object.keys(choiceCriteria(3)), [
+      'none',
+      'A',
+      'B',
+      'AB',
+      'C',
+      'AC',
+      'BC',
+      'ABC',
     ]);
   });
 
-  it('types every question as noul without criteria and prefixes the (namespaced) global instruction', () => {
-    // 前缀在拼接后整体做命名空间转换：总指令里的 `source` 一并换成 sources[i]
-    // （与原 planAllRequest 口径一致，基线快照逐字对账）
-    for (const question of Object.values(buildSourceQuestions(0))) {
-      assert.equal(question.type, 'noul');
-      assert.equal('criteria' in question, false);
-      assert.ok(
-        question.instructions.startsWith(
-          `${GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[0]')} `
-        ),
-        `missing global instruction prefix: ${question.instructions.slice(0, 60)}`
+  it('maps every label to null', () => {
+    for (const value of Object.values(choiceCriteria(3))) assert.equal(value, null);
+  });
+});
+
+describe('groupInstructions / singleInstructions', () => {
+  it('lists explicit letter references for multi-snippet groups and restarts letters per group', () => {
+    assert.ok(
+      groupInstructions(0, 3, 2).startsWith(
+        'A=`sources[0].snippets[3]`; B=`sources[0].snippets[4]`. '
+      )
+    );
+    assert.ok(
+      groupInstructions(2, 6, 3).startsWith(
+        'A=`sources[2].snippets[6]`; B=`sources[2].snippets[7]`; C=`sources[2].snippets[8]`. '
+      )
+    );
+  });
+
+  it('carries the retain/discard standard, the time context and the exact-select closing line', () => {
+    const instructions = groupInstructions(0, 0, 3);
+    assert.ok(
+      instructions.includes(
+        'Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`.'
+      )
+    );
+    assert.ok(
+      instructions.includes(
+        'Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete'
+      )
+    );
+    assert.ok(
+      instructions.endsWith(
+        'Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.'
+      )
+    );
+  });
+
+  it('uses the short single-snippet wording bound to one letter reference', () => {
+    assert.equal(
+      singleInstructions(3, 0),
+      'A=`sources[3].snippets[0]`. Keep A if it provides specific information usable in ' +
+        'answering `intent`. Discard navigation, boilerplate, off-direction content, mere ' +
+        'topic mentions, and obsolete predictions replaced by confirmed events in `sources`. ' +
+        'Retain still-applicable explanations, comparisons, and examples.'
+    );
+  });
+});
+
+describe('buildSnippetGroupQuestion', () => {
+  it('builds single questions with the short wording and two-option criteria', () => {
+    const question = buildSnippetGroupQuestion(1, 3, 1);
+    assert.equal(question.type, 'choice');
+    assert.equal(question.instructions, singleInstructions(1, 3));
+    if (question.type === 'choice') assert.deepEqual(Object.keys(question.criteria), ['none', 'A']);
+  });
+
+  it('builds two and three snippet questions with the full wording and matching criteria', () => {
+    for (const size of [2, 3] as const) {
+      const question = buildSnippetGroupQuestion(0, 0, size);
+      assert.equal(question.type, 'choice');
+      assert.equal(question.instructions, groupInstructions(0, 0, size));
+      if (question.type === 'choice') {
+        assert.deepEqual(question.criteria, choiceCriteria(size));
+      }
+    }
+  });
+});
+
+describe('snippetGroupsOf', () => {
+  it('tiles snippet counts 1..7 into groups of at most three without crossing sources', () => {
+    const shape = (count: number) =>
+      snippetGroupsOf(count).map((group) => [group.key, group.start, group.size]);
+    assert.deepEqual(shape(1), [['group0', 0, 1]]);
+    assert.deepEqual(shape(2), [['group0', 0, 2]]);
+    assert.deepEqual(shape(3), [['group0', 0, 3]]);
+    assert.deepEqual(shape(4), [
+      ['group0', 0, 3],
+      ['group3', 3, 1],
+    ]);
+    assert.deepEqual(shape(5), [
+      ['group0', 0, 3],
+      ['group3', 3, 2],
+    ]);
+    assert.deepEqual(shape(6), [
+      ['group0', 0, 3],
+      ['group3', 3, 3],
+    ]);
+    assert.deepEqual(shape(7), [
+      ['group0', 0, 3],
+      ['group3', 3, 3],
+      ['group6', 6, 1],
+    ]);
+  });
+
+  it('assigns letters from A within each group and covers every position', () => {
+    for (let count = 1; count <= 7; count += 1) {
+      const groups = snippetGroupsOf(count);
+      const covered: number[] = [];
+      for (const group of groups) {
+        assert.equal(group.letters.length, group.size);
+        assert.equal(group.letters[0], 'A');
+        for (let k = 0; k < group.size; k += 1) covered.push(group.start + k);
+      }
+      assert.deepEqual(
+        covered,
+        Array.from({ length: count }, (_, index) => index)
       );
     }
   });
 
-  it('rewrites `source` references to `sources[i]` by array position, not source id (round-16)', () => {
-    // 数组位置 0：总指令与题干里的 `source` 全部替换
-    const atZero = buildSourceQuestions(0);
-    assert.equal(
-      atZero.is_off_topic?.instructions,
-      `${GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[0]')} \`sources[0]\` is not about the subject of \`query\`.`
-    );
-
-    // 数组位置与来源 ID 解耦：s7 这类 ID 也可能落在数组位置 1
-    const atOne = buildSourceQuestions(1);
-    assert.equal(
-      atOne.has_original_reasoning?.instructions,
-      GLOBAL_INSTRUCTION.replace(/\bsource\b/g, 'sources[1]') +
-        " `sources[1]` contains the author's own evaluation, criticism, comparison, or argument with stated reasons, not just reported claims."
-    );
-    assert.equal(atOne.is_off_topic?.instructions.includes('`sources[1]` is not about'), true);
-  });
-
-  it('does not touch words other than the standalone `source` (plural and possessive stay)', () => {
-    // \b 边界：is_listing 题干里的 "a single article" 与总指令以外的词不受影响；
-    // 转换只命中独立的 source 单词
-    const questions = buildSourceQuestions(2);
-    assert.ok(questions.is_listing?.instructions.includes('not the body of a single article.'));
-    assert.equal(questions.is_listing?.instructions.includes('`sources[2]` is a list'), true);
+  it('caps the group size at three', () => {
+    assert.equal(GROUP_MAX_SIZE, 3);
   });
 });
 
-// 评分题干与 criteria 的全文由 QUESTION_SET_ID 哈希锁定（见下方用例），
-// 此处只验证结构与占位符展开，不镜像长文本。
-
-describe('SNIPPET_CRITERIA', () => {
-  it('carries exactly three criteria in drop / weak / strong order', () => {
-    assert.equal(SNIPPET_CRITERIA.length, 3);
-    // 以前缀识别各条语义身份：剔除 → 提及但无可用信息 → 有具体信息
-    assert.ok(SNIPPET_CRITERIA[0].startsWith('Navigation, boilerplate, off-direction'));
-    assert.ok(SNIPPET_CRITERIA[1].startsWith('Mentions the subject of `intent`'));
-    assert.ok(SNIPPET_CRITERIA[2].startsWith('States specific facts'));
-  });
-});
-
-describe('buildSnippetScoreQuestion', () => {
-  it('expands the score template placeholders at a non-zero position', () => {
-    const question = buildSnippetScoreQuestion(3, 1);
-    assert.equal(question.type, 'score');
-    // 模板占位符按 (来源, 片段) 下标展开
-    assert.ok(
-      question.instructions.startsWith(
-        'How useful is `sources[3].snippets[1]` for answering `intent`?'
-      )
-    );
-    assert.deepEqual(question.criteria, SNIPPET_CRITERIA);
-  });
-
-  it('substitutes only the two index numbers and never the global-instruction prefix', () => {
-    const question = buildSnippetScoreQuestion(7, 2);
-    assert.ok(
-      question.instructions.startsWith(
-        'How useful is `sources[7].snippets[2]` for answering `intent`?'
-      )
-    );
-    // 总指令限定"只看 source 的可观察文本"，与新题读取其他来源冲突——不加前缀
-    assert.equal(question.instructions.includes(GLOBAL_INSTRUCTION), false);
-    assert.ok(question.instructions.includes('architectural comparisons'));
-    assert.ok(question.instructions.includes('using `sources`'));
-  });
-
-  it('is the projection of snippetScoreInstructions at the same position', () => {
-    assert.equal(buildSnippetScoreQuestion(2, 5).instructions, snippetScoreInstructions(2, 5));
-  });
-});
-
-describe('QUESTION_SET_ID (all-only recipe)', () => {
-  it('pins the hash that covers only the active bank: source questions, global instruction, the frozen score template and criteria', () => {
-    // 锁定现行题库完整哈希，防止题干、criteria、键序或总指令无意漂移。
-    assert.equal(QUESTION_SET_ID, 'a03ab5c2506c');
+describe('QUESTION_SET_ID (three-in-one recipe)', () => {
+  it('pins the hash that covers the page template, all group templates and the option orders', () => {
+    // 锁定现行题库完整哈希，防止题干、criteria 或选项顺序无意漂移。
+    assert.equal(QUESTION_SET_ID, 'da31568304ee');
   });
 });

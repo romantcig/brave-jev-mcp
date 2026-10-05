@@ -1,4 +1,4 @@
-/** 真实日志回放与契约防线：未受影响材料严格回放，已知材料建立精准本地回归与重录拒绝断言。 */
+/** 真实日志完整回放：严格核对新题目请求、事实保留、噪声删除及候选身份。 */
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { parseFilterConfigObject } from './config.js';
@@ -13,10 +13,7 @@ import {
   loadRecording,
 } from '../../test-support/log-fixtures.mjs';
 
-// 1. 未受影响的常规夹具严格端到端回放，绝不吞没任何异常
-const unaffectedFixtures = fixtureNames().filter((name) => name !== 'minimax-time');
-
-for (const name of unaffectedFixtures) {
+for (const name of fixtureNames()) {
   const fixture = loadFixture(name);
   it(`日志回放：${fixture.purpose}`, async (t) => {
     const config = parseFilterConfigObject({ ...fixture.config, mode: 'on' });
@@ -56,14 +53,12 @@ for (const name of unaffectedFixtures) {
   });
 }
 
-// 2. 已确认受页内去重影响的材料：明确标注端到端回放未完成，建立精确本地回归与拒绝复用断言
-it('minimax-time 本地回归：页内严格全等去重恢复推特片段并生成新题目键（端到端回放待重新录制）', () => {
+it('完整 MiniMax 上下文：三个不同发布片段保持正文、原始身份与组合映射', () => {
   const fixture = loadFixture('minimax-time');
   const config = parseFilterConfigObject({ ...fixture.config, mode: 'on' });
   const candidates = collectJevCandidatesDetailed(fixture.data, fixture.request, config);
 
-  // 验证候选来源集合保持为 3 个
-  assert.equal(candidates.length, 3);
+  assert.equal(candidates.length, 10);
   assert.equal(candidates[0].url, 'https://www.aibase.com/news/31365');
   assert.equal(candidates[0].snippets.length, 9);
   assert.equal(
@@ -73,52 +68,50 @@ it('minimax-time 本地回归：页内严格全等去重恢复推特片段并生
   assert.equal(candidates[1].snippets.length, 5);
 
   // 推特来源的三个不同片段均进入候选，保持原始身份与顺序。
-  const s2 = candidates[2];
-  assert.equal(s2.url, 'https://x.com/MiniMaxAgent/status/2104079819881517400');
-  assert.equal(s2.snippets.length, 3);
+  const source = candidates[3];
+  assert.equal(source.url, 'https://x.com/MiniMaxAgent/status/2104079819881517400');
+  assert.equal(source.snippets.length, 3);
 
   // 校验片段身份、完整正文及发布事实，防止只保留账号前缀。
-  const restoredSnippet = s2.snippets[1];
-  assert.equal(restoredSnippet.key, '1');
+  const announcementSnippet = source.snippets[1];
+  assert.equal(announcementSnippet.key, '1');
   assert.deepEqual(
-    s2.snippets.map((snip) => snip.key),
+    source.snippets.map((snip) => snip.key),
     ['0', '1', '2'],
-    '片段序号由旧录制的 [0, 2] 恢复为完整的 [0, 1, 2]'
+    '三个不同片段均保留原始身份'
   );
   assert.equal(
-    restoredSnippet.text,
-    fixture.data.grounding.generic[2].snippets[1],
-    '恢复片段须完整保留夹具中的原始正文'
+    announcementSnippet.text,
+    fixture.data.grounding.generic[3].snippets[1],
+    '发布片段须完整保留夹具中的原始正文'
   );
   assert.ok(
-    restoredSnippet.text.includes('M3.1-Flash-Preview, debuts today on MiniMax Code.'),
-    '恢复片段须保留模型名称及发布事实'
+    announcementSnippet.text.includes('M3.1-Flash-Preview, debuts today on MiniMax Code.'),
+    '发布片段须保留模型名称及发布事实'
   );
 
   // 验证生成请求的来源与题键
-  const { state, questions } = buildContextRequest(
+  const { state, questions, entries } = buildContextRequest(
     candidates,
     fixture.request.params.query,
     fixture.request.intent,
     fixture.request.retrievalTime
   );
   const request = buildRequest(state, questions, config.jev.model);
-  assert.equal(request.state.sources[2].snippets.length, 3);
-  assert.ok('s2__snip0' in request.questions);
-  assert.ok('s2__snip1' in request.questions);
-  assert.ok('s2__snip2' in request.questions, '候选片段由 2 变 3，必须生成新增题键 s2__snip2');
-
-  // 契约校验：旧录制缺少 s2__snip2，assertRecording 必须直接抛错拒绝，旧答案无法被不当复用
-  const recording = loadRecording('minimax-time');
-  assert.throws(
-    () => assertRecording(recording, request),
-    /模型请求已变化，须用当前请求重新录制夹具/,
-    '请求改变时 assertRecording 必须直接抛错拒绝，端到端回放明确标注为待重新录制'
+  assert.equal(request.state.sources[3].snippets.length, 3);
+  assert.deepEqual(entries[3].snippet_keys, ['0', '1', '2']);
+  assert.deepEqual(entries[3].snippet_groups, [
+    { key: 'group0', start: 0, size: 3, letters: ['A', 'B', 'C'] },
+  ]);
+  assert.deepEqual(
+    Object.keys(request.questions).filter((key) => key.startsWith('s3__')),
+    ['s3__filler', 's3__group0']
   );
+  const recording = loadRecording('minimax-time');
+  assertRecording(recording, request);
 });
 
-// 3. 保护检查：未受影响材料请求改变时直接测试失败，绝不跳过
-it('未受影响材料请求改变时直接抛错拒绝，确保回放防线有效', () => {
+it('请求正文改变时直接抛错拒绝，确保回放防线有效', () => {
   const recording = loadRecording('jev-questions');
   const changed = structuredClone(recording.request);
   changed.state.sources[0].snippets[0] += ' changed';

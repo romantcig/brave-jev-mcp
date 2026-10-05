@@ -1,0 +1,530 @@
+{
+  "origin": {
+    "sample": "2026-10-05/ab129a61.json",
+    "experiment": "tail_r1_short.ablation_ab129a61.json",
+    "variant": "short_0.5_1",
+    "sample_sha256": "fbb93ccc9b75cba85100887eb2fb98e1865d04c4f408b3d3e7c1455e428b7514"
+  },
+  "request": {
+    "model": "jev-1.13.0",
+    "state": {
+      "query": "\"FxSound\" pros cons OR audiophile review \"Equalizer APO\"",
+      "intent": "Find community reviews, pros and cons of FxSound from audiophiles and general users",
+      "sources": [
+        {
+          "id": "s0",
+          "url": "https://equalizerapoguide.com/equalizer-apo-vs-fxsound/",
+          "title": "Equalizer APO vs FXSound: Compete Comparison (2026)",
+          "snippets": [
+            "# Equalizer APO vs FXSound: Two Free Windows Equalizers, Two Philosophies\n**The short verdict:** pick **Equalizer APO** (with the free Peace GUI) if you want to tune exact frequencies, load a measurement-based profile for your specific headphone, or do room correction. Pick **FXSound** if you want to install it, click a preset, and be done in five minutes. Neither costs a cent, so try both and keep the one that fits how your brain works.",
+            "## Quick comparison: at a glance\n|  | Equalizer APO | FXSound |\n| --- | --- | --- |\n| Price | Free, open source (GPL v2) | Free, open source (AGPL v3.0) |\n| EQ type | Parametric, unlimited filters, any Fc/gain/Q | 9-band graphic EQ + house presets |\n| Interface | Text file; excellent with free Peace GUI | Polished out of the box |\n| Learning curve | Real: device selection, restart, “Install as” | Install, pick a preset, done |\n| Sound processing | Pure EQ (plus VST if you add it) | EQ + dynamics, bass, ambience, fidelity |\n| Room correction (REW) | Yes, reads REW exports directly | No |\n| AutoEQ headphone profiles | 500+ models via ParametricEQ.txt | Not supported |\n| VST plugins | Yes, system-wide | No |\n| Install size | \\~10 MB | \\~71 MB |\n| ASIO / WASAPI exclusive | No | No — same limitation |\n| Survives Windows updates | Detaches sometimes; 30-second re-tick fix | Generally unaffected |\n| CPU cost | Very low (0.2–0.3 ms measured) | Low |",
+            "## Choose this if…\n| If you… | Choose |\n| --- | --- |\n| Own a headphone with an AutoEQ profile | Equalizer APO |\n| Want to tune one exact frequency (e.g. an 8 kHz IEM peak) | Equalizer APO |\n| Want to correct your room with a measurement mic | Equalizer APO |\n| Want it working in five minutes with zero reading | FXSound |\n| Like a fuller, louder “enhanced” sound out of the box | FXSound |\n| Are setting this up on a non-technical person’s PC | FXSound |\n| Need different EQ per app at the same time | Neither — that’s paid Boom 3D |",
+            "## Best for: by user type\n**Beginners** — start with FXSound. It removes every friction point and you’ll immediately know if its house sound suits you. Graduate to Equalizer APO only when you want more control.\n\n**Audiophiles** — Equalizer APO, no contest. Parametric precision, AutoEQ profiles, and REW room correction are the whole reason the tool exists, and none of it is possible in FXSound.",
+            "**Gamers** — Equalizer APO for competitive FPS, because you can build a footstep-clarity curve that boosts the exact 3–6 kHz band; see the tested FPS preset. FXSound if you just want louder, punchier game audio without tuning."
+          ],
+          "brave_page_date": "2026-07-15T23:10:44Z"
+        },
+        {
+          "id": "s1",
+          "url": "https://www.reddit.com/r/oratory1990/comments/1g55zpb/fxsound_and_equalizer_apo_sound_much_worse_than/",
+          "title": "r/oratory1990 on Reddit: FxSound and Equalizer APO sound much worse than myHP Audio Control",
+          "snippets": [
+            "# FxSound and Equalizer APO sound much worse than myHP Audio Control\nThe problem is it's inside the myHP app... I hate bloat, and this thing seems to cause performance issues (along with HP Support Assistant, HP Analytics, OMEN Gaming, etc.).  However, neither Equalizer APO, nor FxSound come *even close* to the sound quality the silly myHP app manages to produce.",
+            "The resultant sound, while markedly better than OOB, is distorted on top of being both quieter and duller compared to myHP's, no matter how much I play around with them. Both programs also make the speakers crackle (both with Audio Enhancements on and off). What did HP/B&O do that dedicated EQ programs couldn't?",
+            "To add insult to injury, the app doesn't even offer EQ export, so I'll have to screenshot this and redo the sliders manually.",
+            "## SilentIyAwake\nThis is because they don't have the fine tuning control of a parametric EQ in order to prevent gain in other frequencies from adjusting just one, and no way to \"Smoothen\" anything.",
+            "### hankpeggyhill\nTo be clear, when I say neither comes even close, I mean it's night and day. Not \"this frequency could be lower\" but \"this sound might as well be coming from different hardware.\" Not only is it louder and much fuller, but I can hear things I couldn't hear otherwise (unless wearing headphones)."
+          ],
+          "brave_page_date": "2024-10-16T18:14:36Z"
+        },
+        {
+          "id": "s2",
+          "url": "https://fxsound.fileion.com/",
+          "title": "FxSound Download & Get Review",
+          "snippets": [
+            "# FxSound Download\n## Advantages and Disadvantages\n- Exclusively available for Windows PC operating systems.\n- May cause device switching or routing glitches.\n- Audio latency can disrupt time-sensitive tasks.\n- Aggressive settings can distort natural sound quality.\n- Lacks advanced filter chains for audio professionals.\n- Equalizer APO offers far more deep customization.",
+            "## Our Review About FxSound\nFxSound is worth trying if you use Windows and want a free, straightforward way to improve or reshape system-wide audio without learning a complex professional equalizer. It can make music, movies, games, and everyday playback sound louder, fuller, clearer, or better balanced, but it is not a universal sound-quality upgrade.",
+            "### FxSound Review: Quick Verdict\nFxSound is one of the easier options for Windows users who want system-wide EQ, volume enhancement, bass control, presets, and audio effects without paying for an audio enhancer. Its strongest advantage is accessibility: you can begin with a preset and hear the effect immediately, then move into more detailed EQ and DSP controls as needed. Current FxSound also gives considerably more EQ flexibility than older reviews suggest, including an adjustable 5-to-31-band equalizer.",
+            "ItemVerdictBest forEveryday Windows audio enhancementMain strengthSimple system-wide sound customizationMain drawbackLess suitable for specialized or latency-sensitive audio workflowsPriceFreeOpen sourceYes, AGPL-3.0Beginner-friendlyYes, especially when starting with presetsAlternative for deeper EQ controlEqualizer APO, which supports parametric/graphic EQ and virtually unlimited filters",
+            "Item · Verdict\nBest for · Everyday Windows audio enhancement\nMain strength · Simple system-wide sound customization\nMain drawback · Less suitable for specialized or latency-sensitive audio workflows\nPrice · Free\nOpen source · Yes, AGPL-3.0\nBeginner-friendly · Yes, especially when starting with presets\nAlternative for deeper EQ control · Equalizer APO, which supports parametric/graphic EQ and virtually unlimited filters",
+            "### What Are the Main Drawbacks of FxSound?\n#### Specialized Audio Workflows May Need More Control\nUsers who need complex filter chains, per-channel processing, VST support, room-correction integration, or extremely granular configuration may find Equalizer APO more appropriate. Its official project supports virtually unlimited filters, multiple channels, VST plugins, and integration with Room EQ Wizard.",
+            "### FxSound vs Equalizer APO: Which Type of User Should Choose Each?\nEqualizer APO's official project supports parametric and graphic equalization, virtually unlimited filters, VST plugins, multiple channels, low CPU use, and Room EQ Wizard integration.\n\nFxSound's advantage is not having more technical capability. Its advantage is making the most common listening adjustments easier to reach.",
+            "### Who Should Use FxSound?\n#### Consider an Alternative If...\n**Our final verdict:** FxSound succeeds because it makes system-wide Windows audio adjustment unusually accessible while still offering considerably more EQ control than older versions did. It is not the right tool for every audiophile or professional workflow, but for everyday Windows listening, its combination of free access, presets, DSP effects, and adjustable EQ gives it a strong value proposition."
+          ],
+          "brave_page_date": "2026-09-01T08:19:33Z"
+        },
+        {
+          "id": "s3",
+          "url": "https://equalizerapoguide.com/",
+          "title": "Equalizer APO v1.4.2: Download, Setup & Best Settings",
+          "snippets": [
+            "# Equalizer APO: Download, Setup & Best Settings\nThe software was fine. I hit the same wall on my first Equalizer APO install: it sat attached to the wrong audio device for 2 days while I blamed the presets. One setting, and no guide I found told me to check it.",
+            "## What is Equalizer APO?\n### What it does well\nEqualizer APO gives you as many filters as you want, anywhere you want them. **Almost no CPU cost.** Filtering audio is cheap; you will not lose frames in a game. **Room correction** via Room EQ Wizard’s filter format, and **system-wide VST plugins** for compressors, limiters, and virtual surround.",
+            "### Who shouldn’t\nYou want one bass slider and zero tinkering (FxSound, which is free, or Boom 3D, which is paid, do that). You need different EQ per app at the same time (Boom 3D can; Equalizer APO cannot). Your listening runs through ASIO or exclusive mode and you refuse to switch. You record with live mic monitoring where every millisecond matters.",
+            "## Equalizer APO features\nMeasured added latency in a loopback test, averaged over 10 runs. Inaudible for music and gaming; even a 6-filter preset keeps total latency under 3 ms.\n\n**<1%** CPU\n\n**Barely touches your CPU**\n\nFiltering audio is cheap. On any processor from the last decade you will not lose a single frame in a game. It runs quietly in the background.",
+            "## Equalizer APO vs the alternatives\n| Equalizer  | Equalizer APO | FXSound | Boom 3D | Windows built-in |\n| --- | --- | --- | --- | --- |\n| Price | Free | Free | $19.99 | Free |\n| Parametric EQ | Yes | No | No | No |\n| Filter count | Unlimited | Fixed | Fixed | Fixed |\n| Room correction / VST | Yes | No | No | No |\n| Per-app EQ | No | No | Yes | No |\n| Beginner friendly | With Peace | Yes | Yes | Yes |\n| ASIO / WASAPI exclusive | No | No | No | No |",
+            "FxSound is the easier choice if you want one slider and preset effects instead of precise EQ. **Boom 3D** earns its $19.99 only if you need per-app EQ, which Equalizer APO genuinely cannot do.",
+            "## Equalizer APO FAQ\nAbout 0.2–0.3 ms in my loopback measurement (impulse test, 10 runs averaged, Behringer ECM8000). Total chain latency stayed under 3 ms even with a 6-filter preset. Inaudible for music and gaming; live mic monitoring should use ASIO instead, which bypasses APO anyway.\n\nNo. It uses well under 1% CPU on any modern processor."
+          ],
+          "brave_page_date": "2026-09-26T11:40:54Z"
+        },
+        {
+          "id": "s4",
+          "url": "https://fxsound.en.softonic.com/",
+          "title": "FXSound - Download",
+          "snippets": [
+            "# FXSound for Windows\n## Unlock your creativity with Adobe Stock\n### What is the best way to use FXSound?\nAfter installing FXSound, all our media **suddenly sounded better**. The **bass was deeper**, and there was a certain **clarity to the sound**, which you could only expect from high-quality headphones. This is a great product if you want to use it as a means of **boosting the sound quality of your computer**.",
+            "### Are there any alternatives?\nThere are many **free software alternatives** to configure the equalizer settings on your computer. For example, **Equalizer APO** is an open-source alternative that has similar features to FXSound in terms of customizing frequencies and adding bass enhancer functionality. But the downside is that it only works on 32 bit Windows operating systems. The compatibility issues make FXSound a much better choice for those looking for an all-in-one solution.",
+            "### Not just louder, but better sound quality\n- Pros\n  - Has a 7-day free trial\n  - Automatically optimizes your audio\n  - Boosts your overall sound quality\n  - Easy to customize\n- Cons\n  - The interface is slightly outdated\n  - Not compatible with Mac computers",
+            "## Main reviews for you\n- Anonymous user January 25, 2024 Bad app. I can't change default sound. It locks you into this app. I used a fix to give me free option to use whatever sound setting I choose but goes right back to being number 1 sound app. It's crap.\n- Anonymous user November 11, 2019 Excellent enhancer , excellent output . Very effective uqually useful both for desktop and laptop .",
+            "- Anonymous user October 2, 2016 It works awesome!. I was suffering with low sound for quite a long time,this software really increased the sound manifestlly even though it has avery small size. Pros: it increased sound manifestly Cons: its interface needs to look better\n- Anonymous user March 26, 2016 Free version decent but extremely limited. Works well gives boost to overall sound, with limited user abilities. Must purchase FULL to get more than half of the features.",
+            "EQ \"times out\" every 10 minutes, will have to keep turning it back on. Pros: Sound EnhancementsUsability Cons: More trial optionsDeeper sound profile",
+            "{\"name\":\"FXSound - Download\",\"aggregateRating\":{\"ratingValue\":\"7.4\",\"ratingCount\":\"1385\",\"bestRating\":\"10\",\"worstRating\":\"1\"},\"review\":[{\"reviewBody\":\"EQ \\\"times out\\\" every 10 minutes, will have to keep turning it back on.\"}]}"
+          ],
+          "brave_page_date": "2026-08-20T00:00:00Z"
+        }
+      ],
+      "retrieval_time": "2026-10-05T02:11:23.302+08:00"
+    },
+    "questions": {
+      "s0__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[0]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s0__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[0]`; B=`sources[0].snippets[1]`; C=`sources[0].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[3]`; B=`sources[0].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[1]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s1__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[0]`; B=`sources[1].snippets[1]`; C=`sources[1].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s1__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[3]`; B=`sources[1].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s2__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[2]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s2__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[0]`; B=`sources[2].snippets[1]`; C=`sources[2].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s2__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[3]`; B=`sources[2].snippets[4]`; C=`sources[2].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s2__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[6]`; B=`sources[2].snippets[7]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s3__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[3]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s3__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[3].snippets[0]`; B=`sources[3].snippets[1]`; C=`sources[3].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s3__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[3].snippets[3]`; B=`sources[3].snippets[4]`; C=`sources[3].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s4__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[4]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s4__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[0]`; B=`sources[4].snippets[1]`; C=`sources[4].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s4__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[3]`; B=`sources[4].snippets[4]`; C=`sources[4].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s3__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[3].snippets[6]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s4__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[6]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      }
+    }
+  },
+  "status": 200,
+  "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "s0__filler": {
+        "type": "noul",
+        "noul": 0.05
+      },
+      "s0__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.57,
+        "probabilities": {
+          "none": 0,
+          "A": 0.02,
+          "B": 0.04,
+          "AB": 0.08,
+          "C": 0.02,
+          "AC": 0.04,
+          "BC": 0.17,
+          "ABC": 0.63
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.73,
+        "probabilities": {
+          "none": 0.04,
+          "A": 0.08,
+          "B": 0.09,
+          "AB": 0.79
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "noul": 0.07
+      },
+      "s1__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.14,
+        "probabilities": {
+          "none": 0.05,
+          "A": 0.03,
+          "B": 0.16,
+          "AB": 0.11,
+          "C": 0.14,
+          "AC": 0.07,
+          "BC": 0.19,
+          "ABC": 0.25
+        }
+      },
+      "s1__group3": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0.16,
+        "probabilities": {
+          "none": 0.22,
+          "A": 0.38,
+          "B": 0.1,
+          "AB": 0.3
+        }
+      },
+      "s2__filler": {
+        "type": "noul",
+        "noul": 0.24
+      },
+      "s2__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.38,
+        "probabilities": {
+          "none": 0.01,
+          "A": 0.13,
+          "B": 0.01,
+          "AB": 0.08,
+          "C": 0.07,
+          "AC": 0.13,
+          "BC": 0.11,
+          "ABC": 0.46
+        }
+      },
+      "s2__group3": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.3,
+        "probabilities": {
+          "none": 0.02,
+          "A": 0.05,
+          "B": 0.05,
+          "AB": 0.09,
+          "C": 0.14,
+          "AC": 0.09,
+          "BC": 0.18,
+          "ABC": 0.38
+        }
+      },
+      "s2__group6": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.42,
+        "probabilities": {
+          "none": 0.06,
+          "A": 0.16,
+          "B": 0.21,
+          "AB": 0.5700000000000001
+        }
+      },
+      "s3__filler": {
+        "type": "noul",
+        "noul": 0.12
+      },
+      "s3__group0": {
+        "type": "choice",
+        "choice": "BC",
+        "confidence": 0.35,
+        "probabilities": {
+          "none": 0.01,
+          "A": 0.01,
+          "B": 0.11,
+          "AB": 0.07,
+          "C": 0.14,
+          "AC": 0.1,
+          "BC": 0.42,
+          "ABC": 0.14
+        }
+      },
+      "s3__group3": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.35,
+        "probabilities": {
+          "none": 0.01,
+          "A": 0.04,
+          "B": 0.06,
+          "AB": 0.1,
+          "C": 0.09,
+          "AC": 0.1,
+          "BC": 0.17,
+          "ABC": 0.43
+        }
+      },
+      "s4__filler": {
+        "type": "noul",
+        "noul": 0.65
+      },
+      "s4__group0": {
+        "type": "choice",
+        "choice": "BC",
+        "confidence": 0.16,
+        "probabilities": {
+          "none": 0.16,
+          "A": 0.02,
+          "B": 0.15,
+          "AB": 0.05,
+          "C": 0.23,
+          "AC": 0.06,
+          "BC": 0.28,
+          "ABC": 0.05
+        }
+      },
+      "s4__group3": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.13,
+        "probabilities": {
+          "none": 0.23,
+          "A": 0.06,
+          "B": 0.06,
+          "AB": 0.07,
+          "C": 0.08,
+          "AC": 0.09,
+          "BC": 0.18,
+          "ABC": 0.22999999999999998
+        }
+      },
+      "s3__group6": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0.66,
+        "probabilities": {
+          "none": 0.17,
+          "A": 0.83
+        }
+      },
+      "s4__group6": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0.48,
+        "probabilities": {
+          "none": 0.26,
+          "A": 0.74
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 6330,
+      "output_tokens": 897
+    }
+  },
+  "expected": [
+    {
+      "verdict": "keep",
+      "kept": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  ]
+}

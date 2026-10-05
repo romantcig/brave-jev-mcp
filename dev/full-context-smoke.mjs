@@ -219,7 +219,7 @@ try {
       'saved'
     );
     const sample = read(path.absolute);
-    assert.equal(sample.format_version, 7);
+    assert.equal(sample.format_version, 8);
     assert.equal(sample.context_layout_id, CONTEXT_LAYOUT_ID);
     assert.deepEqual(sample.pre_filter, item.data);
     assert.deepEqual(sample.final_return, { payload: filtered.result, status_line: statusLine });
@@ -239,7 +239,14 @@ try {
           entry.payload.state.sources[source.array_index].snippets[snippet.position]
         );
         assert.equal(snippet.in_state, true);
-        assert.equal(snippet.score_question_sent, true);
+        assert.equal(snippet.question_sent, true);
+        assert.equal(snippet.question_type, 'choice');
+        const group = mapping.snippet_groups.find(
+          (group) => group.start <= snippet.position && snippet.position < group.start + group.size
+        );
+        assert.ok(group);
+        assert.equal(snippet.question, mapping.question_keys[group.key]);
+        assert.equal(snippet.letter, group.letters[snippet.position - group.start]);
       }
     }
     // 同一次录制分别进入 test/on；回放依赖严格验证实际输入，不再请求 Jev。

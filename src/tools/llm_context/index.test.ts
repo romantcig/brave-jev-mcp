@@ -211,8 +211,8 @@ describe(`${name} (status line and JSONL log)`, () => {
     },
   };
 
-  // 有丢弃的载荷：第二个来源只有空白片段（步 3 删光 → 步 8 空来源丢弃）；
-  // 幸存来源的片段长过 200 字符，避免步 8 的一句话来源规则把它也丢掉
+  // 有丢弃的载荷：第二个来源只有空白片段（预筛删光 → 空来源丢弃）；
+  // 幸存来源的片段长过 200 字符，避免一句话来源规则把它也丢掉
   // （drop case 的 query 实词不在片段里，短片段会被 isOneLiner 判丢）
   const dropResponse = {
     grounding: {
@@ -409,29 +409,27 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
 
   const flushWrites = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-  // 回答桩按来源命名空间提供保守保留的答案；未提问的键由显式映射忽略。
-  const localAnswers: Record<string, unknown> = {
-    has_original_reasoning: { type: 'noul', noul: 0 },
-    is_template_filler: { type: 'noul', noul: 0 },
-    is_off_topic: { type: 'noul', noul: 0 },
-    is_listing: { type: 'noul', noul: 0 },
-    self_deprecated: { type: 'noul', noul: 0 },
-    stale: { type: 'noul', noul: 0 },
-    snip0: { type: 'score', score: 2 },
-    snip1: { type: 'score', score: 2 },
-    snip2: { type: 'score', score: 2 },
+  /** choice 全保留分布：概率 1 全给最长字母标签（none 为 0）。 */
+  const choiceAllKeep = (criteria: Record<string, null>): Record<string, number> => {
+    const labels = Object.keys(criteria);
+    const full = labels
+      .filter((label) => label !== 'none')
+      .reduce((best, label) => (label.length > best.length ? label : best), '');
+    return Object.fromEntries(labels.map((label) => [label, label === full ? 1 : 0]));
   };
+
+  // 回答桩按现行题目形状提供保守保留答案：filler 概率 0、单片组合题全保留。
+  // 夹具的候选只有 s0 一片片段；未提问的键由显式映射忽略。
   const jevReplay = {
     model: 'jev-1.13.0',
-    answers: Object.fromEntries(
-      Array.from({ length: 12 }, (_, index) => `s${index}`).flatMap((id) =>
-        Object.entries(localAnswers).map(([localKey, value]) => [`${id}__${localKey}`, value])
-      )
-    ),
+    answers: {
+      s0__filler: { type: 'noul', noul: 0 },
+      s0__group0: { type: 'choice', probabilities: { none: 0, A: 1 } },
+    },
     usage: { input_tokens: 42, output_tokens: 3 },
   };
 
-  // Brave 桩：drop case 有一个空来源（步 8 丢弃——样本 pre_filter 必须仍含它）；
+  // Brave 桩：drop case 有一个空来源（最终丢弃，样本 pre_filter 必须仍含它）；
   // clean case 无任何删除。
   const sampleDropResponse = {
     grounding: {
@@ -470,7 +468,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     },
   };
 
-  // 全删除夹具：两个来源都只有空白片段 → 步 3 删光片段、步 8 全部丢弃 → 输出为空
+  // 全删除夹具：两个来源都只有空白片段 → 预筛删光片段、空来源全部丢弃 → 输出为空
   const sampleAllDroppedResponse = {
     grounding: {
       generic: [
@@ -568,15 +566,15 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           snippets: Array<{
             snippet: string;
             in_state: boolean;
-            score_question_sent: boolean;
-            scored: boolean;
+            question_sent: boolean;
+            valid: boolean;
           }>;
         }>;
       };
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
     // 请求级载荷 + 来源级映射引用（全量共享请求，一次搜索零或一条）
-    assert.equal(sample.format_version, 7);
+    assert.equal(sample.format_version, 8);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -597,7 +595,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     const loggedOutput = firstRecord(logDir).output as { status_line: string };
     assert.equal(loggedOutput.status_line, statusLine);
 
-    // jev 判断与实发映射（v2 捕获口径）：s0 answered、空源 s1 是 skipped 派发记录
+    // Jev 判断与实发映射：s0 answered、空源 s1 是 skipped 派发记录
     assert.equal(sample.jev.status, 'ok');
     const rows = new Map(sample.jev.per_source.map((row) => [row.src, row.status]));
     assert.equal(rows.get('s0'), 'answered');
@@ -615,8 +613,8 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
       sample.jev.sent[0]?.snippets.map((snippet) => [
         snippet.snippet,
         snippet.in_state,
-        snippet.score_question_sent,
-        snippet.scored,
+        snippet.question_sent,
+        snippet.valid,
       ]),
       [['0', true, true, true]]
     );
@@ -658,9 +656,12 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           const answers = Object.fromEntries(
             Object.entries(body.questions as Record<string, JevQuestion>).map(([key, q]) => [
               key,
-              q.type === 'score'
-                ? { type: 'score', score: key === 's1__snip0' ? 0.5 : 2 }
-                : { type: 'noul', noul: key.endsWith('has_original_reasoning') ? 0.9 : 0.1 },
+              q.type === 'choice'
+                ? {
+                    type: 'choice',
+                    probabilities: choiceAllKeep(q.criteria),
+                  }
+                : { type: 'noul', noul: 0.1 },
             ])
           );
           return new Response(
@@ -674,12 +675,12 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
         assert.equal(result.isError ?? false, false);
         assert.equal(result.structuredContent, undefined);
         const content = result.content as { text: string }[];
-        assert.equal(content.length, 2);
+        assert.equal(content.length, mode === 'test' ? 2 : 1);
         assert.equal(sent.length, 1);
         assert.equal(sent[0].state.retrieval_time, anchor);
         assert.equal(sent[0].state.sources[0].brave_page_date, '2026-09-16T00:00:00');
         assert.equal(sent[0].state.sources[1].brave_page_date, null);
-        assert.match(sent[0].questions.s1__snip0.instructions, /^How useful is `sources\[1\]/);
+        assert.match(sent[0].questions.s1__group0.instructions, /^A=`sources\[1\]/);
         returns.push(JSON.parse(content[0].text));
         if (mode === 'test') {
           const { sample: raw } = readSingleSample(logDir);
@@ -702,7 +703,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           assert.deepEqual(recorded.questions, sent[0].questions);
           assert.equal(recorded.dispatched, true);
           assert.deepEqual(recorded.source_ids, ['s0', 's1']);
-          assert.equal(sample.context_layout_id, 'jev-context-3');
+          assert.equal(sample.context_layout_id, 'jev-context-4');
           assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
         }
       }

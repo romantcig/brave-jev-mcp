@@ -34,13 +34,23 @@ const configOf = (logDir: string): FilterConfig => ({
   logDir,
 });
 
+/** 全保留的 choice 分布：概率 1 全给最长字母标签（none 为 0）。 */
+const allKeepDistribution = (criteria: Record<string, null>): Record<string, number> => {
+  const full = Object.keys(criteria)
+    .filter((label) => label !== 'none')
+    .reduce((best, label) => (label.length > best.length ? label : best), '');
+  return Object.fromEntries(Object.keys(criteria).map((label) => [label, label === full ? 1 : 0]));
+};
+
 const keepAllClassify: ClassifyDeps['classify'] = async ({ questions }) => ({
   status: 'answered',
   model: DEFAULT_JEV_MODEL,
   answers: Object.fromEntries(
     Object.entries(questions).map(([key, question]) => [
       key,
-      question.type === 'score' ? { kind: 'score', score: 2 } : { kind: 'noul', probability: 0 },
+      question.type === 'choice'
+        ? { kind: 'choice', probabilities: allKeepDistribution(question.criteria) }
+        : { kind: 'noul', probability: 0 },
     ])
   ),
   input_tokens: 42,
@@ -100,8 +110,13 @@ describe('createSampleWriter', () => {
           answers: Object.fromEntries(
             Object.entries(body.questions).map(([key, question]) => [
               key,
-              (question as { type: string }).type === 'score'
-                ? { type: 'score', score: 2 }
+              (question as { type: string; criteria?: Record<string, null> }).type === 'choice'
+                ? {
+                    type: 'choice',
+                    probabilities: allKeepDistribution(
+                      (question as { criteria: Record<string, null> }).criteria
+                    ),
+                  }
                 : { type: 'noul', noul: 0 },
             ])
           ),
@@ -146,7 +161,7 @@ describe('createSampleWriter', () => {
     const raw = readFileSync(path.absolute, 'utf8');
     const sample = JSON.parse(raw) as SampleRecord;
 
-    assert.equal(sample.format_version, 7);
+    assert.equal(sample.format_version, 8);
     assert.equal(sample.request_id, requestId);
     assert.equal(sample.mode, 'test');
     assert.deepEqual(sample.request, {
@@ -162,7 +177,7 @@ describe('createSampleWriter', () => {
     assert.deepEqual(savedRequest.questions, captured[0].questions);
     assert.deepEqual(savedRequest.answers, jev_requests[0].answers);
     assert.equal(savedRequest.answered, true);
-    assert.equal(savedRequest.answers?.s0__snip0?.kind, 'score');
+    assert.equal(savedRequest.answers?.s0__group0?.kind, 'choice');
     assert.deepEqual(
       sample.final_return,
       JSON.parse(JSON.stringify({ payload, status_line: statusLine }))
@@ -225,6 +240,145 @@ describe('createSampleWriter', () => {
     assert.ok(request.state);
     assert.deepEqual(JSON.parse(request.state), lastRequest.state);
     assert.deepEqual(request.questions, lastRequest.questions);
+  });
+
+  it('逐片审计区分页面删除、坏组保留与独立裁决，重复 URL 按来源身份配对', async () => {
+    const config = configOf(join(root, 'group-audit'));
+    const data: BraveLlmContextResponse = {
+      grounding: {
+        generic: [4, 4, 7, 1].map((count, source) => ({
+          url: 'https://same.example/article',
+          title: `Evidence ${source}`,
+          snippets: Array.from(
+            { length: count },
+            (_, position) => `${articleBody} Source ${source}, evidence ${position}.`
+          ),
+        })),
+        map: [],
+      },
+      sources: {},
+    };
+    const threeNone = { none: 1, A: 0, B: 0, AB: 0, C: 0, AC: 0, BC: 0, ABC: 0 };
+    const rawAnswers = {
+      s0__filler: { type: 'noul', noul: 0.8 },
+      s0__group0: {
+        type: 'choice',
+        choice: 'ABC',
+        probabilities: { ...threeNone, none: 0, ABC: 1 },
+      },
+      s0__group3: { type: 'choice', choice: 'A', probabilities: { none: 0, A: 1 } },
+      // s1 页面题缺答，仍然独立应用有效片段答案。
+      s1__group0: { type: 'choice', choice: 'none', probabilities: threeNone },
+      s1__group3: { type: 'choice', choice: 'A', probabilities: { A: 1 } },
+      s2__filler: { type: 'noul', noul: 0.1 },
+      s2__group0: { type: 'choice', probabilities: [1, 0] },
+      s2__group3: { type: 'choice', choice: 'none', probabilities: threeNone },
+      s2__group6: { type: 'choice', choice: 'none', probabilities: { none: 0.5, A: 0.5 } },
+      s3__filler: { type: 'noul', noul: 0.1 },
+      s3__group0: { type: 'choice', choice: 'none', probabilities: { none: 1, A: 0 } },
+    };
+    const { restore } = stubFetch(() => ({
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          model: DEFAULT_JEV_MODEL,
+          answers: rawAnswers,
+          usage: { input_tokens: 123 },
+        }),
+    }));
+    let filtered: FilterResult;
+    try {
+      filtered = await filterLlmContext(
+        data,
+        { params: { query: QUERY }, intent: INTENT },
+        config,
+        createJevClassifier(config.jev, { TYPESAFE_API_KEY: 'stub-key' })
+      );
+    } finally {
+      restore();
+    }
+    const writer = createSampleWriter(config);
+    const requestId = '99999999-2222-3333-4444-555555555555';
+    const path = writer.allocatePath(requestId);
+    assert.deepEqual(
+      writer.save({
+        requestId,
+        path,
+        originalParams: { query: QUERY },
+        braveParams: { query: QUERY },
+        filterParams: { query: QUERY },
+        intent: INTENT,
+        preFilter: data,
+        stats: filtered.stats,
+        jevDispatch: filtered.jev_dispatch,
+        jevRequests: filtered.jev_requests,
+        payload: filtered.result,
+        statusLine: filtered.stats.output.status_line ?? null,
+      }),
+      { status: 'saved' }
+    );
+    const sample = JSON.parse(readFileSync(path.absolute, 'utf8')) as SampleRecord;
+    const jev = sample.jev!;
+    assert.equal(jev.n_requests, 1);
+    assert.equal(jev.input_tokens, 123);
+    assert.deepEqual(jev.requests[0].answers?.s0__group0, {
+      kind: 'choice',
+      choice: 'ABC',
+      probabilities: rawAnswers.s0__group0.probabilities,
+    });
+    assert.deepEqual(
+      jev.sent[0].snippets.map((snippet) => [
+        snippet.valid,
+        snippet.applied,
+        snippet.verdict,
+        snippet.reason,
+      ]),
+      Array.from({ length: 4 }, () => [true, false, 'drop', 'filler'])
+    );
+    assert.equal(jev.sent[1].source_verdict_valid, false);
+    assert.deepEqual(
+      jev.sent[1].snippets.map((snippet) => [snippet.valid, snippet.applied, snippet.verdict]),
+      [
+        [true, true, 'drop'],
+        [true, true, 'drop'],
+        [true, true, 'drop'],
+        [false, false, 'keep'],
+      ]
+    );
+    assert.equal(jev.sent[1].snippets[3].invalid_reason, 'labels');
+    assert.deepEqual(
+      jev.sent[2].snippets.map((snippet) => snippet.verdict),
+      ['keep', 'keep', 'keep', 'drop', 'drop', 'drop', 'keep']
+    );
+    assert.equal(jev.sent[2].snippets[0].invalid_reason, 'missing');
+    assert.equal(jev.sent[2].snippets[6].keep_probability, 0.5);
+    assert.equal(jev.sent[2].snippets[6].threshold, 0.5);
+    // 片段裁决删空来源时，不能把已经应用的概率误记成未应用。
+    assert.deepEqual(
+      jev.sent[3].snippets.map((snippet) => [
+        snippet.valid,
+        snippet.applied,
+        snippet.verdict,
+        snippet.reason,
+      ]),
+      [[true, true, 'drop', 'empty']]
+    );
+    assert.deepEqual(
+      jev.sent[2].snippets.map((snippet) => [
+        snippet.question,
+        snippet.letter,
+        snippet.question_sent,
+      ]),
+      [
+        ['s2__group0', 'A', true],
+        ['s2__group0', 'B', true],
+        ['s2__group0', 'C', true],
+        ['s2__group3', 'A', true],
+        ['s2__group3', 'B', true],
+        ['s2__group3', 'C', true],
+        ['s2__group6', 'A', true],
+      ]
+    );
   });
 
   it('写入失败：目标目录不可写时返回 failed，不抛异常，不留下样本文件', async () => {

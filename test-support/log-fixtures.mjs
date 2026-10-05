@@ -23,6 +23,14 @@ export function loadRecording(name) {
 /** 在调用过滤管道前核对请求；不能让失败保留机制掩盖错位的旧回答。 */
 export function assertRecording(recording, request) {
   assert.deepEqual(request, recording.request, '模型请求已变化，须用当前请求重新录制夹具');
+  for (const [key, question] of Object.entries(request.questions)) {
+    if (question.type === 'choice')
+      assert.deepEqual(
+        Object.keys(question.criteria),
+        Object.keys(recording.request.questions[key].criteria),
+        '组合选项顺序必须与录制一致'
+      );
+  }
   assert.equal(recording.status, 200, '回放需要一次成功的真实录制');
   assert.equal(recording.body.model, request.model);
 }

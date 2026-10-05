@@ -1,0 +1,337 @@
+{
+  "origin": {
+    "sample": "2026-10-02/044439-6DBfljTIOy.json",
+    "experiment": "tail_r1_short.ablation_044439-6DBfljTIOy.json",
+    "variant": "short_0.5_1",
+    "sample_sha256": "a4c4f43749f2d35847ee672819f50eab2b66c5736b745b9a7976dc3b289b7e1c"
+  },
+  "request": {
+    "model": "jev-1.13.0",
+    "state": {
+      "query": "\"sanity\" \"6.17.0\" OR \"6.16.0\" changelog OR \"sanity-io/sanity\" releases",
+      "intent": "Find Sanity Studio 6.17 changelog highlights",
+      "sources": [
+        {
+          "id": "s0",
+          "url": "https://github.com/sanity-io/sanity/releases",
+          "title": "Releases · sanity-io/sanity",
+          "snippets": [
+            "# Releases: sanity-io/sanity\n## v6.17.0\n\n## Release list\n\nv6.17.0 Latest\n\nLatest",
+            "# Choose a tag to compare\n## No results found\n@squiggler-app squiggler-app released this 29 Sep 16:47\n\nv6.17.0\n\na9944b0",
+            "# 📓 Full changelog\n\n## v6.16.0",
+            "# Choose a tag to compare\n## No results found\n@squiggler-app squiggler-app released this 22 Sep 14:44\n\nv6.16.0\n\n584242a",
+            "# 📓 Full changelog\n| Author | Message | Commit |\n| --- | --- | --- |\n| @shapirodaniel | fix(validation): accept allowed object array selections (#14765) | e570612 |\n| @joshuaellis | fix(core): read the workbench auth token through the SDK message bus (#14758) | 41ba5da |\n| @pedrobonamin | fix(core): restore padding bottom on scrollable dialogs (#14763) | 10ff9aa |\n| squiggler-app\\[bot] | fix(deps): update sanity-sdk to ^3.2.0 (#14743) | 825c031 |\n| @joshuaellis | fix(core): replace stale editSchedule key in VersionChip test fixture (#14759) | 9edcf59 |\n| @rexxars | chore: upgrade obug to v3 (#14746) | c005f99 |\n| @jordanl17 | feat(structure): add pause to edit for scheduled drafts (#14274) | 6f71196 |",
+            "| Author | Message | Commit |\n| --- | --- | --- |\n| squiggler-app\\[bot] | fix(deps): update portabletext (#14667) | 663d296 |\n| @jordanl17 | fix(core): pin document color-scheme to the resolved studio appearance (#14745) | c2b3fc2 |\n| @christianhg | fix(form): never rewrite a Portable Text block removal to a whole-field unset (#14747) | 8118ccc |",
+            "- v6.17.0\n- v6.16.0\n- v6.15.0\n- v6.14.1\n- v6.14.0\n- v6.13.2\n- v6.13.1\n- v6.13.0\n- v6.12.0\n- v6.11.0"
+          ]
+        },
+        {
+          "id": "s1",
+          "url": "https://github.com/sanity-io/sanity/releases/tag/v6.17.0",
+          "title": "Release v6.17.0 · sanity-io/sanity",
+          "snippets": [
+            "Sanity Studio – Rapidly configure content workspaces powered by structured content - Release v6.17.0 · sanity-io/sanity\n\nSanity Studio v6.17.0 This release includes various improvements and bug fixes. For the complete changelog with all details, please visit: www.sanity.io/changelog/studio-Ni4xNi4w Install or upgrade..."
+          ]
+        },
+        {
+          "id": "s2",
+          "url": "https://github.com/sanity-io/sanity/releases/tag/v6.16.0",
+          "title": "Release v6.16.0 · sanity-io/sanity",
+          "snippets": [
+            "Sanity Studio – Rapidly configure content workspaces powered by structured content - Release v6.16.0 · sanity-io/sanity\n\nSanity Studio v6.16.0 This release includes various improvements and bug fixes. For the complete changelog with all details, please visit: www.sanity.io/changelog/studio-Ni4xNS4w Install or upgrade..."
+          ]
+        },
+        {
+          "id": "s3",
+          "url": "https://releasebot.io/updates/sanity",
+          "title": "Sanity Release Notes - September 2026 Latest Updates - Releasebot",
+          "snippets": [
+            "# Sanity Release Notes\nSanity logo Sanity v6.16.0 Sanity ships Studio v6.16.0 with a broad set of improvements and bug fixes, including updates to presence, Portable Text, document variants, and preview performance, plus ongoing reliability work across the studio. Sanity Studio v6.16.0 This release includes various improvements and bug fixes."
+          ]
+        },
+        {
+          "id": "s4",
+          "url": "https://www.npmjs.com/package/sanity",
+          "title": "sanity - npm",
+          "snippets": [
+            "Sanity is a real-time content infrastructure with a scalable, hosted backend featuring a Graph Oriented Query Language (GROQ), asset pipelines and fast edge caches. Latest version: 6.17.0, last published: 10 hours ago. Start using sanity in your project by running `npm i sanity`. There are 67 other projects in the npm registry using sanity.",
+            "# sanity\n6.17.0 • Public • Published 10 hours ago",
+            "# Sanity\n## Build powerful production-ready content workspaces\n#### Get Started \\| Docs \\| Website\n\nSanity Studio is an open-source, single-page application that is fast to set up and quick to configure. The Studio comes with a complete studio customization framework that lets you tailor the workspace as your needs grow.\n\nSanity hosts your content in a real-time, hosted data store called Content Lake.",
+            "## Key Features\n### Sanity Studio\n\nSanity Studio is an open-source real-time CMS, that you can customize with JavaScript and React.\n\n- Efficient editing, instant UI for complex fields\n- Responsive, works on narrow screens\n- Plug-in architecture and custom components\n- Style with your own branding\n- Advanced block editor for structured content\n- Use JavaScript to add field validations, organize documents, and set initial values",
+            "## Package Sidebar\n\n### Install\n\nnpm i sanity\n\n### Repository\n\ngithub.com/sanity-io/sanity\n\n### Homepage\n\nwww.sanity.io/\n\n### Version\n\n6.17.0\n\n### Last publish\n\n10 hours ago"
+          ]
+        }
+      ]
+    },
+    "questions": {
+      "s0__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[0]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s0__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[0]`; B=`sources[0].snippets[1]`; C=`sources[0].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[3]`; B=`sources[0].snippets[4]`; C=`sources[0].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[1]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s2__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[2]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s3__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[3]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s4__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[4]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s4__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[0]`; B=`sources[4].snippets[1]`; C=`sources[4].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s4__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[3]`; B=`sources[4].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s0__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[6]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s1__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[0]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s2__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[0]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s3__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[3].snippets[0]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      }
+    }
+  },
+  "status": 200,
+  "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "s0__filler": {
+        "type": "noul",
+        "noul": 0.7
+      },
+      "s0__group0": {
+        "type": "choice",
+        "choice": "C",
+        "confidence": 0.61,
+        "probabilities": {
+          "AB": 0.01,
+          "B": 0.16,
+          "AC": 0.01,
+          "BC": 0.13,
+          "A": 0,
+          "ABC": 0.01,
+          "C": 0.66,
+          "none": 0.02
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.22,
+        "probabilities": {
+          "AB": 0.07,
+          "B": 0.04,
+          "AC": 0.08,
+          "BC": 0.11,
+          "C": 0.18,
+          "ABC": 0.31,
+          "A": 0.09,
+          "none": 0.12
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "noul": 0.92
+      },
+      "s2__filler": {
+        "type": "noul",
+        "noul": 0.87
+      },
+      "s3__filler": {
+        "type": "noul",
+        "noul": 0.79
+      },
+      "s4__filler": {
+        "type": "noul",
+        "noul": 0.88
+      },
+      "s4__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.51,
+        "probabilities": {
+          "AB": 0.06,
+          "AC": 0.05,
+          "B": 0.09,
+          "BC": 0.04,
+          "C": 0.04,
+          "ABC": 0.01,
+          "A": 0.15,
+          "none": 0.5599999999999999
+        }
+      },
+      "s4__group3": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.51,
+        "probabilities": {
+          "AB": 0.13,
+          "B": 0.18,
+          "A": 0.06,
+          "none": 0.63
+        }
+      },
+      "s0__group6": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0,
+        "probabilities": {
+          "A": 0.5,
+          "none": 0.5
+        }
+      },
+      "s1__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.55,
+        "probabilities": {
+          "A": 0.22,
+          "none": 0.78
+        }
+      },
+      "s2__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.52,
+        "probabilities": {
+          "A": 0.24,
+          "none": 0.76
+        }
+      },
+      "s3__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.39,
+        "probabilities": {
+          "A": 0.31,
+          "none": 0.69
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 3251,
+      "output_tokens": 499
+    }
+  },
+  "expected": [
+    {
+      "verdict": "keep",
+      "kept": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "verdict": "drop",
+      "kept": [
+        true
+      ]
+    },
+    {
+      "verdict": "drop",
+      "kept": [
+        true
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        false
+      ]
+    },
+    {
+      "verdict": "drop",
+      "kept": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  ]
+}

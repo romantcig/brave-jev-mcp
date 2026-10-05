@@ -45,7 +45,7 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
     }
   }
 
-  // 保留来源缺少回答、请求失败或来源裁决校验失败时，在状态行报告结构化 [error] 标记。
+  // 保留来源缺少回答、请求失败或页面/组合题校验失败时，报告结构化 [error] 标记。
   // 收到可解析响应不等于取得有效裁决；off 模式不显示此提示。
   let unchecked = 0;
   const failKinds = new Set<StatusLineFailKind>();
@@ -71,8 +71,15 @@ export function buildStatusLine(stats: FilterStats): string | undefined {
     for (const source of stats.sources) {
       if (source.verdict !== 'keep') continue;
       const row = bySrc.get(`s${source.index}`);
-      if (row === undefined || row.status !== 'answered' || row.fail_kind === 'validation') {
+      const invalidGroups = Object.keys(row?.snippet_validation ?? {}).length > 0;
+      if (
+        row === undefined ||
+        row.status !== 'answered' ||
+        row.fail_kind === 'validation' ||
+        invalidGroups
+      ) {
         unchecked += 1;
+        if (invalidGroups) failKinds.add('validation');
         if (row?.status === 'breaker_open') {
           failKinds.add('circuit_breaker');
         } else if (row?.fail_kind !== undefined) {

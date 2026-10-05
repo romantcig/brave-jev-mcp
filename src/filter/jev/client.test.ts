@@ -16,7 +16,7 @@ import type {
 } from '../types.js';
 import { buildRequest, createJevClassifier, hasJevKey, JEVI_ENDPOINT } from './client.js';
 import { parseJevResponse } from './client.js';
-import { DEFAULT_JEV_MODEL, SOURCE_QUESTIONS } from './questions.js';
+import { DEFAULT_JEV_MODEL } from './questions.js';
 import { buildContextRequest, projectSourceAnswers } from './context.js';
 
 // ---------------------------------------------------------------------------
@@ -36,24 +36,41 @@ const makeAllState = (sourceCount = 1, snippetsPerSource = 1): JevState => ({
   })),
 });
 
-/** 与 state 配套的最小题目表：每来源四道来源级题 + snip0..snip{m-1}（命名空间键）。 */
-const makeQuestions = (state: JevState, snippetsPerSource = 1): Record<string, JevQuestion> =>
+/** 组合题 criteria 速记：按位掩码序生成标签映射（值均为 null）。 */
+const choiceCriteriaOf = (size: number): Record<string, null> => {
+  const letters = 'ABC'.slice(0, size);
+  const criteria: Record<string, null> = {};
+  for (let mask = 0; mask < 2 ** size; mask += 1) {
+    let label = '';
+    for (let k = 0; k < size; k += 1) if ((mask & (1 << k)) !== 0) label += letters[k];
+    criteria[label === '' ? 'none' : label] = null;
+  }
+  return criteria;
+};
+
+/**
+ * 与 state 配套的最小题目表：每来源一道 filler 页面题 + 按三片一组划分的
+ * choice 组合题（尾部两片/一片降档），命名空间键与现行题库同形。
+ */
+const makeQuestions = (state: JevState): Record<string, JevQuestion> =>
   Object.fromEntries(
-    state.sources.flatMap((source) => [
-      ...Object.keys(SOURCE_QUESTIONS).map(
-        (key) =>
-          [`${source.id}__${key}`, { type: 'noul', instructions: 'x' } as JevQuestion] as const
-      ),
-      ...Array.from(
-        { length: snippetsPerSource },
-        (_, i) =>
-          [`${source.id}__snip${i}`, { type: 'score', instructions: 'x' } as JevQuestion] as const
-      ),
-    ])
+    state.sources.flatMap((source) => {
+      const questions: Array<[string, JevQuestion]> = [
+        [`${source.id}__filler`, { type: 'noul', instructions: 'x' }],
+      ];
+      for (let start = 0; start < source.snippets.length; start += 3) {
+        const size = Math.min(3, source.snippets.length - start);
+        questions.push([
+          `${source.id}__group${start}`,
+          { type: 'choice', instructions: 'x', criteria: choiceCriteriaOf(size) },
+        ]);
+      }
+      return questions;
+    })
   );
 
 const sharedState = makeAllState(1, 1);
-const sharedQuestions = makeQuestions(sharedState, 1);
+const sharedQuestions = makeQuestions(sharedState);
 const sharedRequest = { state: sharedState, questions: sharedQuestions };
 
 // ---------------------------------------------------------------------------
@@ -92,12 +109,17 @@ describe('buildRequest', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseJevResponse', () => {
-  it('reads noul probability and continuous score from a representative response', () => {
+  it('reads noul probability and the full choice distribution from a representative response', () => {
     const rawBody = JSON.stringify({
       model: 'jev-1.13.0',
       answers: {
-        s0__has_original_reasoning: { type: 'noul', noul: 0.85 },
-        s0__snip0: { type: 'score', score: 1.5 },
+        s0__filler: { type: 'noul', noul: 0.85 },
+        s1__group0: {
+          type: 'choice',
+          choice: 'AB',
+          confidence: 0.72,
+          probabilities: { none: 0.05, A: 0.15, B: 0.1, AB: 0.7 },
+        },
       },
       usage: { input_tokens: 150 },
     });
@@ -106,11 +128,16 @@ describe('parseJevResponse', () => {
     if (parsed.ok) {
       assert.equal(parsed.model, 'jev-1.13.0');
       assert.equal(parsed.input_tokens, 150);
-      assert.deepEqual(parsed.answers['s0__has_original_reasoning'], {
+      assert.deepEqual(parsed.answers['s0__filler'], {
         kind: 'noul',
         probability: 0.85,
       });
-      assert.deepEqual(parsed.answers['s0__snip0'], { kind: 'score', score: 1.5 });
+      // 原始标签和完整概率分布原样保留；逐片裁决只使用概率分布。
+      assert.deepEqual(parsed.answers['s1__group0'], {
+        kind: 'choice',
+        choice: 'AB',
+        probabilities: { none: 0.05, A: 0.15, B: 0.1, AB: 0.7 },
+      });
     }
   });
 
@@ -136,7 +163,7 @@ describe('parseJevResponse boundaries', () => {
     const body = JSON.stringify({
       model: 'jev-1.13.0',
       answers: {
-        is_off_topic: { type: 'noul', noul: 0.2 },
+        filler: { type: 'noul', noul: 0.2 },
         junk_typed: { type: 'wat' },
         junk_value: 'text',
       },
@@ -145,8 +172,8 @@ describe('parseJevResponse boundaries', () => {
 
     const parsed = parseJevResponse(200, body);
     assert.ok(parsed.ok);
-    assert.deepEqual(Object.keys(parsed.answers), ['is_off_topic']);
-    assert.deepEqual(parsed.answers['is_off_topic'], { kind: 'noul', probability: 0.2 });
+    assert.deepEqual(Object.keys(parsed.answers), ['filler']);
+    assert.deepEqual(parsed.answers['filler'], { kind: 'noul', probability: 0.2 });
   });
 
   it('isolates a noul answer that lacks its numeric value without failing the response', () => {
@@ -154,32 +181,40 @@ describe('parseJevResponse boundaries', () => {
     const body = JSON.stringify({
       model: 'jev-1.13.0',
       answers: {
-        s0__is_off_topic: { type: 'noul' },
-        s1__is_listing: { type: 'noul', noul: 0.3 },
+        s0__filler: { type: 'noul' },
+        s1__filler: { type: 'noul', noul: 0.3 },
       },
       usage: { input_tokens: 5 },
     });
 
     const parsed = parseJevResponse(200, body);
     assert.ok(parsed.ok);
-    assert.deepEqual(Object.keys(parsed.answers), ['s1__is_listing']);
-    assert.deepEqual(parsed.answers['s1__is_listing'], { kind: 'noul', probability: 0.3 });
+    assert.deepEqual(Object.keys(parsed.answers), ['s1__filler']);
+    assert.deepEqual(parsed.answers['s1__filler'], { kind: 'noul', probability: 0.3 });
   });
 
-  it('isolates a score answer that lacks its score without failing the response', () => {
+  it('isolates choice answers with a malformed distribution without failing the response', () => {
+    // 概率分布必须是非数组键值对象且每值有限且在 [0,1]；坏组不拖垮其他题
     const body = JSON.stringify({
       model: 'jev-1.13.0',
       answers: {
-        s0__snip0: { type: 'score', confidence: 0.5 },
-        s0__snip1: { type: 'score', score: 1.5 },
+        bad_shape: { type: 'choice', confidence: 0.5 },
+        array_shape: { type: 'choice', probabilities: [0.5, 0.5] },
+        non_finite: { type: 'choice', probabilities: { none: Number.NaN, A: 0.5 } },
+        out_of_range: { type: 'choice', probabilities: { none: 1.5, A: -0.5 } },
+        good_group: { type: 'choice', probabilities: { none: 0.2, A: 0.8 } },
+        noul_neighbor: { type: 'noul', noul: 0.3 },
       },
       usage: { input_tokens: 5 },
     });
 
     const parsed = parseJevResponse(200, body);
     assert.ok(parsed.ok);
-    assert.deepEqual(Object.keys(parsed.answers), ['s0__snip1']);
-    assert.deepEqual(parsed.answers['s0__snip1'], { kind: 'score', score: 1.5 });
+    assert.deepEqual(Object.keys(parsed.answers), ['good_group', 'noul_neighbor']);
+    assert.deepEqual(parsed.answers['good_group'], {
+      kind: 'choice',
+      probabilities: { none: 0.2, A: 0.8 },
+    });
   });
 
   it('returns kind shape when the body is not JSON', () => {
@@ -260,14 +295,19 @@ const waitFor = async (condition: () => boolean, timeoutMs = 2000): Promise<void
 type MockJevOverrides = {
   model?: string;
   input_tokens?: number;
-  answers?: Record<
-    string,
-    { type: 'noul'; noul: number } | { type: 'score'; score: number } | unknown
-  >;
+  answers?: Record<string, unknown>;
+};
+
+/** 全保留的 choice 分布：概率 1 全给最长字母标签（none 为 0）。 */
+const allKeepDistribution = (criteria: Record<string, null>): Record<string, number> => {
+  const full = Object.keys(criteria)
+    .filter((label) => label !== 'none')
+    .reduce((best, label) => (label.length > best.length ? label : best), '');
+  return Object.fromEntries(Object.keys(criteria).map((label) => [label, label === full ? 1 : 0]));
 };
 
 /**
- * 强类型现代化 Mock 工厂：严格以实发 questions 键表为准，
+ * 强类型 Mock 工厂：严格以实发 questions 键表为准，
  * 自动生成 100% 匹配的真实全局命名空间答案，估算合理的 input_tokens 并支持 overrides。
  */
 const mockJevSuccessResponse = (
@@ -279,8 +319,11 @@ const mockJevSuccessResponse = (
   for (const [key, q] of Object.entries(questions)) {
     if (q.type === 'noul') {
       answers[key] = { type: 'noul', noul: 0.1 };
-    } else if (q.type === 'score') {
-      answers[key] = { type: 'score', score: 2 };
+    } else if (q.type === 'choice') {
+      answers[key] = {
+        type: 'choice',
+        probabilities: allKeepDistribution(q.criteria),
+      };
     }
   }
   if (overrides?.answers !== undefined) {
@@ -376,9 +419,9 @@ describe('createJevClassifier', () => {
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
       assert.equal(outcome.model, DEFAULT_JEV_MODEL);
       assert.ok(outcome.input_tokens > 0);
-      assert.equal(outcome.answers['s0__has_original_reasoning']?.kind, 'noul');
-      assert.equal(outcome.answers['s2__snip0']?.kind, 'score');
-      assert.equal(outcome.answers['s5__is_template_filler']?.kind, 'noul');
+      assert.equal(outcome.answers['s0__filler']?.kind, 'noul');
+      assert.equal(outcome.answers['s2__group0']?.kind, 'choice');
+      assert.equal(outcome.answers['s5__filler']?.kind, 'noul');
 
       assert.equal(capturedUrl, JEVI_ENDPOINT);
       assert.equal(capturedInit?.method, 'POST');
@@ -393,7 +436,8 @@ describe('createJevClassifier', () => {
       };
       assert.equal(body.model, DEFAULT_JEV_MODEL);
       assert.deepEqual(body.state, state);
-      assert.equal(Object.keys(body.questions).length, 18);
+      // 题数公式：候选数 × 1（filler） + 组数（2/1/3 片 → 各一组）
+      assert.equal(Object.keys(body.questions).length, 6);
     } finally {
       globalThis.fetch = saved;
     }
@@ -439,15 +483,30 @@ describe('createJevClassifier', () => {
     globalThis.fetch = (async () =>
       mockJevSuccessResponse(state, questions, {
         answers: {
-          s0__snip0: { type: 'score', score: 3 },
-          s0__snip1: { type: 'score', score: 1 },
-          s2__snip0: { type: 'score', score: 2 },
-          s5__snip0: { type: 'score', score: 0 },
-          s5__snip1: { type: 'score', score: 3 },
-          s5__snip2: { type: 'score', score: 2 },
-          s0__has_original_reasoning: { type: 'noul', noul: 0.8 },
-          s2__has_original_reasoning: { type: 'noul', noul: 0.2 },
-          s5__has_original_reasoning: { type: 'noul', noul: 0.5 },
+          // s0 两片组：p(A)=0.7、p(B)=0.5
+          s0__group0: {
+            type: 'choice',
+            probabilities: { none: 0.2, A: 0.3, B: 0.1, AB: 0.4 },
+          },
+          // s2 单片组：p(A)=0.75
+          s2__group0: { type: 'choice', probabilities: { none: 0.25, A: 0.75 } },
+          // s5 三片组：p(A)=0.75、p(B)=0.6、p(C)=0.4
+          s5__group0: {
+            type: 'choice',
+            probabilities: {
+              none: 0.05,
+              A: 0.2,
+              B: 0.1,
+              AB: 0.25,
+              C: 0.1,
+              AC: 0.05,
+              BC: 0,
+              ABC: 0.25,
+            },
+          },
+          s0__filler: { type: 'noul', noul: 0.8 },
+          s2__filler: { type: 'noul', noul: 0.2 },
+          s5__filler: { type: 'noul', noul: 0.5 },
         },
       })) as typeof fetch;
 
@@ -461,30 +520,34 @@ describe('createJevClassifier', () => {
       const s2Entry = entries.find((e) => e.source_id === 's2')!;
       const s5Entry = entries.find((e) => e.source_id === 's5')!;
 
-      const proj0 = projectSourceAnswers({
-        snippetCount: s0Entry.snippet_keys.length,
-        answerAt: (key) => outcome.answers[s0Entry.question_keys[key]],
-      });
-      const proj2 = projectSourceAnswers({
-        snippetCount: s2Entry.snippet_keys.length,
-        answerAt: (key) => outcome.answers[s2Entry.question_keys[key]],
-      });
-      const proj5 = projectSourceAnswers({
-        snippetCount: s5Entry.snippet_keys.length,
-        answerAt: (key) => outcome.answers[s5Entry.question_keys[key]],
-      });
+      const projectedOf = (entry: (typeof entries)[number]) =>
+        projectSourceAnswers({
+          snippetCount: entry.snippet_keys.length,
+          groups: entry.snippet_groups,
+          answerAt: (key) => outcome.answers[entry.question_keys[key]],
+        });
+      const proj0 = projectedOf(s0Entry);
+      const proj2 = projectedOf(s2Entry);
+      const proj5 = projectedOf(s5Entry);
 
-      assert.deepEqual(proj0.snippetScores, [3, 1]);
-      assert.equal(proj0.answers['has_original_reasoning'], 0.8);
+      assert.deepEqual(proj0.judgments, [
+        { kind: 'keep_probability', value: 0.7 },
+        { kind: 'keep_probability', value: 0.5 },
+      ]);
+      assert.equal(proj0.answers['filler'], 0.8);
 
-      assert.deepEqual(proj2.snippetScores, [2]);
-      assert.equal(proj2.answers['has_original_reasoning'], 0.2);
+      assert.deepEqual(proj2.judgments, [{ kind: 'keep_probability', value: 0.75 }]);
+      assert.equal(proj2.answers['filler'], 0.2);
 
-      assert.deepEqual(proj5.snippetScores, [0, 3, 2]);
-      assert.equal(proj5.answers['has_original_reasoning'], 0.5);
+      assert.deepEqual(proj5.judgments, [
+        { kind: 'keep_probability', value: 0.75 },
+        { kind: 'keep_probability', value: 0.6 },
+        { kind: 'keep_probability', value: 0.4 },
+      ]);
+      assert.equal(proj5.answers['filler'], 0.5);
 
-      assert.equal(outcome.answers['s1__has_original_reasoning'], undefined);
-      assert.equal(outcome.answers['s1__snip0'], undefined);
+      assert.equal(outcome.answers['s1__filler'], undefined);
+      assert.equal(outcome.answers['s1__group0'], undefined);
     } finally {
       globalThis.fetch = saved;
     }
@@ -789,10 +852,9 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     }
   });
 
-  it('sends a synthetic request over the old 32K/64K detection range whole — no trimming, no question drops, no splitting (all-only §6)', async () => {
+  it('完整发送大型共享请求，保持正文、题目和单次派发', async () => {
     const saved = globalThis.fetch;
-    // 80k 个 CJK 字符按旧估算仅正文就达 72k token，超过两条旧限额；
-    // 现在必须一次完整原样发出。这里只验证测试输入，不恢复生产预算检测。
+    // 80k 个 CJK 字符和全部题目必须随同一请求原样发送。
     const bigState: JevState = {
       query: 'q',
       intent: 'i',
@@ -807,7 +869,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       ],
     };
     assert.ok(JSON.stringify(bigState).length > 80_000, '仅 state 已超过 80_000 字符');
-    const bigQuestions = makeQuestions(bigState, 1);
+    const bigQuestions = makeQuestions(bigState);
     let capturedBody: string | undefined;
     let calls = 0;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -816,7 +878,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       return new Response(
         JSON.stringify({
           model: 'jev-1.13.0',
-          answers: { s0__has_original_reasoning: { type: 'noul', noul: 0.1 } },
+          answers: { s0__filler: { type: 'noul', noul: 0.1 } },
           usage: { input_tokens: 7 },
         }),
         { status: 200, headers: { 'content-type': 'application/json' } }
@@ -827,7 +889,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       const classifier = createJevClassifier(jevConfig, { TYPESAFE_API_KEY: 'k' }, instantHooks);
       const outcome = await classifier.classify({ state: bigState, questions: bigQuestions });
       assert.ok(outcome.status === 'answered', JSON.stringify(outcome));
-      assert.deepEqual(outcome.answers.s0__has_original_reasoning, {
+      assert.deepEqual(outcome.answers.s0__filler, {
         kind: 'noul',
         probability: 0.1,
       });
@@ -905,8 +967,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
   it('reads retry-after as seconds and sleeps instead of the ordinary backoff', async () => {
     const saved = globalThis.fetch;
     globalThis.fetch = scriptedFetch([
-      () =>
-        new Response('service unavailable', { status: 503, headers: { 'retry-after': '3' } }),
+      () => new Response('service unavailable', { status: 503, headers: { 'retry-after': '3' } }),
       () => mockJevSuccessResponse(request.state, request.questions),
     ]);
     const { sleeps, hooks } = sleepRecorder(0);
@@ -1478,8 +1539,8 @@ describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/
     ],
   };
   const smallQuestions: Record<string, JevQuestion> = {
-    s0__is_off_topic: { type: 'noul', instructions: 'x' },
-    s1__is_off_topic: { type: 'noul', instructions: 'x' },
+    s0__filler: { type: 'noul', instructions: 'x' },
+    s1__filler: { type: 'noul', instructions: 'x' },
   };
 
   it('sends the all-context payload unchanged when within budget', async () => {
@@ -1585,14 +1646,34 @@ describe('全量接入审查：真实解析与请求账目', () => {
       calls += 1;
       const body = JSON.parse(String(init?.body));
       const answers: Record<string, unknown> = Object.fromEntries(
-        Object.entries(body.questions).map(([key, value]) => [
-          key,
-          (value as JevQuestion).type === 'score'
-            ? { type: 'score', score: key.startsWith('s0__') ? 'bad' : 0 }
-            : { type: 'noul', noul: key.endsWith('has_reasoning') ? 0.9 : 0.1 },
-        ])
+        Object.entries(body.questions).map(([key, value]) => {
+          const question = value as JevQuestion;
+          if (question.type === 'choice') {
+            // s1 的组合题全删（none 拿满概率）；s0 的组合题全留
+            const full = Object.keys(question.criteria)
+              .filter((label) => label !== 'none')
+              .reduce((best, label) => (label.length > best.length ? label : best), '');
+            return [
+              key,
+              {
+                type: 'choice',
+                probabilities: Object.fromEntries(
+                  Object.keys(question.criteria).map((label) => [
+                    label,
+                    label === 'none' && !key.startsWith('s0__')
+                      ? 1
+                      : label === full && key.startsWith('s0__')
+                        ? 1
+                        : 0,
+                  ])
+                ),
+              },
+            ];
+          }
+          return [key, { type: 'noul', noul: 0.1 }];
+        })
       );
-      answers.s0__is_off_topic = { type: 'noul', noul: 'bad' };
+      answers.s0__filler = { type: 'noul', noul: 'bad' };
       return new Response(
         JSON.stringify({ model: DEFAULT_JEV_MODEL, answers, usage: { input_tokens: 1234 } })
       );
@@ -1608,9 +1689,12 @@ describe('全量接入审查：真实解析与请求账目', () => {
       assert.equal(result.stats.jev?.n_requests, 1);
       assert.equal(result.stats.jev?.input_tokens, 1234);
       const rows = result.stats.jev!.per_source;
+      // s0 页面题错型（缺数值被解析层隔离）：页面层保守保留并记 validation
       assert.equal(rows.find((row) => row.src === 's0')?.fail_kind, 'validation');
-      assert.deepEqual(rows.find((row) => row.src === 's1')?.snippet_scores, [0]);
-      assert.equal(rows.find((row) => row.src === 's1')?.verdict, 'keep');
+      // s1 组合题全删：保留概率 0，低于单片门槛 0.5 → 片段删除（来源随后因空删除）
+      const s1 = rows.find((row) => row.src === 's1');
+      assert.deepEqual(s1?.snippet_judgments, [{ kind: 'keep_probability', value: 0 }]);
+      assert.equal(s1?.verdict, 'keep');
       assert.deepEqual(
         result.result.grounding.generic.map((source) => source.url),
         ['https://alpha.example/']

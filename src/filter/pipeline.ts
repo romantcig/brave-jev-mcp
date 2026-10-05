@@ -12,7 +12,7 @@ import { stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { cleanXBoilerplate } from './xCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
-import { applySnippetScores, applySourceVerdicts } from './jev/verdict.js';
+import { applySnippetJudgments, applySourceVerdicts } from './jev/verdict.js';
 import { buildStatusLine } from './statusline.js';
 import { contentTerms } from './tokenize.js';
 import {
@@ -42,6 +42,7 @@ import type {
   JevPerSourceStats,
   JevQuestion,
   JevRequestRecord,
+  JevSnippetGroup,
   JevStats,
   JevState,
   JevThresholds,
@@ -385,7 +386,7 @@ export async function filterLlmContext(
     // off：整段跳过 Jev（stats.jev 保持 null），只跑本地链
     runOffChain(table, stats, queryTerms);
   } else if (deps?.classify === undefined) {
-    // 缺少分类器时走本地链，去重仍按 Brave 原序。
+    // 缺少分类器时走本地链，幸存内容保持 Brave 原序。
     stats.jev = createNoKeyJevStats();
     runOffChain(table, stats, queryTerms);
   } else {
@@ -394,7 +395,14 @@ export async function filterLlmContext(
     const judged = await runJevStage(table, request, deps.classify, stats, config);
     dispatches = judged.dispatches;
     requests = judged.requests;
-    runOnChain(table, judged.rows, config.thresholds, stats, queryTerms);
+    // 组映射按来源 ID 索引，供片段裁决按组大小选择门槛；映射与请求构造同源。
+    const groupsBySource = new Map<string, readonly JevSnippetGroup[]>();
+    for (const record of judged.requests) {
+      for (const entry of record.mapping) {
+        groupsBySource.set(entry.source_id, entry.snippet_groups);
+      }
+    }
+    runOnChain(table, judged.rows, groupsBySource, config.thresholds, stats, queryTerms);
     // 来源裁决完成后再记有效性，复用实际校验结果；非裁决题缺答不应冒充校验失败。
     for (const record of dispatches) {
       const row = judged.rows.get(record.src);
@@ -502,8 +510,7 @@ const runJevStage = async (
         title: source.title,
         dispatched: false,
         answered: false,
-        snippet_score_validity: null,
-        snippet_scores_received: null,
+        snippet_judgments: null,
         source_verdict_valid: false,
         not_dispatched_reason: 'skipped',
         snippet_keys: [],
@@ -519,8 +526,7 @@ const runJevStage = async (
     title: candidate.title,
     dispatched: false,
     answered: false,
-    snippet_score_validity: null,
-    snippet_scores_received: null,
+    snippet_judgments: null,
     source_verdict_valid: false,
     snippet_keys: candidate.snippets.map((snippet) => snippet.key),
     snippet_texts: candidate.snippets.map((snippet) => snippet.text),
@@ -612,6 +618,7 @@ const runJevStage = async (
         if (candidate === undefined) continue; // 映射与候选同源，防御分支
         const projected = projectSourceAnswers({
           snippetCount: entry.snippet_keys.length,
+          groups: entry.snippet_groups,
           answerAt: (key) => outcome.answers[entry.question_keys[key]],
         });
         rows.set(entry.source_id, {
@@ -619,8 +626,9 @@ const runJevStage = async (
           url: candidate.url,
           status: 'answered',
           answers: projected.answers,
-          ...(projected.snippetScores !== undefined
-            ? { snippet_scores: projected.snippetScores }
+          snippet_judgments: projected.judgments,
+          ...(projected.invalidGroups !== undefined
+            ? { snippet_validation: projected.invalidGroups }
             : {}),
           // 请求用量和耗时只记一次，通过 request_id 关联，避免按来源重复累计。
           // model 留在来源行中供日志去重。
@@ -634,8 +642,7 @@ const runJevStage = async (
           // 生产分类器只要 answered 必然已派发，恒记 true
           dispatched: true,
           answered: true,
-          snippet_score_validity: projected.scoreValidity,
-          snippet_scores_received: projected.scoresReceived,
+          snippet_judgments: projected.judgments,
         });
       }
     } else if (outcome.dispatch !== undefined) {
@@ -713,18 +720,19 @@ const runJevStage = async (
 };
 
 /**
- * test/on 共用：阶段 4 来源裁决 → 阶段 5 评分 → 阶段 6 删除空来源。
- * 裁决实际修改工作表，统计同步回写。
+ * test/on 共用：阶段 4 来源裁决 → 阶段 5 片段保留概率裁决 → 阶段 6 删除空来源。
+ * 裁决实际修改工作表，统计同步回写；组映射提供组大小以选择片段门槛。
  */
 const runOnChain = (
   table: WorkSource[],
   judged: ReadonlyMap<string, JevPerSourceStats>,
+  groupsBySource: ReadonlyMap<string, readonly JevSnippetGroup[]>,
   thresholds: JevThresholds,
   stats: FilterStats,
   queryTerms: ReadonlySet<string>
 ): void => {
   applySourceVerdicts(table, judged, thresholds, stats);
-  applySnippetScores(table, judged, thresholds, stats);
+  applySnippetJudgments(table, judged, groupsBySource, thresholds, stats);
   dropEmptySources(table, stats, queryTerms);
 };
 

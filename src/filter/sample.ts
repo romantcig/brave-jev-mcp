@@ -2,7 +2,7 @@
  * test 模式每次搜索保存一份 JSON：原始响应、最终返回、过程映射、Jev 记录与配置。
  * 实发输入只取客户端捕获的证据；错误样本显式标记缺失，不当作零来源成功。
  * 文件经同目录临时文件与 rename 原子写入，失败不影响搜索。
- * 当前格式为 v7；历史样本的读取差异见 FILTERING.md。
+ * 当前格式为 v8；历史样本的读取差异见 FILTERING.md。
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { CONTEXT_LAYOUT_ID, FILTER_RULES_VERSION } from './version.js';
 import { QUESTION_SET_ID } from './jev/questions.js';
 import { snippetCountOfState } from './jev/context.js';
+import { snippetKeepThreshold } from './jev/verdict.js';
 import {
   localDateStamp,
   localIsoWithOffset,
@@ -19,6 +20,7 @@ import {
   truncateMessage,
 } from './logging.js';
 import type {
+  ChoiceInvalidReason,
   FilterConfig,
   FilterMode,
   FilterRequest,
@@ -29,6 +31,7 @@ import type {
   JevQuestion,
   JevRequestMappingEntry,
   JevRequestRecord,
+  JevSnippetGroup,
   LocalStats,
   SourceStats,
 } from './types.js';
@@ -53,32 +56,42 @@ export type SampleOutcome = {
   sources: SourceStats[];
 };
 
-/** 实发映射中的片段：原始身份、候选位置、各阶段状态与候选文本分别记录。 */
+/** 实发映射中的片段：原始身份、候选位置、组合题状态与候选文本分别记录。 */
 export type SampleJevSentSnippet = {
   /** 片段配对身份：`{index}` + 可选 `.{part}` */
   snippet: string;
-  /** 候选内位置（即 snip{i} 题位） */
+  /** 本来源实发候选内的位置；组内位置由所属组的 start 推导。 */
   position: number;
   /**
    * 文本是否进入实发 state——按所属请求的实发 state 与该来源的映射位置计算；
    * 全量共享请求的实发范围即候选全长（未派发请求的来源恒 false）
    */
   in_state: boolean;
+  /** 所属组合题全局键（来自请求映射；无映射为 null） */
+  question: string | null;
   /**
-   * 该片段的 snip{i} 评分题是否随请求提交——按题目映射检查（映射里
-   * snip{position} 的全局键存在于实发 questions），不用 score 题总数推断
+   * 该组合题是否随请求提交——全局键存在于实发 questions 才为 true，
+   * 不按题目总数推断
    */
-  score_question_sent: boolean;
-  /**
-   * 是否取得该片段的有效评分（管道派发处逐题实测：收到且通过校验——有限数且在 [0,2]，
-   * 与裁决层口径一致）；缺失 / 错误类型 / 负分 / 非有限一律 false，绝不从数量
-   * 推断。评分是否被裁决采用由 score_applied 单独表达。
-   */
-  scored: boolean;
-  /** 实际收到的有限评分，包含越界值便于复查；缺答、错误类型或非有限为 null。 */
-  score: number | null;
-  /** 该评分是否进入阶段 5 评分裁决；整组缺答或整源已删时为 false。后续新颖度删除不改变此事实。 */
-  score_applied: boolean;
+  question_sent: boolean;
+  /** 组合题类型（现行全部为 choice） */
+  question_type: 'choice';
+  /** 组内字母（A 起；无映射为空串） */
+  letter: string;
+  /** 答案有效并已派生保留概率 */
+  valid: boolean;
+  /** 本地派生的保留概率（组内含该位字母的选项概率之和）；无效为 null */
+  keep_probability: number | null;
+  /** 组合题无效原因（仅已回答且该组无效时出现） */
+  invalid_reason?: ChoiceInvalidReason;
+  /** 该位保留门槛：二/三片组用 group_keep_min，单片组用 single_keep_min */
+  threshold: number;
+  /** 保留概率是否进入片段裁决；页面层已删时为 false，后续删空来源不改变应用事实。 */
+  applied: boolean;
+  /** 最终是否返回该片段；来源整页删除时也为 drop，缺少过程证据时为 null。 */
+  verdict: 'keep' | 'drop' | null;
+  /** 最终删除原因，优先记录整页删除原因。 */
+  reason?: string;
   /**
    * 候选口径文本（与派发记录 snippet_texts 对齐）：进入实发 state 的片段即实发
    * 文本；未进实发 state 的片段凭本字段与身份键回 pre_filter 对齐原文
@@ -144,7 +157,7 @@ export type SampleJevSentSource = {
   /** 是否收到可解析响应；来源裁决是否有效另见 source_verdict_valid。 */
   answered: boolean;
   /**
-   * 是否取得有效来源裁决（实际裁决所需的四道题通过校验并完成裁决）；answered=true
+   * 是否取得有效来源裁决（filler 页面题通过校验并完成裁决）；answered=true
    * 而本值 false = 收到可解析响应但 validation 兜底（状态行提示未完成 Jev 检查）
    */
   source_verdict_valid: boolean;
@@ -165,7 +178,7 @@ export type SampleJev = {
   n_http_attempts: number;
   /** 请求级完整记录；一次搜索至多一条共享请求。 */
   requests: SampleJevRequest[];
-  /** 来源级判断原样（含 answers / snippet_scores / verdict / reason / fail_kind / request_id） */
+  /** 来源级判断原样（含 answers / snippet_judgments / verdict / reason / fail_kind / request_id） */
   per_source: JevPerSourceStats[];
   /** 每个本地保留来源一条，按 Brave 原序；载荷通过 request_id 引用请求级记录。 */
   sent: SampleJevSentSource[];
@@ -173,7 +186,7 @@ export type SampleJev = {
 
 /** 生效的过滤配置，不含认证材料或环境变量。 */
 export type SampleConfigSnapshot = {
-  /** 九项生效阈值（THRESHOLD_SPECS 投影 snake_case） */
+  /** 五项生效阈值（THRESHOLD_SPECS 投影 snake_case） */
   thresholds: Record<string, number>;
   /** Jev 客户端配置：模型、单次尝试超时与并发上限。 */
   jev: {
@@ -199,7 +212,7 @@ export type SampleMissingFinalReturn = {
  */
 export type SampleRecord = {
   /** 当前样本格式版本；跨版本读取规则见 FILTERING.md。 */
-  format_version: 7;
+  format_version: 8;
   request_id: string;
   /** 本地 ISO 带时区偏移（复用 logging.ts 的 localIsoWithOffset 口径） */
   ts: string;
@@ -329,18 +342,22 @@ const readProgramVersion = (): string => {
 };
 
 /**
- * 逐题读取管道记录的评分有效性，不由候选数量或题数推断。
- * 是否采用该评分由 score_applied 单独记录。
+ * 逐题读取管道记录的保留概率判断，不由候选数量或题数推断。
+ * 是否采用该概率由 applied 单独记录。
  */
-const isSnippetScored = (record: JevDispatchRecord, position: number): boolean =>
-  record.snippet_score_validity?.[position] === true;
+const snippetJudgmentAt = (
+  record: JevDispatchRecord,
+  position: number
+): { kind: 'keep_probability'; value: number } | null =>
+  record.snippet_judgments?.[position] ?? null;
 
 /**
  * 从 JevRequestRecord 与 JevDispatchRecord 构建记录，不重建候选。
- * in_state 与 score_question_sent 逐位检查实发载荷和题目映射；
- * 没有派发载荷时均为 false，不以候选全长或评分题总数代替证据。
+ * in_state 与 question_sent 逐位检查实发载荷和题目映射；
+ * 没有派发载荷时均为 false，不以候选全长或题目总数代替证据。
+ * 门槛按组大小选择（与裁决共用 snippetKeepThreshold），applied 要求页面层未删除来源。
  */
-const buildJevSection = (input: SampleInput): SampleJev | null => {
+const buildJevSection = (input: SampleInput, config: FilterConfig): SampleJev | null => {
   const jev = input.stats.jev;
   if (jev === null) return null; // test 模式不会出现（no_key 也建零值对象）；防御直调
   const rows = new Map(jev.per_source.map((row) => [row.src, row]));
@@ -378,18 +395,14 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
       request?.state != null && mappingEntry !== undefined
         ? (snippetCountOfState(request.state, mappingEntry.array_index) ?? 0)
         : 0;
-    // 该片段的 snip 题是否随请求提交：映射里 snip{position} 的全局键必须存在于
-    // 实发 questions，绝不按 score 题总数推断
-    const hasSentQuestions = request?.questions != null;
-    const sentQuestions = hasSentQuestions
-      ? (request?.questions as Record<string, JevQuestion>)
-      : null;
-    const scoreQuestionSent = (position: number): boolean => {
-      if (sentQuestions === null || mappingEntry === undefined) return false;
-      const globalKey = mappingEntry.question_keys[`snip${position}`];
-      return globalKey !== undefined && Object.hasOwn(sentQuestions, globalKey);
-    };
+    // 该位所属组合题是否随请求提交：映射组的全局键必须存在于实发 questions
+    const sentQuestions = request?.questions ?? null;
+    const groupOf = (position: number): JevSnippetGroup | undefined =>
+      mappingEntry?.snippet_groups.find(
+        (group) => group.start <= position && position < group.start + group.size
+      );
     const row = rows.get(record.src);
+    const sourceOutcome = input.stats.sources.find((source) => `s${source.index}` === record.src);
     return {
       src: record.src,
       url: record.url,
@@ -402,20 +415,58 @@ const buildJevSection = (input: SampleInput): SampleJev | null => {
         : {}),
       answered: record.answered,
       source_verdict_valid: record.source_verdict_valid,
-      snippets: record.snippet_keys.map((key, position) => ({
-        snippet: key,
-        position,
-        in_state: position < stateSnippetCount,
-        score_question_sent: scoreQuestionSent(position),
-        scored: isSnippetScored(record, position),
-        score: record.snippet_scores_received?.[position] ?? null,
-        score_applied:
-          isSnippetScored(record, position) &&
-          row?.verdict === 'keep' &&
-          row.snippet_scores !== undefined &&
-          row.snippet_scores.length === record.snippet_keys.length,
-        text: record.snippet_texts[position] ?? '',
-      })),
+      snippets: record.snippet_keys.map((key, position) => {
+        const group = groupOf(position);
+        const globalKey =
+          group !== undefined ? (mappingEntry?.question_keys[group.key] ?? null) : null;
+        const questionSent =
+          globalKey !== null && sentQuestions !== null && Object.hasOwn(sentQuestions, globalKey);
+        const judgment = snippetJudgmentAt(record, position);
+        const valid = judgment !== null;
+        const snippetOutcome = sourceOutcome?.snippets.find(
+          (snippet) =>
+            `${snippet.index}${snippet.part !== undefined ? `.${snippet.part}` : ''}` === key
+        );
+        const verdict =
+          sourceOutcome?.verdict === 'drop'
+            ? 'drop'
+            : snippetOutcome !== undefined
+              ? snippetOutcome.kept
+                ? 'keep'
+                : 'drop'
+              : null;
+        const reason =
+          sourceOutcome?.verdict === 'drop' ? sourceOutcome.reason : snippetOutcome?.reason;
+        return {
+          snippet: key,
+          position,
+          in_state: position < stateSnippetCount,
+          question: globalKey,
+          question_sent: questionSent,
+          question_type: 'choice' as const,
+          letter: group !== undefined ? (group.letters[position - group.start] ?? '') : '',
+          valid,
+          keep_probability: judgment?.value ?? null,
+          ...(valid
+            ? {}
+            : row?.status === 'answered' && group !== undefined
+              ? { invalid_reason: row.snippet_validation?.[group.key] ?? ('missing' as const) }
+              : {}),
+          threshold:
+            group !== undefined
+              ? snippetKeepThreshold(group.size, config.thresholds)
+              : config.thresholds.singleKeepMin,
+          applied:
+            valid &&
+            questionSent &&
+            position < stateSnippetCount &&
+            row?.verdict === 'keep' &&
+            row.snippet_judgments?.length === record.snippet_keys.length,
+          verdict,
+          ...(reason !== undefined ? { reason } : {}),
+          text: record.snippet_texts[position] ?? '',
+        };
+      }),
     };
   });
 
@@ -438,7 +489,7 @@ const buildRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 7,
+  format_version: 8,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,
@@ -456,7 +507,7 @@ const buildRecord = (
     local: structuredClone(input.stats.local),
     sources: structuredClone(input.stats.sources),
   },
-  jev: buildJevSection(input),
+  jev: buildJevSection(input, config),
   config_snapshot: {
     thresholds: thresholdSnapshot(config),
     jev: {
@@ -479,7 +530,7 @@ const buildErrorRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 7,
+  format_version: 8,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,

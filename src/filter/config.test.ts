@@ -86,13 +86,11 @@ describe('parseFilterConfigObject: shape and defaults', () => {
     assert.deepEqual(fromNull, defaults());
   });
 
-  it('carries the seven DEFAULT_THRESHOLDS values verbatim', () => {
+  it('carries the five DEFAULT_THRESHOLDS values verbatim', () => {
     assert.deepEqual(parseFilterConfigObject({}).thresholds, {
-      offTopicDrop: 0.85,
-      listingDrop: 0.8,
       fillerDrop: 0.8,
-      reasoningProtect: 0.7,
-      snippetMin: 1.0,
+      groupKeepMin: 0.25,
+      singleKeepMin: 0.5,
       cjkBonus: 0.1,
       cjkShare: 0.5,
     });
@@ -165,7 +163,7 @@ describe('parseFilterConfigObject: jev group', () => {
     assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 60000 } }).jev.timeoutMs, 60000);
     assert.equal(parseFilterConfigObject({ jev: { timeout_ms: 30000 } }).jev.timeoutMs, 30000);
 
-    // 15000.5 能过旧校验，运行时会让 AbortSignal.timeout 抛 RangeError → Jev 静默失效
+    // 超时必须是范围内的整数，避免 AbortSignal.timeout 在运行时抛 RangeError。
     for (const value of [15000.5, 999, 60001, 0, -5, '15000', null, true]) {
       const lines: string[] = [];
       const config = parseFilterConfigObject({ jev: { timeout_ms: value } }, (line) =>
@@ -212,8 +210,8 @@ describe('parseFilterConfigObject: thresholds group', () => {
     const config = parseFilterConfigObject(
       {
         thresholds: {
-          off_topic_drop: 0.9,
-          snippet_min: 1.2,
+          filler_drop: 0.85,
+          group_keep_min: 0.3,
           cjk_share: 0,
         },
       },
@@ -222,8 +220,8 @@ describe('parseFilterConfigObject: thresholds group', () => {
     assert.equal(lines.length, 0, lines.join('\n'));
     assert.deepEqual(config.thresholds, {
       ...DEFAULT_THRESHOLDS,
-      offTopicDrop: 0.9,
-      snippetMin: 1.2,
+      fillerDrop: 0.85,
+      groupKeepMin: 0.3,
       cjkShare: 0,
     });
     assert.ok(Object.isFrozen(config.thresholds));
@@ -234,26 +232,22 @@ describe('parseFilterConfigObject: thresholds group', () => {
     const config = parseFilterConfigObject(
       {
         thresholds: {
-          off_topic_drop: 0,
-          listing_drop: 1,
           filler_drop: 0,
-          reasoning_protect: 1,
-          snippet_min: 2,
-          cjk_bonus: 0,
-          cjk_share: 1,
+          group_keep_min: 1,
+          single_keep_min: 0,
+          cjk_bonus: 1,
+          cjk_share: 0,
         },
       },
       (line) => lines.push(line)
     );
     assert.equal(lines.length, 0, lines.join('\n'));
     assert.deepEqual(config.thresholds, {
-      offTopicDrop: 0,
-      listingDrop: 1,
       fillerDrop: 0,
-      reasoningProtect: 1,
-      snippetMin: 2,
-      cjkBonus: 0,
-      cjkShare: 1,
+      groupKeepMin: 1,
+      singleKeepMin: 0,
+      cjkBonus: 1,
+      cjkShare: 0,
     });
   });
 
@@ -262,64 +256,64 @@ describe('parseFilterConfigObject: thresholds group', () => {
     const config = parseFilterConfigObject(
       {
         thresholds: {
-          off_topic_drop: 1.5,
-          filler_drop: -0.1,
-          snippet_min: 1.2,
+          filler_drop: 1.5,
+          group_keep_min: -0.1,
+          single_keep_min: 0.6,
           cjk_share: 0.2,
         },
       },
       (line) => lines.push(line)
     );
     assert.equal(lines.length, 2, lines.join('\n'));
-    assert.equal(config.thresholds.offTopicDrop, DEFAULT_THRESHOLDS.offTopicDrop);
     assert.equal(config.thresholds.fillerDrop, DEFAULT_THRESHOLDS.fillerDrop);
-    assert.equal(config.thresholds.snippetMin, 1.2);
+    assert.equal(config.thresholds.groupKeepMin, DEFAULT_THRESHOLDS.groupKeepMin);
+    assert.equal(config.thresholds.singleKeepMin, 0.6);
     assert.equal(config.thresholds.cjkShare, 0.2);
-    assert.ok(lines.some((line) => line.includes('thresholds.off_topic_drop=1.5')));
-    assert.ok(lines.some((line) => line.includes('thresholds.filler_drop=-0.1')));
+    assert.ok(lines.some((line) => line.includes('thresholds.filler_drop=1.5')));
+    assert.ok(lines.some((line) => line.includes('thresholds.group_keep_min=-0.1')));
   });
 
-  it('caps snippet_min at 2 (score tops out at 2.0), falling back above it', () => {
-    assert.equal(
-      parseFilterConfigObject({ thresholds: { snippet_min: 2 } }).thresholds.snippetMin,
-      2
-    );
-
+  it('静默忽略未知阈值键，不影响有效配置', () => {
     const lines: string[] = [];
-    const config = parseFilterConfigObject({ thresholds: { snippet_min: 2.01 } }, (line) =>
-      lines.push(line)
+    const config = parseFilterConfigObject(
+      {
+        thresholds: {
+          unknown_threshold: 0.9,
+          filler_drop: 0.85,
+        },
+      },
+      (line) => lines.push(line)
     );
-    assert.equal(config.thresholds.snippetMin, DEFAULT_THRESHOLDS.snippetMin);
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /ignoring thresholds\.snippet_min=2\.01; using default 1/);
-
-    // 旧口径 [0,3] 放行的 3 现在也回落
-    const three = parseFilterConfigObject({ thresholds: { snippet_min: 3 } }, () => {});
-    assert.equal(three.thresholds.snippetMin, DEFAULT_THRESHOLDS.snippetMin);
+    assert.equal(lines.length, 0, lines.join('\n'));
+    assert.equal(config.thresholds.fillerDrop, 0.85);
+    assert.deepEqual(
+      { ...config.thresholds, fillerDrop: DEFAULT_THRESHOLDS.fillerDrop },
+      { ...DEFAULT_THRESHOLDS }
+    );
   });
 
   it('falls back for non-numeric and string values, warning once per key', () => {
     const lines: string[] = [];
     const config = parseFilterConfigObject(
-      { thresholds: { reasoning_protect: 'high', cjk_bonus: 0.2, listing_drop: 'bad' } },
+      { thresholds: { single_keep_min: 'high', cjk_bonus: 0.2, group_keep_min: 'bad' } },
       (line) => lines.push(line)
     );
-    assert.equal(config.thresholds.reasoningProtect, DEFAULT_THRESHOLDS.reasoningProtect);
+    assert.equal(config.thresholds.singleKeepMin, DEFAULT_THRESHOLDS.singleKeepMin);
     assert.equal(config.thresholds.cjkBonus, 0.2);
-    assert.equal(config.thresholds.listingDrop, DEFAULT_THRESHOLDS.listingDrop);
+    assert.equal(config.thresholds.groupKeepMin, DEFAULT_THRESHOLDS.groupKeepMin);
     assert.equal(lines.length, 2, lines.join('\n'));
   });
 
   it('ignores unknown keys inside thresholds (fail-open direction)', () => {
     const lines: string[] = [];
     const config = parseFilterConfigObject(
-      { thresholds: { unknown_key: 123, off_topic_drop: 0.9 } },
+      { thresholds: { unknown_key: 123, filler_drop: 0.9 } },
       (line) => lines.push(line)
     );
     assert.equal(lines.length, 0);
-    assert.equal(config.thresholds.offTopicDrop, 0.9);
+    assert.equal(config.thresholds.fillerDrop, 0.9);
     assert.deepEqual(
-      { ...config.thresholds, offTopicDrop: DEFAULT_THRESHOLDS.offTopicDrop },
+      { ...config.thresholds, fillerDrop: DEFAULT_THRESHOLDS.fillerDrop },
       { ...DEFAULT_THRESHOLDS }
     );
   });
@@ -401,7 +395,7 @@ describe('parseFilterConfigObject: warning format', () => {
       {
         mode: 'banana',
         jev: { model: '', timeout_ms: 15000.5, concurrency: 65 },
-        thresholds: { snippet_min: 2.01, listing_drop: 2, cjk_bonus: 7 },
+        thresholds: { single_keep_min: 2.01, group_keep_min: 2, cjk_bonus: 7 },
         log_dir: '',
       },
       (line) => lines.push(line)
@@ -413,7 +407,7 @@ describe('parseFilterConfigObject: warning format', () => {
       assert.ok(line.includes('; using default '), line);
     }
     assert.ok(lines.some((line) => line.includes('ignoring mode="banana"; using default "off"')));
-    assert.ok(lines.some((line) => line.includes('ignoring thresholds.listing_drop=2')));
+    assert.ok(lines.some((line) => line.includes('ignoring thresholds.group_keep_min=2')));
   });
 
   it('truncates very long offending values', () => {
@@ -504,7 +498,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
     const file = writeFixture(tmpRoot, 'full.json', {
       mode: 'test',
       jev: { model: 'jev-1.14.0', timeout_ms: 20000, concurrency: 6 },
-      thresholds: { off_topic_drop: 0.9, snippet_min: 1.2 },
+      thresholds: { filler_drop: 0.85, group_keep_min: 0.3 },
       log_dir: 'C:/logs/jev',
     });
     let config: FilterConfig | undefined;
@@ -516,8 +510,8 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
       mode: 'test',
       thresholds: {
         ...DEFAULT_THRESHOLDS,
-        offTopicDrop: 0.9,
-        snippetMin: 1.2,
+        fillerDrop: 0.85,
+        groupKeepMin: 0.3,
       },
       jev: {
         model: 'jev-1.14.0',

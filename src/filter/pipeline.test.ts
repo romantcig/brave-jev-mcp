@@ -3,7 +3,7 @@ import { after, before, describe, it } from 'node:test';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseJevResponse } from './jev/client.js';
-import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS, SOURCE_QUESTIONS } from './jev/questions.js';
+import { DEFAULT_JEV_MODEL, DEFAULT_THRESHOLDS } from './jev/questions.js';
 import { collectJevCandidates, filterLlmContext, trimSourceMeta } from './pipeline.js';
 import { createNoKeyJevStats } from './stats.js';
 import type {
@@ -33,6 +33,29 @@ const request: { params: FilterRequest; intent: string } = {
   params: { query: 'brave browser', maximum_number_of_urls: 5, maximum_number_of_tokens: 4000 },
   intent: 'What Brave Search is',
 };
+
+/** 全保留的 choice 分布：概率 1 全给最长字母标签（none 为 0）。 */
+const allKeepProbabilities = (criteria: Record<string, null>): Record<string, number> => {
+  const full = Object.keys(criteria)
+    .filter((label) => label !== 'none')
+    .reduce((best, label) => (label.length > best.length ? label : best), '');
+  return Object.fromEntries(Object.keys(criteria).map((label) => [label, label === full ? 1 : 0]));
+};
+
+/** 全删除的 choice 分布：概率 1 全给 none。 */
+const allDropProbabilities = (criteria: Record<string, null>): Record<string, number> =>
+  Object.fromEntries(Object.keys(criteria).map((label) => [label, label === 'none' ? 1 : 0]));
+
+/** 按题型生成全保留答案：noul 概率 0，choice 全保留分布。 */
+const keepAllAnswers = (questions: Record<string, JevQuestion>): Record<string, JevAnswer> =>
+  Object.fromEntries(
+    Object.entries(questions).map(([key, question]) => [
+      key,
+      question.type === 'choice'
+        ? { kind: 'choice', probabilities: allKeepProbabilities(question.criteria) }
+        : { kind: 'noul', probability: 0 },
+    ])
+  );
 
 /** 把逐来源局部答案脚本按 `${id}__${localKey}` 命名空间铺成全量共享请求的答案表。 */
 const namespaced = (
@@ -192,7 +215,7 @@ describe('filterLlmContext', () => {
 
     const { result, stats } = await filterLlmContext(data, request, offConfig);
 
-    // 样板首行删除后，短片段仍按原序保留，质量交给 Jev 评分。
+    // 样板首行删除后，短片段仍按原序保留，质量交给 Jev 判断。
     assert.deepEqual(
       stats.sources[1].snippets.map((snippet) => [snippet.index, snippet.kept, snippet.reason]),
       [
@@ -546,9 +569,9 @@ describe('trimSourceMeta', () => {
   });
 });
 
-describe('verdicts and drops in step 8', () => {
-  it('marks a source whose snippets are all score-removed as empty in step 8', async () => {
-    // 片段被评分或本地清理删空时，来源归为 empty。
+describe('empty-source verdicts and drops', () => {
+  it('marks a source whose snippets are all keep-probability-removed as empty in step 8', async () => {
+    // 片段被保留概率裁决或本地清理删空时，来源归为 empty。
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -562,15 +585,19 @@ describe('verdicts and drops in step 8', () => {
       },
       sources: {},
     };
-    const classify: ClassifyDeps['classify'] = async ({ questions }) => {
-      const answers: Record<string, JevAnswer> = {};
-      for (const key of Object.keys(questions)) {
-        answers[key] = key.includes('snip')
-          ? { kind: 'score', score: 0.1 }
-          : { kind: 'noul', probability: 0 };
-      }
-      return { status: 'answered', model: DEFAULT_JEV_MODEL, answers, input_tokens: 10 };
-    };
+    const classify: ClassifyDeps['classify'] = async ({ questions }) => ({
+      status: 'answered',
+      model: DEFAULT_JEV_MODEL,
+      answers: Object.fromEntries(
+        Object.entries(questions).map(([key, question]) => [
+          key,
+          question.type === 'choice'
+            ? { kind: 'choice', probabilities: allDropProbabilities(question.criteria) }
+            : { kind: 'noul', probability: 0 },
+        ])
+      ),
+      input_tokens: 10,
+    });
 
     const { result, stats } = await filterLlmContext(
       data,
@@ -589,8 +616,8 @@ describe('verdicts and drops in step 8', () => {
 // 同一合成夹具验证三模式：test/on 真实应用裁决，off 仅用本地规则。
 
 describe('three-mode semantic matrix (off / test / on)', () => {
-  // 四来源覆盖矩阵四角：s0 来源级 keep 且 score 全过（三模式输出同）；s1 来源级
-  // off_topic 丢弃；s2 部分片段 score 删除；s3 score 删光 → 步 8 empty 间接清空。
+  // 四来源覆盖矩阵四角：s0 来源级 keep 且组合题全保留（三模式输出同）；s1 来源级
+  // filler 丢弃；s2 组合题只保留首片；s3 组合题全删 → 步 8 empty 间接清空。
   // 片段都含 query 实词（brave）且短于 shingle 门槛，本地规则不误删。
   const matrixPayload = (): BraveLlmContextResponse => ({
     grounding: {
@@ -610,7 +637,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
         },
         {
           url: 'https://s2.example/',
-          title: 'Partial Score Source',
+          title: 'Partly Useful Source',
           snippets: [
             'Brave strong snippet one.',
             'Brave weak snippet two.',
@@ -619,7 +646,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
         },
         {
           url: 'https://s3.example/',
-          title: 'All Low Score Source',
+          title: 'Low Utility Source',
           snippets: ['Brave low snippet one.', 'Brave low snippet two.'],
         },
       ],
@@ -628,13 +655,11 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     sources: {},
   });
 
-  /** 每源的片段 score（夹具答案推导的根基；来源级 noul 全 0，除外 s1 off_topic 0.9）。 */
-  const SNIP_SCORES: Record<string, number[]> = {
-    s0: [1.5, 1.0], // 1.0 恰等 SNIPPET_MIN → 保留
-    s1: [1.2],
-    s2: [1.5, 0.3, 0.2],
-    s3: [0.1, 0.2],
-  };
+  /** 组合题答案速记：片数 → 分布。 */
+  const groupAnswer = (probabilities: Record<string, number>): JevAnswer => ({
+    kind: 'choice',
+    probabilities,
+  });
 
   const makeClassify =
     (counter: { calls: number }): ClassifyDeps['classify'] =>
@@ -643,15 +668,29 @@ describe('three-mode semantic matrix (off / test / on)', () => {
       // 全量共享桩：按 `${id}__${localKey}` 命名空间逐来源注入答案
       const script: Record<string, Record<string, JevAnswer>> = {};
       for (const source of state.sources) {
-        const local: Record<string, JevAnswer> = {};
-        for (const key of Object.keys(SOURCE_QUESTIONS)) {
-          local[key] = {
-            kind: 'noul',
-            probability: source.id === 's1' && key === 'is_off_topic' ? 0.9 : 0,
-          };
-        }
-        for (const [i, score] of (SNIP_SCORES[source.id] ?? []).entries()) {
-          local[`snip${i}`] = { kind: 'score', score };
+        const local: Record<string, JevAnswer> = {
+          filler: { kind: 'noul', probability: source.id === 's1' ? 0.9 : 0 },
+        };
+        if (source.id === 's2') {
+          // 三片组只保留 A：p(B)=p(C)=0 低于组合门槛 0.25
+          local.group0 = groupAnswer({
+            none: 0,
+            A: 1,
+            B: 0,
+            AB: 0,
+            C: 0,
+            AC: 0,
+            BC: 0,
+            ABC: 0,
+          });
+        } else if (source.id === 's3') {
+          // 两片组全删
+          local.group0 = groupAnswer({ none: 1, A: 0, B: 0, AB: 0 });
+        } else {
+          // s0 两片、s1 单片：全保留
+          local.group0 = groupAnswer(
+            source.snippets.length === 1 ? { none: 0, A: 1 } : { none: 0, A: 0, B: 0, AB: 1 }
+          );
         }
         script[source.id] = local;
       }
@@ -686,7 +725,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     );
   });
 
-  it('test: classify called and verdicts really apply — dropped sources vanish, low-score snippets removed', async () => {
+  it('test: classify called and verdicts really apply — dropped sources vanish, low-probability snippets removed', async () => {
     const counter = { calls: 0 };
 
     const testRun = await filterLlmContext(
@@ -699,7 +738,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
     // Jev 照常调用（一次全量共享请求）并记账
     assert.equal(counter.calls, 1);
     assert.equal(testRun.stats.jev?.n_requests, 1);
-    // 核对来源级 off_topic、低分片段删除与 score 删空后的来源删除。
+    // 核对来源级 filler 丢弃、低概率片段删除与组合题删空后的来源删除。
     assert.deepEqual(
       testRun.result.grounding.generic.map((item) => [item.url, item.snippets.length]),
       [
@@ -707,14 +746,14 @@ describe('three-mode semantic matrix (off / test / on)', () => {
         ['https://s2.example/', 1],
       ]
     );
-    // per_source 的 verdict/reason 记账：s1 drop + off_topic、s0 keep；s3 来源级
+    // per_source 的 verdict/reason 记账：s1 drop + filler、s0 keep；s3 来源级
     // keep（删光它的是后续本地规则步 8，不是 Jev 裁决）
     const rowOf = (src: string) => testRun.stats.jev?.per_source.find((row) => row.src === src);
     assert.equal(rowOf('s1')?.verdict, 'drop');
-    assert.equal(rowOf('s1')?.reason, 'off_topic');
+    assert.equal(rowOf('s1')?.reason, 'filler');
     assert.equal(rowOf('s0')?.verdict, 'keep');
     assert.equal(rowOf('s3')?.verdict, 'keep');
-    // score 删光清空的来源按 'empty' 记账。
+    // 组合题删光清空的来源按 'empty' 记账。
     assert.equal(testRun.stats.local.empty_dropped, 1);
   });
 
@@ -769,12 +808,20 @@ describe('jev status aggregation and breaker open trim-back', () => {
     http_attempts: 0,
   };
 
-  /** 全保留 answered 桩：四题概率全 0.1 + 实发载荷（生产客户端形状）。 */
+  /** 全保留 answered 桩：filler 0.1、组合题全保留 + 实发载荷（生产客户端形状）。 */
   const answeredAll: ClassifyDeps['classify'] = async ({ state, questions }) => ({
     status: 'answered',
     model: DEFAULT_JEV_MODEL,
     answers: Object.fromEntries(
-      Object.keys(questions).map((key) => [key, { kind: 'noul', probability: 0.1 }])
+      Object.keys(questions).map((key) => {
+        const question = questions[key];
+        return [
+          key,
+          question.type === 'choice'
+            ? { kind: 'choice', probabilities: allKeepProbabilities(question.criteria) }
+            : { kind: 'noul', probability: 0.1 },
+        ];
+      })
     ),
     input_tokens: 100,
     dispatch: { state, questions },
@@ -920,19 +967,12 @@ describe('跨来源内容独立保留', () => {
     assert.equal(stats.local.empty_dropped, 0);
   });
 
-  it('启用 Jev 后模拟最高分 2 保留新事实，不因并集覆盖删除', async () => {
+  it('启用 Jev 后组合题全保留新事实，不因并集覆盖删除', async () => {
     const classify: ClassifyDeps['classify'] = async ({ questions }) => ({
       status: 'answered',
       model: DEFAULT_JEV_MODEL,
       input_tokens: 10,
-      answers: Object.fromEntries(
-        Object.entries(questions).map(([key, question]) => [
-          key,
-          question.type === 'score'
-            ? { kind: 'score', score: 2 }
-            : { kind: 'noul', probability: 0 },
-        ])
-      ),
+      answers: keepAllAnswers(questions),
     });
     const { result } = await filterLlmContext(
       noveltyPayload(),
@@ -972,14 +1012,7 @@ describe('跨来源内容独立保留', () => {
             status: 'answered',
             model: DEFAULT_JEV_MODEL,
             input_tokens: 10,
-            answers: Object.fromEntries(
-              Object.entries(questions).map(([key, question]) => [
-                key,
-                question.type === 'score'
-                  ? { kind: 'score', score: 2 }
-                  : { kind: 'noul', probability: 0 },
-              ])
-            ),
+            answers: keepAllAnswers(questions),
           }),
         }
       );
@@ -999,10 +1032,10 @@ describe('跨来源内容独立保留', () => {
   });
 });
 
-describe('one-liner sources emptied by score are dropped in test mode (02-FIX batch D2)', () => {
-  it('reports a source that keeps only one query-term-free snippet after scoring', async () => {
-    // s1 两个片段：score 删掉含 query 实词的那条，只剩一条不含实词的短片段。
-    // off 链下它照常保留（off 不看 score）；test 与 on 的链下步 8 判一句话来源丢掉。
+describe('one-liner sources emptied by snippet verdicts are dropped in test mode (02-FIX batch D2)', () => {
+  it('reports a source that keeps only one query-term-free snippet after snippet verdicts', async () => {
+    // s1 两个片段：组合题删掉含 query 实词的那条，只剩一条不含实词的短片段。
+    // off 链下它照常保留（off 不跑 Jev）；test 与 on 的链下步 8 判一句话来源丢掉。
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -1024,13 +1057,15 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
     const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
       const script: Record<string, Record<string, JevAnswer>> = {};
       for (const source of state.sources) {
-        const local: Record<string, JevAnswer> = {};
-        for (const key of Object.keys(SOURCE_QUESTIONS)) {
-          local[key] = { kind: 'noul', probability: 0 };
+        const local: Record<string, JevAnswer> = {
+          filler: { kind: 'noul', probability: 0 },
+        };
+        if (source.id === 's1') {
+          // s1 的第一条（含实词）保留概率 0 被删，第二条（不含实词的短句）保留 → 一句话来源
+          local.group0 = { kind: 'choice', probabilities: { none: 0, A: 0, B: 1, AB: 0 } };
+        } else {
+          local.group0 = { kind: 'choice', probabilities: { none: 0, A: 1 } };
         }
-        // s1 的第一条（含实词）打 0 分被删，第二条（不含实词的短句）保留 → 一句话来源
-        local.snip0 = { kind: 'score', score: source.id === 's1' ? 0 : 2 };
-        if (source.id === 's1') local.snip1 = { kind: 'score', score: 2 };
         script[source.id] = local;
       }
       return {
@@ -1049,7 +1084,7 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
       { classify }
     );
 
-    // 评分删掉含实词的片段后，剩余一句话来源被删除。
+    // 组合题删掉含实词的片段后，剩余一句话来源被删除。
     assert.equal(
       offRun.result.grounding.generic.some((item) => item.url === 'https://oneliner.example/'),
       true
@@ -1064,17 +1099,29 @@ describe('one-liner sources emptied by score are dropped in test mode (02-FIX ba
 // 共享请求的编排、映射与记账；按数组位置构造答案并写回来源命名空间。
 // 数组下标、来源 ID 或片段身份错位时应被断言发现。
 
-describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANUP_PLAN T02-T09/T11)', () => {
+describe('all-context request organization (T02-T09/T11)', () => {
   const allConfig: FilterConfig = { ...offConfig, mode: 'on' };
 
-  /** 保守保留的四题答案，额外旧键用于兼容检查。 */
-  const SIX_KEEP: Record<string, JevAnswer> = {
-    has_original_reasoning: { kind: 'noul', probability: 0.9 },
-    is_template_filler: { kind: 'noul', probability: 0.1 },
-    is_off_topic: { kind: 'noul', probability: 0.1 },
-    is_listing: { kind: 'noul', probability: 0.1 },
-    self_deprecated: { kind: 'noul', probability: 0.1 },
-    stale: { kind: 'noul', probability: 0.1 },
+  /** 保守保留的页面题答案。 */
+  const FILLER_KEEP: Record<string, JevAnswer> = {
+    filler: { kind: 'noul', probability: 0.1 },
+  };
+
+  /** 组合题答案速记。 */
+  const groupAnswer = (probabilities: Record<string, number>): JevAnswer => ({
+    kind: 'choice',
+    probabilities,
+  });
+  /** 全保留：单片 {none:0,A:1}、两片 {…AB:1}、三片 {…ABC:1}。 */
+  const GROUP_KEEP: Record<number, Record<string, number>> = {
+    1: { none: 0, A: 1 },
+    2: { none: 0, A: 0, B: 0, AB: 1 },
+    3: { none: 0, A: 0, B: 0, AB: 0, C: 0, AC: 0, BC: 0, ABC: 1 },
+  };
+  const GROUP_DROP: Record<number, Record<string, number>> = {
+    1: { none: 1, A: 0 },
+    2: { none: 1, A: 0, B: 0, AB: 0 },
+    3: { none: 1, A: 0, B: 0, AB: 0, C: 0, AC: 0, BC: 0, ABC: 0 },
   };
 
   type AllSeen = { state: JevState; questions: Record<string, JevQuestion> };
@@ -1157,19 +1204,22 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     };
     const seen: AllSeen[] = [];
     const { stats, jev_requests, result } = await filterLlmContext(data, request, allConfig, {
-      classify: allClassify({ s0: { ...SIX_KEEP, snip0: { kind: 'score', score: 2 } } }, { seen }),
+      classify: allClassify(
+        { s0: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[1]) } },
+        { seen }
+      ),
     });
 
-    // 单候选也走全量形状：sources[0] + 命名空间题键 + 新 score，不走特殊模板
+    // 单候选也走全量形状：sources[0] + 命名空间题键 + 单片组合题，不走特殊模板
     assert.equal(seen.length, 1);
     const state = seen[0]?.state;
     assert.equal(state?.sources.length, 1);
     assert.equal(state?.sources[0]?.id, 's0');
     assert.equal(state?.sources[0]?.brave_page_date, '2026-09-16');
     const questions = seen[0]?.questions ?? {};
-    assert.ok(questions['s0__snip0'] !== undefined);
-    assert.match(questions['s0__snip0']?.instructions ?? '', /`sources\[0\]\.snippets\[0\]`/);
-    assert.ok(questions['s0__is_off_topic'] !== undefined);
+    assert.ok(questions['s0__group0'] !== undefined);
+    assert.match(questions['s0__group0']?.instructions ?? '', /^A=`sources\[0\]\.snippets\[0\]`/);
+    assert.ok(questions['s0__filler'] !== undefined);
 
     // 映射在完整请求记录里（stats.jev.requests 是瘦身摘要，无 mapping / state）
     const requests = jev_requests;
@@ -1177,13 +1227,16 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     const record = requests[0];
     assert.deepEqual(record?.source_ids, ['s0']);
     assert.equal(record?.mapping[0]?.array_index, 0);
-    assert.equal(record?.mapping[0]?.question_keys['is_off_topic'], 's0__is_off_topic');
-    assert.equal(record?.mapping[0]?.question_keys['snip0'], 's0__snip0');
+    assert.equal(record?.mapping[0]?.question_keys['filler'], 's0__filler');
+    assert.equal(record?.mapping[0]?.question_keys['group0'], 's0__group0');
+    assert.deepEqual(record?.mapping[0]?.snippet_groups, [
+      { key: 'group0', start: 0, size: 1, letters: ['A'] },
+    ]);
     assert.equal(stats.jev?.n_requests, 1);
     const row = (stats.jev?.per_source ?? [])[0];
     assert.equal(row?.status, 'answered');
-    // 分数应用正确：满分保留
-    assert.deepEqual(row?.snippet_scores, [2]);
+    // 保留概率应用正确：单片 p(A)=1 高于 0.5 门槛保留
+    assert.deepEqual(row?.snippet_judgments, [{ kind: 'keep_probability', value: 1 }]);
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
       ['https://solo.example/']
@@ -1196,12 +1249,8 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     const { result, stats, jev_requests } = await filterLlmContext(payload(), request, allConfig, {
       classify: allClassify(
         {
-          s0: {
-            ...SIX_KEEP,
-            snip0: { kind: 'score', score: 2 },
-            snip1: { kind: 'score', score: 2 },
-          },
-          s1: { ...SIX_KEEP, snip0: { kind: 'score', score: 2 } },
+          s0: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[2]) },
+          s1: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[1]) },
         },
         { seen }
       ),
@@ -1223,14 +1272,17 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
       'Brave is a privacy-focused browser and search engine.',
       'Second snippet about Brave.',
     ]);
-    // 题键命名空间：`${id}__${local}`，s0 六道、s1 五道（四题 + 各自片段的 score 题）
+    // 题键命名空间：`${id}__${local}`，每来源 filler + 组合题（s0 两片一组、s1 单片一组）
     const questions = seen[0]?.questions ?? {};
-    assert.equal(Object.keys(questions).length, 11);
-    assert.ok(questions['s0__snip0'] !== undefined && questions['s0__snip1'] !== undefined);
-    assert.ok(questions['s1__snip0'] !== undefined);
-    // 题干数组下标按数组位置命名空间化（s1 引用 sources[1]，不是 sources[0]）
-    assert.match(questions['s0__snip0']?.instructions ?? '', /`sources\[0\]\.snippets\[0\]`/);
-    assert.match(questions['s1__snip0']?.instructions ?? '', /`sources\[1\]\.snippets\[0\]`/);
+    assert.equal(Object.keys(questions).length, 4);
+    assert.ok(questions['s0__filler'] !== undefined && questions['s0__group0'] !== undefined);
+    assert.ok(questions['s1__filler'] !== undefined && questions['s1__group0'] !== undefined);
+    // 组合题题干数组下标按数组位置展开（s1 引用 sources[1]，不是 sources[0]）
+    assert.match(
+      questions['s0__group0']?.instructions ?? '',
+      /A=`sources\[0\]\.snippets\[0\]`; B=`sources\[0\]\.snippets\[1\]`/
+    );
+    assert.match(questions['s1__group0']?.instructions ?? '', /^A=`sources\[1\]\.snippets\[0\]`/);
 
     const jev = stats.jev;
     assert.equal(jev?.n_requests, 1);
@@ -1246,13 +1298,19 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     assert.equal(mapping[0]?.source_id, 's0');
     assert.equal(mapping[0]?.array_index, 0);
     assert.deepEqual(mapping[0]?.snippet_keys, ['0', '1']);
-    assert.equal(mapping[0]?.question_keys['snip1'], 's0__snip1');
-    assert.equal(Object.keys(mapping[0]?.question_keys ?? {}).length, 6);
+    assert.equal(mapping[0]?.question_keys['group0'], 's0__group0');
+    assert.equal(Object.keys(mapping[0]?.question_keys ?? {}).length, 2);
+    assert.deepEqual(mapping[0]?.snippet_groups, [
+      { key: 'group0', start: 0, size: 2, letters: ['A', 'B'] },
+    ]);
     assert.equal(mapping[1]?.source_id, 's1');
     assert.equal(mapping[1]?.array_index, 1);
     assert.deepEqual(mapping[1]?.snippet_keys, ['0']);
-    assert.equal(mapping[1]?.question_keys['snip0'], 's1__snip0');
-    assert.equal(Object.keys(mapping[1]?.question_keys ?? {}).length, 5);
+    assert.equal(mapping[1]?.question_keys['group0'], 's1__group0');
+    assert.equal(Object.keys(mapping[1]?.question_keys ?? {}).length, 2);
+    assert.deepEqual(mapping[1]?.snippet_groups, [
+      { key: 'group0', start: 0, size: 1, letters: ['A'] },
+    ]);
     // 两来源行都 answered、指向同一请求；投影答案按映射回流
     assert.deepEqual(
       (jev?.per_source ?? []).map((row) => [row.src, row.status, row.request_id]),
@@ -1261,8 +1319,13 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
         ['s1', 'answered', 'j1'],
       ]
     );
-    assert.deepEqual((jev?.per_source ?? [])[0]?.snippet_scores, [2, 2]);
-    assert.deepEqual((jev?.per_source ?? [])[1]?.snippet_scores, [2]);
+    assert.deepEqual((jev?.per_source ?? [])[0]?.snippet_judgments, [
+      { kind: 'keep_probability', value: 1 },
+      { kind: 'keep_probability', value: 1 },
+    ]);
+    assert.deepEqual((jev?.per_source ?? [])[1]?.snippet_judgments, [
+      { kind: 'keep_probability', value: 1 },
+    ]);
     // 输出保持 Brave 原序、内容无删
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
@@ -1300,8 +1363,8 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     const { result, stats, jev_requests } = await filterLlmContext(data, request, allConfig, {
       classify: allClassify(
         {
-          s1: { ...SIX_KEEP, snip0: { kind: 'score', score: 2 } },
-          s2: { ...SIX_KEEP, snip0: { kind: 'score', score: 0 } },
+          s1: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[1]) },
+          s2: { ...FILLER_KEEP, group0: groupAnswer(GROUP_DROP[1]) },
         },
         { seen }
       ),
@@ -1322,9 +1385,9 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
         ['s2', 1],
       ]
     );
-    assert.ok((seen[0]?.questions ?? {})['s1__snip0'] !== undefined);
-    assert.ok((seen[0]?.questions ?? {})['s2__snip0'] !== undefined);
-    // s2 的 0 分片段删光来源，s1 幸存；输出仍是 Brave 原序子序列
+    assert.ok((seen[0]?.questions ?? {})['s1__group0'] !== undefined);
+    assert.ok((seen[0]?.questions ?? {})['s2__group0'] !== undefined);
+    // s2 的 0 保留概率片段删光来源，s1 幸存；输出仍是 Brave 原序子序列
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
       ['https://alpha.example/']
@@ -1332,24 +1395,20 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
   });
 
   it('ignores extra answers for questions that were never asked (T04)', async () => {
-    // 向桩加入高概率的未提问旧答案；显式映射必须忽略它们，不能触发删除或进入当前答案。
+    // 向桩加入高概率的未提问答案；显式映射必须忽略它们，不能触发删除或进入当前答案。
     const { result, stats } = await filterLlmContext(payload(), request, allConfig, {
       classify: allClassify(
         {
-          s0: {
-            ...SIX_KEEP,
-            snip0: { kind: 'score', score: 2 },
-            snip1: { kind: 'score', score: 2 },
-          },
-          s1: { ...SIX_KEEP, snip0: { kind: 'score', score: 2 } },
+          s0: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[2]) },
+          s1: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[1]) },
         },
         {
           extra: {
-            s0__stale: { kind: 'noul', probability: 0.99 },
-            s0__self_deprecated: { kind: 'noul', probability: 0.99 },
-            s1__stale: { kind: 'noul', probability: 0.99 },
-            s0__time_snip0: { kind: 'noul', probability: 0.9 },
-            s1__time_snip0: { kind: 'noul', probability: 0.9 },
+            s0__unasked_page: { kind: 'noul', probability: 0.99 },
+            s0__another_unasked_page: { kind: 'noul', probability: 0.99 },
+            s1__unasked_page: { kind: 'noul', probability: 0.99 },
+            s0__unasked_snippet: { kind: 'noul', probability: 0.9 },
+            s1__unasked_snippet: { kind: 'noul', probability: 0.9 },
           },
         }
       ),
@@ -1360,44 +1419,65 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
       ['https://search.brave.com/', 'https://example.com/post']
     );
     for (const row of stats.jev?.per_source ?? []) {
-      assert.equal(row.answers?.['stale'], undefined);
-      assert.equal(row.answers?.['self_deprecated'], undefined);
-      assert.equal(row.answers?.['time_snip0'], undefined);
+      assert.equal(row.answers?.['unasked_page'], undefined);
+      assert.equal(row.answers?.['another_unasked_page'], undefined);
+      assert.equal(row.answers?.['unasked_snippet'], undefined);
+    }
+  });
+
+  it('组合题无效时报告检查未完成，页面裁决有效性与已删来源分别处理', async () => {
+    for (const mode of ['test', 'on'] as const) {
+      const { stats, jev_dispatch } = await filterLlmContext(
+        payload(),
+        request,
+        { ...allConfig, mode },
+        {
+          classify: allClassify({
+            // 两片组缺少 B/AB 概率；页面有效，但片段检查未完成。
+            s0: { ...FILLER_KEEP, group0: groupAnswer({ none: 0, A: 1 }) },
+            // 页面已删，即使组合题缺答也不计入幸存来源的未检查数。
+            s1: { filler: { kind: 'noul', probability: 0.9 } },
+          }),
+        }
+      );
+      assert.deepEqual(stats.jev?.per_source[0].snippet_validation, { group0: 'labels' });
+      assert.deepEqual(
+        stats.sources[0].snippets.map((snippet) => snippet.kept),
+        [true, true]
+      );
+      assert.equal(jev_dispatch[0].source_verdict_valid, true);
+      assert.equal(stats.sources[1].verdict, 'drop');
+      assert.match(stats.output.status_line ?? '', /\[error\] \[1 source unchecked:/);
+      assert.match(stats.output.status_line ?? '', /filter payload rejected/);
     }
   });
 
   it('missing answers never poison a source or shift its neighbors (T05)', async () => {
-    // s0：缺 is_off_topic（来源题缺答）且 snip1 缺答（中间缺位）；s1：完整且 snip0 打 0
+    // s0：页面题与组合题全部缺答（无可用答案）；s1：完整且组合题全删
     const { result, stats } = await filterLlmContext(payload(), request, allConfig, {
       classify: allClassify({
-        s0: {
-          has_original_reasoning: { kind: 'noul', probability: 0.9 },
-          is_template_filler: { kind: 'noul', probability: 0.1 },
-          is_listing: { kind: 'noul', probability: 0.1 },
-          self_deprecated: { kind: 'noul', probability: 0.1 },
-          stale: { kind: 'noul', probability: 0.1 },
-          snip0: { kind: 'score', score: 2 },
-        },
-        s1: { ...SIX_KEEP, snip0: { kind: 'score', score: 0 } },
+        s0: {},
+        s1: { ...FILLER_KEEP, group0: groupAnswer(GROUP_DROP[1]) },
       }),
     });
 
     const rows = stats.jev?.per_source ?? [];
     const s0 = rows.find((row) => row.src === 's0');
     const s1 = rows.find((row) => row.src === 's1');
-    // 缺中间 score 位：整组分数不产出（无左移错位），片段全保留
-    assert.equal(s0?.snippet_scores, undefined);
+    // 缺组合题答案：逐位记 null（不压缩不左移），片段保守保留
+    assert.deepEqual(s0?.snippet_judgments, [null, null]);
     assert.deepEqual(
       stats.sources
         .find((entry) => entry.url === 'https://search.brave.com/')
         ?.snippets.map((snippet) => snippet.kept),
       [true, true]
     );
-    // 缺答来源题不进答案表（保守防御，不冒充 0）
-    assert.equal(s0?.answers?.['is_off_topic'], undefined);
-    assert.equal(s1?.answers?.['is_off_topic'], 0.1);
-    // s1 完整：0 分片段删光来源
-    assert.deepEqual(s1?.snippet_scores, [0]);
+    // 缺答页面题不进答案表（保守防御，不冒充 0），页面层记 validation
+    assert.equal(s0?.answers?.['filler'], undefined);
+    assert.equal(s0?.fail_kind, 'validation');
+    assert.equal(s1?.answers?.['filler'], 0.1);
+    // s1 完整：0 保留概率片段删光来源
+    assert.deepEqual(s1?.snippet_judgments, [{ kind: 'keep_probability', value: 0 }]);
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
       ['https://search.brave.com/']
@@ -1408,12 +1488,8 @@ describe('four-question all-context request organization (ALL_ONLY_FILTER_CLEANU
     const { stats } = await filterLlmContext(payload(), request, allConfig, {
       classify: allClassify(
         {
-          s0: {
-            ...SIX_KEEP,
-            snip0: { kind: 'score', score: 2 },
-            snip1: { kind: 'score', score: 2 },
-          },
-          s1: { ...SIX_KEEP, snip0: { kind: 'score', score: 2 } },
+          s0: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[2]) },
+          s1: { ...FILLER_KEEP, group0: groupAnswer(GROUP_KEEP[1]) },
         },
         { inputTokens: 100, httpAttempts: 2 }
       ),
@@ -1500,14 +1576,7 @@ describe('GitHub 清洗接入', () => {
             status: 'answered',
             model: DEFAULT_JEV_MODEL,
             input_tokens: 10,
-            answers: Object.fromEntries(
-              Object.entries(questions).map(([key, question]) => [
-                key,
-                question.type === 'score'
-                  ? { kind: 'score', score: 2 }
-                  : { kind: 'noul', probability: 0 },
-              ])
-            ),
+            answers: keepAllAnswers(questions),
           };
         },
       }
@@ -1568,14 +1637,7 @@ describe('X (Twitter) 清洗接入', () => {
             status: 'answered',
             model: DEFAULT_JEV_MODEL,
             input_tokens: 10,
-            answers: Object.fromEntries(
-              Object.entries(questions).map(([key, question]) => [
-                key,
-                question.type === 'score'
-                  ? { kind: 'score', score: 2 }
-                  : { kind: 'noul', probability: 0 },
-              ])
-            ),
+            answers: keepAllAnswers(questions),
           };
         },
       }
@@ -1589,7 +1651,7 @@ describe('X (Twitter) 清洗接入', () => {
     assert.deepEqual(sent?.sources[0].snippets, expectedSnippets);
     assert.deepEqual(result.grounding.generic[0].snippets, expectedSnippets);
 
-    // 统计表记录平台清洗动作，人物资料仍保留供后续评分。
+    // 统计表记录平台清洗动作，人物资料仍保留供后续判断。
     assert.ok(stats.local.x_cleanup_actions > 0);
     const snipStats = stats.sources[0].snippets;
     assert.equal(snipStats[0].kept, true);
@@ -1618,10 +1680,11 @@ describe('temporal context (all-only)', () => {
   const keepClassify: ClassifyDeps['classify'] = async ({ state, questions }) => {
     seen.push({ state, questions });
     const answers: Record<string, JevAnswer> = {};
-    for (const key of Object.keys(questions)) {
-      answers[key] = key.includes('snip')
-        ? { kind: 'score', score: 2 }
-        : { kind: 'noul', probability: 0.1 };
+    for (const [key, question] of Object.entries(questions)) {
+      answers[key] =
+        question.type === 'choice'
+          ? { kind: 'choice', probabilities: allKeepProbabilities(question.criteria) }
+          : { kind: 'noul', probability: 0.1 };
     }
     return {
       status: 'answered',
@@ -1686,17 +1749,18 @@ describe('temporal context (all-only)', () => {
     );
     assert.deepEqual(state.sources[0].snippets, [article, `A: ${answer}`]);
     assert.deepEqual(filtered.jev_requests[0].mapping[0].snippet_keys, ['0.0', '0.1']);
+    // 组合题按数组位置展开显式字母引用：s1 两片一组，s2/s3 各单片短题
     assert.match(
-      seen[0].questions.s1__snip1.instructions,
-      /^How useful is `sources\[0\].snippets\[1\]`/
+      seen[0].questions.s1__group0.instructions,
+      /A=`sources\[0\]\.snippets\[0\]`; B=`sources\[0\]\.snippets\[1\]`/
     );
     assert.match(
-      seen[0].questions.s2__snip0.instructions,
-      /^How useful is `sources\[1\].snippets\[0\]`/
+      seen[0].questions.s2__group0.instructions,
+      /^A=`sources\[1\]\.snippets\[0\]`\. Keep A if/
     );
     assert.match(
-      seen[0].questions.s3__snip0.instructions,
-      /^How useful is `sources\[2\].snippets\[0\]`/
+      seen[0].questions.s3__group0.instructions,
+      /^A=`sources\[2\]\.snippets\[0\]`\. Keep A if/
     );
     assert.deepEqual(data, before, '日期接入不改原正文或元数据');
     const onSources = filtered.stats.sources;
@@ -1710,7 +1774,7 @@ describe('temporal context (all-only)', () => {
     assert.deepEqual(test.stats.sources, onSources);
   });
 
-  it('state carries retrieval_time and per-source brave_page_date; snip questions are the frozen temporal ones', async () => {
+  it('state carries retrieval_time and per-source brave_page_date; group questions carry the time anchors', async () => {
     seen.length = 0;
     const { result } = await filterLlmContext(
       payload(),
@@ -1728,19 +1792,20 @@ describe('temporal context (all-only)', () => {
     );
     assert.equal(state.sources[1]?.brave_page_date, null, 'age 为空数组 → null，键恒在');
 
-    // snip 题走冻结新题（s0 在数组位置 0），来源题保持总指令前缀的命名空间转换
-    const snip = questions['s0__snip0'];
-    assert.ok(snip);
-    assert.equal(snip.type, 'score');
+    // 组合题走三合一题干（s0 在数组位置 0，两片一组），页面题只判 filler
+    const group = questions['s0__group0'];
+    assert.ok(group);
+    assert.equal(group.type, 'choice');
     assert.ok(
-      snip.instructions.startsWith('How useful is `sources[0].snippets[0]` for answering `intent`?')
+      group.instructions.startsWith('A=`sources[0].snippets[0]`; B=`sources[0].snippets[1]`.')
     );
-    assert.ok(snip.instructions.includes('architectural comparisons'));
-    const sourceQuestion = questions['s0__is_off_topic'];
-    assert.ok(sourceQuestion);
+    assert.ok(group.instructions.includes('architectural comparisons'));
     assert.ok(
-      sourceQuestion.instructions.startsWith('Judge only the observable text of `sources[0]`.')
+      group.instructions.includes('an earlier prediction replaced by a confirmed event is obsolete')
     );
+    const pageQuestion = questions['s0__filler'];
+    assert.ok(pageQuestion);
+    assert.ok(pageQuestion.instructions.startsWith('Judge the text of `sources[0]`.'));
 
     // 幸存内容与裁决照旧：全 keep 输出 Brave 原序两来源
     assert.equal(result.grounding.generic.length, 2);
@@ -1789,10 +1854,10 @@ describe('temporal context (all-only)', () => {
     assert.equal(state.sources.length, 1, '单候选同样是 sources[] 全量形状');
     assert.equal(state.retrieval_time, RETRIEVAL);
     assert.equal(state.sources[0]?.brave_page_date, '2026-09-16');
-    // 新评分题（sources[0] 命名空间），不走旧单来源模板
+    // 单片组合题（sources[0] 命名空间），不走特殊模板
     assert.match(
-      seen[0].questions['s0__snip0']?.instructions ?? '',
-      /^How useful is `sources\[0\]\.snippets\[0\]`/
+      seen[0].questions['s0__group0']?.instructions ?? '',
+      /^A=`sources\[0\]\.snippets\[0\]`\. Keep A if/
     );
     assert.equal(stats.jev?.requests[0]?.request_id, 'j1');
   });
@@ -2018,10 +2083,10 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
       answers: Object.fromEntries(
         Object.entries(questions).map(([key, q]) => [
           key,
-          key.includes('s0__is_off_topic')
+          key.includes('s0__filler')
             ? { kind: 'noul', probability: 0.99 }
-            : q.type === 'score'
-              ? { kind: 'score', score: 2 }
+            : q.type === 'choice'
+              ? { kind: 'choice', probabilities: allKeepProbabilities(q.criteria) }
               : { kind: 'noul', probability: 0 },
         ])
       ),
@@ -2034,13 +2099,13 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
       { classify }
     );
 
-    // s0 被来源裁决（off_topic）删除，其片段不能压掉 s1
+    // s0 被来源裁决（filler）删除，其片段不能压掉 s1
     assert.equal(result.grounding.generic.length, 1);
     assert.equal(result.grounding.generic[0].url, 'https://legit.example/s1');
     assert.equal(result.grounding.generic[0].snippets[0], commonText);
   });
 
-  it('Jev 集成：模拟最高分 2、原创论证为 0 的新事实完整保留', async () => {
+  it('Jev 集成：组合题全保留的新事实完整保留', async () => {
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -2068,17 +2133,7 @@ describe('LOCAL_DEDUP_CLEANUP_PLAN minimal regression suite (§6.1)', () => {
       status: 'answered',
       model: DEFAULT_JEV_MODEL,
       input_tokens: 10,
-      answers: Object.fromEntries(
-        Object.entries(questions).map(([key, q]) => [
-          key,
-          // has_original_reasoning = 0（无原创论证），但 score = 2（最高分），来源题均通过
-          key.includes('has_original_reasoning')
-            ? { kind: 'noul', probability: 0 }
-            : q.type === 'score'
-              ? { kind: 'score', score: 2 }
-              : { kind: 'noul', probability: 0 },
-        ])
-      ),
+      answers: keepAllAnswers(questions),
     });
 
     const { result } = await filterLlmContext(

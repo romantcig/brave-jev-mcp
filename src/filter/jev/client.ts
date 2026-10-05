@@ -30,6 +30,13 @@ export type ParsedJevResponse =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** choice 概率分布：非数组键值对象，每值有限且在 [0,1]。 */
+const isProbabilityDistribution = (value: unknown): value is Record<string, number> =>
+  isRecord(value) &&
+  Object.values(value).every(
+    (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1
+  );
+
 /** 原样携带 state 与题目表，不修改入参；模型版本由调用方钉住。 */
 export function buildRequest(
   state: JevState,
@@ -41,8 +48,9 @@ export function buildRequest(
 
 /**
  * 非 200 返回 http 失败；JSON、顶层字段或 input_tokens 不合法返回 shape 失败。
- * 答案逐键收窄：忽略未知类型或缺少对应数值的题目，保留其他有效答案。
- * 单题取值范围由裁决层进一步校验，重试策略由传输层处理。
+ * 答案逐键收窄：忽略未知类型或形状不符的题目，保留其他有效答案。
+ * choice 的标签齐全性与概率和由投影层对照实发 criteria 校验；单题取值范围
+ * 由裁决层进一步校验，重试策略由传输层处理。
  */
 export function parseJevResponse(status: number, bodyText: string): ParsedJevResponse {
   if (status !== 200) return { ok: false, kind: 'http', status };
@@ -67,9 +75,13 @@ export function parseJevResponse(status: number, bodyText: string): ParsedJevRes
     if (value.type === 'noul') {
       if (typeof value.noul !== 'number') continue; // 逐题隔离：坏答案不拖垮其他题
       answers[key] = { kind: 'noul', probability: value.noul };
-    } else if (value.type === 'score') {
-      if (typeof value.score !== 'number') continue; // 逐题隔离：坏答案不拖垮其他题
-      answers[key] = { kind: 'score', score: value.score };
+    } else if (value.type === 'choice') {
+      if (!isProbabilityDistribution(value.probabilities)) continue; // 逐题隔离：坏答案不拖垮其他题
+      answers[key] = {
+        kind: 'choice',
+        ...(typeof value.choice === 'string' ? { choice: value.choice } : {}),
+        probabilities: value.probabilities,
+      };
     }
     // 其余 type 不在协议白名单内：忽略该键，不抛、不收进结果
   }
@@ -160,7 +172,7 @@ const backoffDelayMs = (attempt: number, random: () => number): number => {
 /**
  * 解析 Retry-After 的等待毫秒数，只认标准"秒数"格式（可含小数）。
  * 头缺失、空、非数或负数 → undefined（用普通退避）。
- * 不解析 `retry-after-ms` 与 HTTP-date 两种无实证形态（PLAN 第 5 节"兜底"行 2026-10-05 口径）。
+ * 不解析 `retry-after-ms` 与 HTTP-date。
  */
 export const parseRetryAfterMs = (response: Response): number | undefined => {
   const raw = response.headers.get('retry-after');
@@ -308,7 +320,7 @@ export function createJevClassifier(
       ): { kind: ClassifyFailKind; retryable: boolean } | undefined => {
         if (status === 401 || status === 403) return { kind: 'auth', retryable: false };
         if (status === 408) return { kind: 'timeout', retryable: true };
-        // 429 是上游自身限流，等待与重试没有意义（PLAN 第 5 节"兜底"行 2026-10-05 口径）：
+        // 429 表示上游限流，按当前传输策略立即返回：
         // 单次尝试即按 rate_limited 失败，不读 Retry-After，照旧计入熔断。
         if (status === 429) return { kind: 'rate_limited', retryable: false };
         if (status === 529) return { kind: 'rate_limited', retryable: true };

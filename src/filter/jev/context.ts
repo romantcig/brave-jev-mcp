@@ -1,16 +1,24 @@
 /**
- * 构造全量共享 state、命名空间题目与显式身份映射，并将答案投影回各来源。
+ * 构造全量共享 state、页面题与组合题、显式身份映射，并将答案投影回各来源。
  * 题意统一来自 questions.ts，裁决由 verdict.ts 处理；本模块不修改候选。
  */
 
-import { isUsableSnippetScore } from './verdict.js';
-import { buildSnippetScoreQuestion, buildSourceQuestions, SOURCE_QUESTIONS } from './questions.js';
+import {
+  choiceCriteria,
+  buildPageFillerQuestion,
+  buildSnippetGroupQuestion,
+  PAGE_QUESTION_KEY,
+  snippetGroupsOf,
+} from './questions.js';
 import type {
+  ChoiceInvalidReason,
   JevAnswer,
   JevCandidateDetailed,
   JevQuestion,
   JevRequestMappingEntry,
+  JevSnippetGroup,
   JevState,
+  SnippetJudgments,
 } from '../types.js';
 
 /** 一次逻辑请求的 state、题目表和身份映射。 */
@@ -24,13 +32,14 @@ export type ContextRequest = {
 /** 全局题键连接符：来源 ID 与局部题键均不含此字符序列。 */
 export const ALL_QUESTION_KEY_SEPARATOR = '__';
 
-/** 拼接来源 ID 与局部题键，例如 s7__snip2。 */
+/** 拼接来源 ID 与局部题键，例如 s7__filler。 */
 export const allQuestionKey = (sourceId: string, localKey: string): string =>
   `${sourceId}${ALL_QUESTION_KEY_SEPARATOR}${localKey}`;
 
 /**
  * 将本地步骤后的非空候选按 Brave 原序放入共享 state，不重编号来源 ID。
- * 题目按数组位置生成，映射同时保留 ID 与位置，单候选也用同一形状。
+ * 每来源一道页面题；片段按三片一组生成组合题（尾部两片/一片降档），
+ * 映射同时保留 ID、位置、组定义与题键，单候选也用同一形状。
  * retrievalTime 由调用方归一，缺失时省略，不补当前时间；页面日期未知时为 null。
  * 新建 state 来源对象、片段数组和题目表，不改入参；调用方负责跳过零候选。
  */
@@ -59,12 +68,15 @@ export function buildContextRequest(
   const entries: JevRequestMappingEntry[] = [];
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
-    const local = buildSourceQuestions(index);
-    for (let snippetIndex = 0; snippetIndex < candidate.snippets.length; snippetIndex += 1) {
-      local[`snip${snippetIndex}`] = buildSnippetScoreQuestion(index, snippetIndex);
+    const localQuestions: Record<string, JevQuestion> = {
+      [PAGE_QUESTION_KEY]: buildPageFillerQuestion(index),
+    };
+    const groups = snippetGroupsOf(candidate.snippets.length);
+    for (const group of groups) {
+      localQuestions[group.key] = buildSnippetGroupQuestion(index, group.start, group.size);
     }
     const questionKeys: Record<string, string> = {};
-    for (const [localKey, question] of Object.entries(local)) {
+    for (const [localKey, question] of Object.entries(localQuestions)) {
       const globalKey = allQuestionKey(candidate.id, localKey);
       questions[globalKey] = question;
       questionKeys[localKey] = globalKey;
@@ -74,60 +86,85 @@ export function buildContextRequest(
       array_index: index,
       snippet_keys: candidate.snippets.map((snippet) => snippet.key),
       question_keys: questionKeys,
+      snippet_groups: groups,
     });
   }
 
   return { state, questions, entries };
 }
 
-/** 逐来源答案投影的输出（与 runJevStage 单来源内联收集同形状，裁决层直接消费）。 */
+/** choice 概率分布的概率和本地接受范围：|sum-1| 严格小于该值才有效。 */
+export const CHOICE_SUM_TOLERANCE = 0.06;
+
+/** 逐来源答案投影的输出，由 runJevStage 交给裁决层消费。 */
 export type ProjectedSourceAnswers = {
-  /** 来源级答案：四题的 noul 概率（缺答 / 错型不进表，按现有保守防御） */
+  /** 页面题概率（缺答 / 错型不进表；范围校验由裁决层按 validation 处理） */
   answers: Record<string, number>;
-  /** 逐题评分有效性（按实发片段范围对齐；与 JevDispatchRecord.snippet_score_validity 同义） */
-  scoreValidity: boolean[];
-  /** 按题位保留的实际有限评分（含越界值；缺答 / 错型 / 非有限为 null） */
-  scoresReceived: Array<number | null>;
-  /** 整组分数（实发片段均有 score 答案时产出；顺序即实发片段位置） */
-  snippetScores?: number[];
+  /** 逐片段保留概率（与实发片段等长；该位无可用答案为 null，不压缩） */
+  judgments: SnippetJudgments;
+  /** 无效组合组（局部组键 → 原因）；仅统计实发且无效的组 */
+  invalidGroups?: Record<string, ChoiceInvalidReason>;
 };
 
 /**
- * 按局部题键投影来源答案，坏答案不作为删除信号。
- * 评分有效性与收到的分数按题位保留，缺答不左移。
- * snippetScores 仅在整组答案均为 score 类型时产出；取值有效性仍逐题检查。
+ * 校验单组 choice 答案：缺答 / 错型按 missing（形状问题已在解析层隔离），
+ * 标签与实发 criteria 不齐或多余按 labels（缺失概率不补 0），概率和偏离按 sum。
+ */
+const checkChoiceAnswer = (
+  answer: JevAnswer | undefined,
+  size: number
+):
+  | { ok: true; probabilities: Record<string, number> }
+  | { ok: false; reason: ChoiceInvalidReason } => {
+  if (answer === undefined || answer.kind !== 'choice') return { ok: false, reason: 'missing' };
+  const probabilities = answer.probabilities;
+  const expectedKeys = Object.keys(choiceCriteria(size));
+  if (
+    Object.keys(probabilities).length !== expectedKeys.length ||
+    !expectedKeys.every((key) => Object.hasOwn(probabilities, key))
+  ) {
+    return { ok: false, reason: 'labels' };
+  }
+  const sum = Object.values(probabilities).reduce((total, value) => total + value, 0);
+  return Math.abs(sum - 1) < CHOICE_SUM_TOLERANCE
+    ? { ok: true, probabilities }
+    : { ok: false, reason: 'sum' };
+};
+
+/**
+ * 按显式映射投影来源答案：页面题取 noul 概率；逐组校验 choice 答案后
+ * 按边缘概率解码（p(j) = 含字母 j 的全部选项概率之和），坏组只影响本组、
+ * 覆盖位保守记 null，不左移位置。边缘概率为本地派生值，不冒充模型原始分数。
  */
 export function projectSourceAnswers(params: {
   snippetCount: number;
+  groups: readonly JevSnippetGroup[];
   answerAt: (localKey: string) => JevAnswer | undefined;
 }): ProjectedSourceAnswers {
+  const judgments: SnippetJudgments = Array.from({ length: params.snippetCount }, () => null);
+  const invalidGroups: Record<string, ChoiceInvalidReason> = {};
+  for (const group of params.groups) {
+    const checked = checkChoiceAnswer(params.answerAt(group.key), group.size);
+    if (!checked.ok) {
+      invalidGroups[group.key] = checked.reason;
+      continue;
+    }
+    for (let k = 0; k < group.size; k += 1) {
+      const letter = group.letters[k];
+      let value = 0;
+      for (const [label, probability] of Object.entries(checked.probabilities)) {
+        if (label.includes(letter)) value += probability;
+      }
+      judgments[group.start + k] = { kind: 'keep_probability', value };
+    }
+  }
+
   const answers: Record<string, number> = {};
-  // 来源级四题：缺答 / 错型不进表（保守防御，不冒充 0）
-  for (const key of Object.keys(SOURCE_QUESTIONS)) {
-    const answer = params.answerAt(key);
-    if (answer?.kind === 'noul') answers[key] = answer.probability;
-  }
-  // 片段分数：只收当前请求映射的片段范围（snippetCount）；逐题有效性与实收值按
-  // 题位保留（含越界值），缺答位不压缩、后续不左移；整组齐全才产出 snippetScores
-  const scoreValidity: boolean[] = [];
-  const scoresReceived: Array<number | null> = [];
-  const snippetScores: number[] = [];
-  for (let i = 0; i < params.snippetCount; i += 1) {
-    const answer = params.answerAt(`snip${i}`);
-    scoreValidity.push(answer?.kind === 'score' && isUsableSnippetScore(answer.score));
-    scoresReceived.push(
-      answer?.kind === 'score' && Number.isFinite(answer.score) ? answer.score : null
-    );
-    if (answer?.kind !== 'score') continue;
-    snippetScores.push(answer.score);
-  }
-  const scoresComplete = snippetScores.length === params.snippetCount;
-  const result: ProjectedSourceAnswers = {
-    answers,
-    scoreValidity,
-    scoresReceived,
-  };
-  if (scoresComplete) result.snippetScores = snippetScores;
+  const pageAnswer = params.answerAt(PAGE_QUESTION_KEY);
+  if (pageAnswer?.kind === 'noul') answers[PAGE_QUESTION_KEY] = pageAnswer.probability;
+
+  const result: ProjectedSourceAnswers = { answers, judgments };
+  if (Object.keys(invalidGroups).length > 0) result.invalidGroups = invalidGroups;
   return result;
 }
 

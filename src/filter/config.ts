@@ -31,9 +31,6 @@ export const JEV_TIMEOUT_MAX_MS = 60000;
 export const JEV_CONCURRENCY_MIN = 1;
 export const JEV_CONCURRENCY_MAX = 64;
 
-/** score 上限为 2；snippet_min 超过此值会删光有效评分片段。 */
-export const SNIPPET_MIN_MAX = 2;
-
 /** 默认 JSONL 目录，~ 展开为本机主目录。 */
 export const DEFAULT_LOG_DIR = '~/.brave-jev/logs';
 
@@ -88,7 +85,7 @@ const configFileRecord = (raw: unknown): Record<string, unknown> => (isRecord(ra
 
 /**
  * 配置键、内部阈值键与合法范围的统一映射，日志和样本快照复用此表。
- * 概率与 CJK 参数在 [0,1]，snippet_min 在 [0,2]。
+ * 全部阈值（概率与 CJK 参数）都在 [0,1]。
  */
 export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly key: string;
@@ -97,11 +94,9 @@ export const THRESHOLD_SPECS: ReadonlyArray<{
   readonly max: number;
   readonly integer?: boolean;
 }> = Object.freeze([
-  { key: 'off_topic_drop', configKey: 'offTopicDrop', min: 0, max: 1 },
-  { key: 'listing_drop', configKey: 'listingDrop', min: 0, max: 1 },
   { key: 'filler_drop', configKey: 'fillerDrop', min: 0, max: 1 },
-  { key: 'reasoning_protect', configKey: 'reasoningProtect', min: 0, max: 1 },
-  { key: 'snippet_min', configKey: 'snippetMin', min: 0, max: SNIPPET_MIN_MAX },
+  { key: 'group_keep_min', configKey: 'groupKeepMin', min: 0, max: 1 },
+  { key: 'single_keep_min', configKey: 'singleKeepMin', min: 0, max: 1 },
   { key: 'cjk_bonus', configKey: 'cjkBonus', min: 0, max: 1 },
   { key: 'cjk_share', configKey: 'cjkShare', min: 0, max: 1 },
 ]);
