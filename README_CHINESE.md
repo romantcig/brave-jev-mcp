@@ -4,9 +4,11 @@
 
 AI 联网搜索时，拿到的内容经常混着空泛文章、网站导航，以及提到了关键词却回答不了问题的段落。这些内容会占用上下文，也让 AI 需要从更多无关信息中寻找答案。
 
-**这个项目在搜索结果交给 AI 之前，先筛掉其中无用的页面和片段，让 AI 把更多上下文留给真正能帮助回答问题的内容。**
+**这个项目在 `brave_llm_context` 的搜索结果交给 AI 之前，先筛掉其中无用的页面和片段，让 AI 把更多上下文留给真正能帮助回答问题的内容。**
 
 项目基于 [Brave Search MCP Server](https://github.com/brave/brave-search-mcp-server)：Brave 负责搜索网页、提取内容，[Jev](https://typesafe.ai/) 负责结合搜索目的进行筛选。留下的内容仍然带有来源链接，并保持 Brave 的原始顺序，方便 AI 阅读、回答和引用。
+
+**过滤范围：目前只有 `brave_llm_context` 接入了本项目的过滤层。其他搜索工具仍可使用，但不支持这套过滤，也不会调用 Jev 进行筛选。下文的过滤配置、状态和调试样本均仅适用于 `brave_llm_context`。**
 
 ## 安装接入
 
@@ -41,7 +43,7 @@ AI 联网搜索时，拿到的内容经常混着空泛文章、网站导航，�
 
 直接向 AI 描述需要查找的内容。例如：
 
-> 用 Brave 搜索比较 SQLite 和 PostgreSQL。我想为一个单机应用选择数据库，重点了解部署复杂度、并发写入限制和适用场景，请附上来源。
+> 使用 Brave Jev MCP 的 `brave_llm_context` 比较 SQLite 和 PostgreSQL。我想为一个单机应用选择数据库，重点了解部署复杂度、并发写入限制和适用场景，请附上来源。
 
 AI 调用本项目的 `brave_llm_context` 后，搜索、内容提取和过滤会在这次调用中完成。AI 收到筛选后的网页片段及来源链接，再据此组织回答；需要进一步核实时，可以继续访问原页面。如果客户端同时接入了多个搜索工具，可以明确要求 AI 使用本项目的 `brave_llm_context`。
 
@@ -57,7 +59,7 @@ AI 调用本项目的 `brave_llm_context` 后，搜索、内容提取和过滤�
 { "mode": "test" }
 ```
 
-这时每次搜索都会保存一份本地样本，并在返回结果中附上文件路径。下面是一条实际返回的过滤状态，本机路径已替换为占位符：
+这时每次调用 `brave_llm_context` 都会保存一份本地样本，并在返回结果中附上文件路径。下面是一条实际返回的过滤状态，本机路径已替换为占位符：
 
 ```text
 [filter] 4 snippets removed sample for filter debugging - original results, filtered results, Jev decisions: <本地样本路径>

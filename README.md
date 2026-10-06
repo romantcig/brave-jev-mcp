@@ -4,9 +4,11 @@ English | [简体中文](README_CHINESE.md)
 
 When an AI searches the web, the results often include generic articles, site navigation, and passages that mention the right keywords without answering the question. This material consumes context and leaves the AI to find answers among unrelated information.
 
-**This project removes unhelpful pages and snippets before search results reach the AI, leaving more context for information that can help answer the question.**
+**This project removes unhelpful pages and snippets from `brave_llm_context` results before they reach the AI, leaving more context for information that can help answer the question.**
 
 Built on [Brave Search MCP Server](https://github.com/brave/brave-search-mcp-server), the project uses Brave to search the web and extract content, and [Jev](https://typesafe.ai/) to filter it according to the purpose of the search. Retained content keeps its source links and Brave's original ordering so the AI can read, answer, and cite it.
+
+**Filtering scope: only `brave_llm_context` uses this project's filtering layer. Other search tools remain available, but they do not support this filtering or call Jev to screen their results. The filtering configuration, status messages, and debugging samples described below apply only to `brave_llm_context`.**
 
 ## Installation
 
@@ -41,7 +43,7 @@ On first launch, the server creates `~/.brave-jev/config.json` with filtering en
 
 Tell the AI what you need to find. For example:
 
-> Use Brave to compare SQLite and PostgreSQL. I am choosing a database for a single-machine application. Focus on deployment complexity, concurrent write limits, and suitable use cases, and include sources.
+> Use Brave Jev MCP's `brave_llm_context` to compare SQLite and PostgreSQL. I am choosing a database for a single-machine application. Focus on deployment complexity, concurrent write limits, and suitable use cases, and include sources.
 
 When the AI calls this project's `brave_llm_context`, search, content extraction, and filtering happen within that call. The AI receives filtered web snippets and source links, then uses them to compose its answer. It can visit the original pages for further verification. If your client has multiple search tools, you can explicitly ask the AI to use this project's `brave_llm_context`.
 
@@ -57,7 +59,7 @@ To see what a search removed, set `mode` to `test` in `~/.brave-jev/config.json`
 { "mode": "test" }
 ```
 
-Each search then saves a local sample and includes its file path in the returned result. Here is an actual filter status message, with the local path replaced by a placeholder:
+Each `brave_llm_context` call then saves a local sample and includes its file path in the returned result. Here is an actual filter status message, with the local path replaced by a placeholder:
 
 ```text
 [filter] 4 snippets removed sample for filter debugging - original results, filtered results, Jev decisions: <local sample path>
