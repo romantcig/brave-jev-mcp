@@ -1,5 +1,5 @@
 /**
- * 片段预筛阶段的样板行、标题重复行与引用块判定。
+ * 片段预筛阶段的样板行与标题重复行判定。
  * 纯函数，不修改输入；前缀表由调用方统一传入。
  */
 
@@ -61,7 +61,7 @@ const indentColumns = (line: string): number => {
 };
 
 /**
- * 逐行标记代码区域，供标题、引用和 GitHub 清洗共用。
+ * 逐行标记代码区域，供标题重复行判定和 GitHub 清洗共用。
  * 围栏闭合须同字符、长度不小于开栏且无尾随文字；未闭合时保护到末尾。
  * 缩进按列数判定，至少四列即保护。
  * 跨行内联代码的开启行、内部行和闭合行均保护，避免删除破坏跨度。
@@ -166,118 +166,9 @@ const stripTitleRepeatLines = (
   return { lines: outLines, codeFlags: outFlags };
 };
 
-/** 引用块标题行（归一化、去行尾标点、小写后的精确全集）：见 stripReferenceBlock。 */
-const REFERENCE_HEADINGS: readonly string[] = [
-  'sources',
-  'source',
-  'references',
-  'reference',
-  'sources & references',
-  'sources and references',
-  'further reading',
-  'external links',
-];
-
-/** 引用条目签名——原行以列表符起头；间隔号 `·` 与 accessed/行尾年份二者取其一。 */
-const REFERENCE_ITEM_BULLET = /^\s*[-*•]\s+/;
-const REFERENCE_ITEM_ACCESSED = /\baccessed\s+\w+\s+\d{4}/i;
-const REFERENCE_ITEM_YEAR_END = /(19|20)\d{2}\s*$/u;
-const REFERENCE_MIDDOT = '·';
-
-/** 中英文句读、分号、中文逗号或顿号表示条目可能含正文，不能只靠英文句号判断。 */
-const REFERENCE_CONTENT_MARK = /[.!?;；。！？，、]/;
-
-/** 来源标签段上限（码元）：只约束首段之后的标签，不能据此推断首段没有事实摘要。 */
-export const REFERENCE_LABEL_MAX = 20;
-
-/** 无句末标点也可能表达事实：条件、否定、依赖关系及常见陈述词一律保留。
- * 检查每一段，尤其是摘要和标题共用的首段。此保护是保守启发式，不是完整语义分类。 */
-const REFERENCE_FACT_EN =
-  /\b(?:must|shall|should|can|cannot|could|will|would|may|might|not|never|only|unless|until|before|after|requires?|needs?|depends?|dependent|remains?|is|are|was|were|has|have)\b/i;
-const REFERENCE_FACT_ZH = /需要|必须|依赖|取决于|尚未|仍|只有|才能|不(?:会|能|得)|并非/;
-
-/** 同级或更高的 Markdown 标题界定引用小节的结束，下级小节仍属当前块。 */
-const REFERENCE_SECTION = /^ {0,3}(#{1,6})(?:[\t ]+|$)/;
-
 /**
- * 书目候选要求列表符、间隔号和 Accessed 月年或行尾年份签名。
- * 首段后的所有分段必须是短来源标签；含内容标点、条件或事实关系时保留。
- * 匹配仅表示书目候选，仍需整块检查。
- */
-const referenceItemBody = (line: string): string | null => {
-  if (!REFERENCE_ITEM_BULLET.test(line)) return null;
-  if (!line.includes(REFERENCE_MIDDOT)) return null;
-  if (!REFERENCE_ITEM_ACCESSED.test(line) && !REFERENCE_ITEM_YEAR_END.test(line.trimEnd())) {
-    return null;
-  }
-  const body = line
-    .replace(REFERENCE_ITEM_BULLET, '')
-    .replace(REFERENCE_ITEM_ACCESSED, '')
-    .replace(REFERENCE_ITEM_YEAR_END, '');
-  const segments = body
-    .split(REFERENCE_MIDDOT)
-    .map((segment) => segment.trim())
-    .filter((segment) => segment !== '');
-  if (segments.length < 2) return null;
-  for (const segment of segments) {
-    if (
-      REFERENCE_CONTENT_MARK.test(segment) ||
-      REFERENCE_FACT_EN.test(segment) ||
-      REFERENCE_FACT_ZH.test(segment)
-    ) {
-      return null;
-    }
-  }
-  return segments.slice(1).every((segment) => segment.length <= REFERENCE_LABEL_MAX)
-    ? body.trim()
-    : null;
-};
-
-/**
- * 从引用标题扫描完整小节，再决定是否删除。
- * 少于两条、或含说明段、摘要、下级小节、代码时整块保留，不删除合格前缀。
- * 代码中的标题不启动判断；只剥首个合格块。
- */
-const stripReferenceBlock = (lines: readonly string[], codeFlags: readonly boolean[]): string[] => {
-  for (let heading = 0; heading < lines.length; heading += 1) {
-    if (codeFlags[heading]) continue;
-    const normalized = stripTrailingPunctuation(normalizeLine(lines[heading]).toLowerCase());
-    if (!REFERENCE_HEADINGS.includes(normalized)) continue;
-
-    let cursor = heading + 1;
-    let lastItem = -1;
-    let items = 0;
-    let allReferences = true;
-    const headingLevel = (REFERENCE_SECTION.exec(lines[heading])?.[1] ?? '######').length;
-    while (cursor < lines.length) {
-      const line = lines[cursor];
-      if (line.trim() === '') {
-        cursor += 1;
-        continue;
-      }
-      const nextHeading = codeFlags[cursor] ? null : REFERENCE_SECTION.exec(line);
-      if (nextHeading !== null && nextHeading[1].length <= headingLevel) break;
-
-      if (!codeFlags[cursor] && referenceItemBody(line) !== null) {
-        items += 1;
-        lastItem = cursor;
-      } else {
-        allReferences = false;
-      }
-      cursor += 1;
-    }
-    if (allReferences && items >= 2) {
-      return [...lines.slice(0, heading), ...lines.slice(lastItem + 1)];
-    }
-    // 不从被保护块的下级小节里重新捞取可删前缀；下次只检查新的独立小节。
-    heading = cursor - 1;
-  }
-  return [...lines];
-};
-
-/**
- * 固定顺序：前缀行 → 标题重复行 → 引用块，最后重组文本。
- * 后两步共用前缀剥离后计算的代码标记；剥空或只剩来源标题时 emptied 为 true。
+ * 固定顺序：前缀行 → 标题重复行，最后重组文本。
+ * 后步复用前缀剥离后计算的代码标记；剥空或只剩来源标题时 emptied 为 true。
  */
 export function stripBoilerplateLines(
   text: string,
@@ -288,9 +179,7 @@ export function stripBoilerplateLines(
   const lines = text.split(/\r?\n/).filter((line) => !matchesPrefix(line, prefixes));
   const codeFlags = codeRegionFlags(lines);
   const titleStripped = stripTitleRepeatLines(lines, codeFlags, titleNorm);
-  const stripped = stripReferenceBlock(titleStripped.lines, titleStripped.codeFlags)
-    .join('\n')
-    .trim();
+  const stripped = titleStripped.lines.join('\n').trim();
 
   return { text: stripped, emptied: stripped === '' || isTitleOnly(stripped, sourceTitle) };
 }

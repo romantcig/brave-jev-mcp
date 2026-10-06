@@ -173,7 +173,7 @@ const splitJsonLd = (table: WorkSource[], stats: FilterStats, cleanPlatform: boo
 
 /**
  * 阶段 2 固定顺序：样板行剥离。
- * 样板剥离内部依次为 GitHub / X 清洗、前缀行、标题重复行、引用块；平台清洗仅 test/on 应用。
+ * 样板剥离内部依次为 GitHub / X 清洗、前缀行、标题重复行；平台清洗仅 test/on 应用。
  * 空片段和样板删除合计入 snippets_prefiltered。
  */
 const prefilterSnippets = (
