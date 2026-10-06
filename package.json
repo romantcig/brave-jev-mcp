@@ -1,0 +1,60 @@
+{
+  "name": "@romantcig/brave-jev-mcp",
+  "version": "0.1.0",
+  "description": "Brave Search MCP server with intent-aware Jev content filtering.",
+  "keywords": [
+    "api",
+    "brave",
+    "mcp",
+    "search"
+  ],
+  "license": "MIT",
+  "author": "romantcig",
+  "homepage": "https://github.com/romantcig/brave-jev-mcp",
+  "bugs": "https://github.com/romantcig/brave-jev-mcp/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/romantcig/brave-jev-mcp.git"
+  },
+  "type": "module",
+  "module": "dist/server.js",
+  "bin": {
+    "brave-jev-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README_CHINESE.md",
+    "FILTERING.md"
+  ],
+  "scripts": {
+    "build": "shx rm -rf dist && tsc && shx chmod +x dist/*.js",
+    "prepare": "npm run build",
+    "watch": "tsc --watch",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "serve:http": "npm run build && node dist/index.js --transport http",
+    "inspector": "npx @modelcontextprotocol/inspector",
+    "inspector:http": "npx @modelcontextprotocol/inspector --transport http --server-url http://127.0.0.1:8080/mcp"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "commander": "14.0.3",
+    "dotenv": "17.3.1",
+    "express": "5.2.1",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "24.10.13",
+    "ajv": "8.20.0",
+    "prettier": "3.8.1",
+    "semver": "7.7.3",
+    "shx": "0.4.0",
+    "tsx": "4.22.4",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

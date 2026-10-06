@@ -1,0 +1,279 @@
+{
+  "origin": {
+    "sample": "2026-10-05/5633892c.json",
+    "experiment": "tail_r1_short.ablation_5633892c.json",
+    "variant": "short_0.5_1",
+    "sample_sha256": "dbe071fb84bd9e3cd9b6284202918c0792d0f1f4a789852ed048d63f13462b83"
+  },
+  "request": {
+    "model": "jev-1.13.0",
+    "state": {
+      "query": "site:docs.typesafe.ai \"usage\" \"input_tokens\"",
+      "intent": "Find TypeSafe documentation pages explaining how input_tokens are counted or billed.",
+      "sources": [
+        {
+          "id": "s0",
+          "url": "https://docs.typesafe.ai/api",
+          "title": "API reference - TypeSafe AI",
+          "snippets": [
+            "# API reference\n## Response body\nToken usage for the request.",
+            "```\n{\n  \"model\": \"jev-1.13.0\",\n  \"answers\": {\n    \"is_urgent\": {\n      \"type\": \"noul\",\n      \"noul\": 0.95\n    }\n  },\n  \"usage\": { \"input_tokens\": 296, \"output_tokens\": 20 }\n}\n```\n\n```\nExample response\n```",
+            "## Answer types\n### Noul answer\n```\n{\n  \"model\": \"jev-1.13.0\",\n  \"answers\": {\n    \"is_urgent\": {\n      \"type\": \"noul\",\n      \"noul\": 0.95\n    }\n  },\n  \"usage\": { \"input_tokens\": 307, \"output_tokens\": 20 }\n}\n```\n\n```\nExample response\n```",
+            "### Choice answer\n```\n{\n  \"model\": \"jev-1.13.0\",\n  \"answers\": {\n    \"department\": {\n      \"type\": \"choice\",\n      \"choice\": \"billing\",\n      \"probabilities\": { \"billing\": 0.88, \"technical\": 0.12, \"sales\": 0.0 },\n      \"confidence\": 0.81\n    }\n  },\n  \"usage\": { \"input_tokens\": 318, \"output_tokens\": 34 }\n}\n```\n\n```\nExample response\n```",
+            "### Score answer\nrequired\n\nHow certain the model is, derived from probabilities.\n\n```\n{\n  \"model\": \"jev-1.13.0\",\n  \"answers\": {\n    \"frustration\": {\n      \"type\": \"score\",\n      \"score\": 1.05,\n      \"legend\": { \"0\": \"Calm\", \"1\": \"Frustrated\", \"2\": \"Very angry\" },\n      \"probabilities\": { \"0\": 0.0, \"1\": 0.95, \"2\": 0.05 },\n      \"confidence\": 0.92\n    }\n  },\n  \"usage\": { \"input_tokens\": 304, \"output_tokens\": 18 }\n}\n```\n\n```\nExample response\n```"
+          ],
+          "brave_page_date": "2026-09-20T02:43:02Z"
+        },
+        {
+          "id": "s1",
+          "url": "https://docs.typesafe.ai/cookbooks/consistency_noul_cookbook",
+          "title": "Self-consistency: nouls - TypeSafe AI",
+          "snippets": [
+            "# Self-consistency: nouls\n## Experimental Conditions\n### Experiment Grid\n```\nCONDITIONS = []\nfor model in BASE_MODELS:  # non-reasoning models: probabilities, then True/False\n    for temp_value, temp_label in ((0, \"0\"), (None, \"default\")):\n        CONDITIONS.append(\n            {\n                \"label\": f\"{model} t={temp_label}\",\n                \"model\": model,\n                \"temp\": temp_value,\n                \"mode\": \"prob\",\n            }\n        )\n    CONDITIONS.append(\n        {\n            \"label\": f\"{model} yes/no t=0\",\n            \"model\": model,\n            \"temp\": 0,\n            \"mode\": \"yesno\",\n        }\n    )\nCONDITIONS += [  # reasoning models: one prob condition each\n    {\n        \"label\": f\"{model}-reasoning\",\n        \"model\": model,\n        \"temp\": None,\n        \"mode\": \"prob\",\n    }\n    for model in REASONING_MODELS\n]\nLABELS = [condition[\"label\"] for condition in CONDITIONS]\n\nruns: dict[\n    str, list\n] = {}  # label -> NUM_SAMPLES samples of {question key: probability}\nstats: dict[str, list] = {}  # label -> NUM_SAMPLES (cost_usd, latency_s) pairs\nwith ThreadPoolExecutor(max_workers=16) as pool:\n    futures = {\n        condition[\"label\"]: [\n            pool.submit(\n                ask_llm_rubric,\n                condition[\"model\"],\n                condition[\"mode\"],\n                condition[\"temp\"],\n                sample_index,\n                RUBRIC_HASH,\n            )\n            for sample_index in range(NUM_SAMPLES)\n        ]\n        for condition in CONDITIONS\n    }\n    for label, sample_futures in futures.items():\n        results = [future.result() for future in sample_futures]\n        runs[label] = [result[0] for result in results]\n        stats[label] = [(result[1], result[2]) for result in results]\n\n# TypeSafe samples are drawn sequentially after the LLM calls. On a cached re-render nothing is\n# called.\ntypesafe_usage_results = [\n    _call_typesafe(sample_index, RUBRIC_HASH, TYPESAFE_MODEL)\n    for sample_index in range(NUM_SAMPLES)\n]\n# Report every returned version so alias changes within a run remain visible.\ntypesafe_model_counts = Counter(\n    result[4][\"response_model\"]\n    for result in typesafe_usage_results\n)\nprint(f\"TypeSafe requested model: {TYPESAFE_MODEL}\")\nprint(f\"TypeSafe returned models (calls): {dict(sorted(typesafe_model_counts.items()))}\")\n# Apply pricing after cache retrieval so price changes do not require new samples.\ntypesafe_results = [\n    (nouls, _cost(TYPESAFE_PRICE, input_tokens, output_tokens), latency)\n    for nouls, input_tokens, output_tokens, latency, _metadata in typesafe_usage_results\n]\ntypesafe_runs = [result[0] for result in typesafe_results]\nstats[\"typesafe_noul\"] = [(result[1], result[2]) for result in typesafe_results]\n```"
+          ],
+          "brave_page_date": null
+        },
+        {
+          "id": "s2",
+          "url": "https://docs.typesafe.ai/introduction/quickstart",
+          "title": "Quick start - TypeSafe AI",
+          "snippets": [
+            "# Quick start\n## Call it: the API\n### Response body\n```\n{\n  \"model\": \"jev-1.13.0\",\n  \"answers\": {\n    \"department\": {\n      \"type\": \"choice\",\n      \"choice\": \"technical\",\n      \"confidence\": 0.78,\n      \"probabilities\": {\n        \"technical\": 0.85,\n        \"sales\": 0.0,\n        \"billing\": 0.15\n      }\n    },\n    \"frustration\": {\n      \"type\": \"score\",\n      \"score\": 1.0,\n      \"confidence\": 1.0,\n      \"legend\": {\n        \"0\": \"Calm, just stating facts\",\n        \"1\": \"Frustrated but civil\",\n        \"2\": \"Very angry, strong language\"\n      },\n      \"probabilities\": {\n        \"0\": 0.0,\n        \"1\": 1.0,\n        \"2\": 0.0\n      }\n    },\n    \"is_urgent\": {\n      \"type\": \"noul\",\n      \"noul\": 1.0\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 392,\n    \"output_tokens\": 65\n  }\n}\n```\n\nSee the API Reference for all the details."
+          ],
+          "brave_page_date": "2026-09-20T02:24:24Z"
+        },
+        {
+          "id": "s3",
+          "url": "https://docs.typesafe.ai/cookbooks/consistency_choice_cookbook",
+          "title": "Self-consistency: choices - TypeSafe AI",
+          "snippets": [
+            "# Self-consistency: choices\n## Experimental Conditions\n### Experiment Grid\n```\nCONDITIONS = []\nfor (\n    model\n) in BASE_MODELS:  # non-reasoning models: dist at t=0 / default, then a single-pick variant\n    for temp_value, temp_label in ((0, \"0\"), (None, \"default\")):\n        CONDITIONS.append(\n            {\n                \"label\": f\"{model} t={temp_label}\",\n                \"model\": model,\n                \"temp\": temp_value,\n                \"mode\": \"dist\",\n            }\n        )\n    CONDITIONS.append(\n        {\n            \"label\": f\"{model} single-pick t=0\",\n            \"model\": model,\n            \"temp\": 0,\n            \"mode\": \"single\",\n        }\n    )\nCONDITIONS += [  # reasoning models: one distribution condition each\n    {\n        \"label\": f\"{model}-reasoning\",\n        \"model\": model,\n        \"temp\": None,\n        \"mode\": \"dist\",\n    }\n    for model in REASONING_MODELS\n]\nLABELS = [condition[\"label\"] for condition in CONDITIONS]\nTYPESAFE_LABEL = \"typesafe_choice\"\nALL_LABELS = [*LABELS, TYPESAFE_LABEL]\n\nruns: dict[\n    str, list\n] = {}  # label -> NUM_SAMPLES samples of {question key: distribution}\nstats: dict[str, list] = {}  # label -> NUM_SAMPLES (cost_usd, latency_s) pairs\nwith ThreadPoolExecutor(max_workers=16) as pool:\n    futures = {\n        condition[\"label\"]: [\n            pool.submit(\n                ask_llm_rubric,\n                condition[\"model\"],\n                condition[\"mode\"],\n                condition[\"temp\"],\n                sample_index,\n                RUBRIC_HASH,\n            )\n            for sample_index in range(NUM_SAMPLES)\n        ]\n        for condition in CONDITIONS\n    }\n    for label, sample_futures in futures.items():\n        results = [future.result() for future in sample_futures]\n        runs[label] = [result[0] for result in results]\n        stats[label] = [(result[1], result[2]) for result in results]\n\n# TypeSafe samples are drawn sequentially, after the LLM pool has closed, so each call's latency is a\n# clean round trip rather than one measured under the 16-way LLM thread contention.\ntypesafe_usage_results = [\n    _call_typesafe(sample_index, RUBRIC_HASH, TYPESAFE_MODEL)\n    for sample_index in range(NUM_SAMPLES)\n]\n# Report every returned version so alias changes within a run remain visible.\ntypesafe_model_counts = Counter(\n    result[4][\"response_model\"]\n    for result in typesafe_usage_results\n)\nprint(f\"TypeSafe requested model: {TYPESAFE_MODEL}\")\nprint(f\"TypeSafe returned models (calls): {dict(sorted(typesafe_model_counts.items()))}\")\n# Apply pricing after cache retrieval so price changes do not require new samples.\ntypesafe_results = [\n    (distributions, _cost(TYPESAFE_PRICE, input_tokens, output_tokens), latency)\n    for distributions, input_tokens, output_tokens, latency, _metadata in typesafe_usage_results\n]\ntypesafe_runs = [result[0] for result in typesafe_results]\nstats[TYPESAFE_LABEL] = [(result[1], result[2]) for result in typesafe_results]\n```"
+          ],
+          "brave_page_date": null
+        },
+        {
+          "id": "s4",
+          "url": "https://docs.typesafe.ai/cookbooks/rerank_typesafe",
+          "title": "Re-ranking - TypeSafe AI",
+          "snippets": [
+            "# Re-ranking\n## A re-ranking example\n### Re-ranking it with TypeSafe\n```\n1200 TypeSafe calls used 1,536,002 input and 25,200 output tokens, costing $0.0645.\n```\n\noutput",
+            "### Re-ranking moves the right answer toward the top\nThe reported token count and cost cover all 1,200 TypeSafe calls used to re-rank the 40 shortlists."
+          ],
+          "brave_page_date": null
+        }
+      ],
+      "retrieval_time": "2026-10-05T21:16:39.502+08:00"
+    },
+    "questions": {
+      "s0__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[0]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s0__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[0]`; B=`sources[0].snippets[1]`; C=`sources[0].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[3]`; B=`sources[0].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[1]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s2__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[2]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s3__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[3]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s4__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[4]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s4__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[0]`; B=`sources[4].snippets[1]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s1__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[0]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s2__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[0]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s3__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[3].snippets[0]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      }
+    }
+  },
+  "status": 200,
+  "response": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "s0__filler": {
+        "type": "noul",
+        "noul": 0.74
+      },
+      "s0__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.63,
+        "probabilities": {
+          "BC": 0.02,
+          "A": 0.14,
+          "C": 0.01,
+          "ABC": 0.11,
+          "none": 0.67,
+          "AC": 0.03,
+          "AB": 0.02,
+          "B": 0
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.73,
+        "probabilities": {
+          "A": 0.07,
+          "AB": 0.1,
+          "B": 0.03,
+          "none": 0.8
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "noul": 0.44
+      },
+      "s2__filler": {
+        "type": "noul",
+        "noul": 0.72
+      },
+      "s3__filler": {
+        "type": "noul",
+        "noul": 0.45
+      },
+      "s4__filler": {
+        "type": "noul",
+        "noul": 0.3
+      },
+      "s4__group0": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.32,
+        "probabilities": {
+          "A": 0.33,
+          "AB": 0.49,
+          "B": 0.05,
+          "none": 0.13
+        }
+      },
+      "s1__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.61,
+        "probabilities": {
+          "A": 0.2,
+          "none": 0.8
+        }
+      },
+      "s2__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.78,
+        "probabilities": {
+          "A": 0.11,
+          "none": 0.89
+        }
+      },
+      "s3__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.57,
+        "probabilities": {
+          "A": 0.22,
+          "none": 0.78
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 4092,
+      "output_tokens": 365
+    }
+  },
+  "expected": [
+    {
+      "verdict": "keep",
+      "kept": [
+        true,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        false
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        false
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        false
+      ]
+    },
+    {
+      "verdict": "keep",
+      "kept": [
+        true,
+        true
+      ]
+    }
+  ]
+}

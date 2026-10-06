@@ -1,0 +1,1203 @@
+{
+  "recorded_at": "2026-10-05T17:44:59.414Z",
+  "question_set_id": "da31568304ee",
+  "filter_rules_version": "filter-rules-21",
+  "context_layout_id": "jev-context-4",
+  "request": {
+    "model": "jev-1.13.0",
+    "state": {
+      "query": "MiniMax M3.1",
+      "intent": "Find current information about MiniMax M3.1, the latest large language model from MiniMax, including its release details, capabilities and positioning.",
+      "sources": [
+        {
+          "id": "s0",
+          "url": "https://www.aibase.com/news/31365",
+          "title": "MiniMax's Latest Text Model M3.1-Flash-Preview Officially Launched Official Synchronization of Quota Reset Cards and Double Points Rewards",
+          "snippets": [
+            "# MiniMax's Latest Text Model M3.1-Flash-Preview Officially Launched Official Synchronization of Quota Reset Cards and Double Points Rewards\n#### AIbase基地\nEfficiency competition in the field of large AI models is intensifying again. MiniMax officially announced on September 27 that its latest text model, M3.1-Flash-Preview, is now fully available on the MiniMax Code platform.",
+            "To thank developers for their support, the official released a major benefit on the launch day - the quota reset card, which resets all users' Token Plan quotas, and also launched multiple benefits such as free token collection.",
+            "Regarding core capabilities, M3.1-Flash-Preview is positioned as a stable productivity tool for daily development work. Whether it's regular bug fixes or complete feature development from scratch, the model can deliver reliably. It not only has the ability to deeply understand complex requirements, but also carefully handles various edge cases (boundary conditions), automatically completes regression testing, and strictly verifies the potential impact of code changes on existing functions.",
+            "By organically connecting all aspects, including problem identification, code implementation, testing verification, and result delivery, the model builds an efficient and reliable development loop for developers.",
+            "In addition to the iterative upgrades of the core model features, MiniMax also announced that the limited-time \"Double Points for Check-in\" activity will officially start on September 28 and end on October 7. During this period, all new and existing users who log in to the MiniMax Code platform and complete daily check-ins can easily claim double free points, further reducing the cost of using the platform for developers.",
+            "AINewWords MiniMax M3.1-Flash-Preview CodeModel",
+            "## Qwen Partners with Quark Cloud Disk: Organize and Retrieve Documents and Photos, Which Can Be Turned into Posters in a Flash\nAI Daily: MiniMax New Model M3.1-Flash-Preview Launches; OpenAI to Introduce a Permanent AI Assistant; Claude Sonnet 5.5 Begins Beta Testing",
+            "## AI Daily: MiniMax New Model M3.1-Flash-Preview Launches; OpenAI to Introduce a Permanent AI Assistant; Claude Sonnet 5.5 Begins Beta Testing\nMiniMax New Text Model M3.1-Flash-Preview Official Beta Test",
+            "## MiniMax New Text Model M3.1-Flash-Preview Official Beta Test\nOn Sept 28, MiniMax launched M3.1-Flash-Preview for public beta, showing faster AI model iteration. It supports native multimodal capabilities and a million-token context window, enabling efficient bug fixes, complex feature development, and deep involvement in complex dev tasks....."
+          ],
+          "brave_page_date": "2026-09-28T07:08:27Z"
+        },
+        {
+          "id": "s1",
+          "url": "https://www.reddit.com/r/MiniMax_AI/comments/1v73a0r/m31_has_strong_potential_to_be_the_most/",
+          "title": "r/MiniMax_AI on Reddit: M3.1 has strong potential to be the most cost-efficient large model ahead",
+          "snippets": [
+            "# M3.1 has strong potential to be the most cost-efficient large model ahead\nI’ve gone through the technical specs of Minimax M3, and I want to share my analysis here.\n\n• Its total parameters are twice the size of last year’s M2.x lineup, which gives it a strong base for complex logical reasoning.\n\n• Compared with other mainstream commercial LLMs, M3 uses a smaller overall parameter size, meaning cheaper costs for inference and deployment.",
+            "• The biggest structural change is sparse attention, a design that fits perfectly with the agent tools developers are building nowadays.\n\n• Where it struggles right now is real-world usage, especially coding. The model performs far worse than its hardware/parameter specs promise. The dev team still has lots of tuning work left, so future updates should bring clear performance upgrades.",
+            "Even with all these technical strengths, Minimax is in a tough spot right now.\nUsers’ opinions of M3 have gotten much worse lately. The time Minimax has to patch M3’s issues and win back user trust is running out quickly",
+            "## Vancecookcobain\nI doubt it....something tells me it's just going to give us annoying rate limits that make it unusable as a cost effective model....\n\n If they are going for a nearly 3 trillion model chances are they are looking for an enormous payday and are going to squeeze every penny from every customer....",
+            "## respectful_stimulus\nIs there going to be a M3.1?? The company seems quiet."
+          ],
+          "brave_page_date": "2026-07-26T13:10:20Z"
+        },
+        {
+          "id": "s2",
+          "url": "https://benchlm.ai/compare/minimax-m3-1-flash-preview-vs-nemotron-4-15b",
+          "title": "MiniMax M3.1 Flash Preview vs Nemotron-4 15B: Comparison",
+          "snippets": [
+            "# MiniMax M3.1 Flash Preview vs Nemotron-4 15B\n## Decision reading\nThe public evidence has no benchmark result shared by both models, so it does not support a quality verdict. Use the documented cost, context, and runtime rows instead. 0 results are shared. Category rows resting on Estimated evidence or different benchmark sets are marked directional and do not name a winner.\n\nModel A\n\nMiniMax logo\n\nMiniMax M3.1 Flash Preview\n\nMiniMax\n\n—\n\nEvidence status unavailable",
+            "**Shared results**: 0\n**MiniMax M3.1 Flash Preview only**: 0\n**Nemotron-4 15B only**: 0\n**Like-for-like categories**: 0 / 8",
+            "## Which one for your work\n- Coding work Code generation, repair, and software-engineering tasks Not enough matched evidence MiniMax M3.1 Flash Preview and Nemotron-4 15B are not ranked on the public lane for coding, so no winner is named for coding. Confidence: limited",
+            "- Agentic work Tool use, computer use, and multi-step task completion Not enough matched evidence MiniMax M3.1 Flash Preview and Nemotron-4 15B are not ranked on the public lane for agentic, so no winner is named for agentic. Confidence: limited",
+            "Nemotron-4 15B does not fit this workload in one request. MiniMax M3.1 Flash Preview has no comparable published API token rate. Nemotron-4 15B has no comparable published API token rate. Confidence: listed-rates\n- Repository review cost 50K fresh input + 3K output tokens Not enough matched evidence The page does not recommend a cost winner because at least one model cannot fit the stated workload in one request.",
+            "## Category results, on a stated basis\n### Agentic\n**MiniMax M3.1 Flash Preview**: Not ranked\n**Nemotron-4 15B**: Not ranked\n**Basis**: BenchAlign v5.7 lane · 0 vs 0 public rows\n**Reading**: Not comparable",
+            "### Multilingual\n**MiniMax M3.1 Flash Preview**: Not ranked\n**Nemotron-4 15B**: Not ranked\n**Basis**: Provisional lane · 0 vs 0 weighted rows\n**Reading**: Not comparable",
+            "## What each workload costs\n### Chat turn\n1K fresh input + 500 output tokens\n\n**MiniMax M3.1 Flash Preview**: API rate not published; Fit state unavailable\n**Nemotron-4 15B**: Self-hosted; infrastructure cost varies; Fits in one request\n\nMiniMax M3.1 Flash Preview has no comparable published API token rate. Nemotron-4 15B has no comparable published API token rate.",
+            "### Repository review\n50K fresh input + 3K output tokens\n\n**MiniMax M3.1 Flash Preview**: API rate not published; Fit state unavailable\n**Nemotron-4 15B**: Self-hosted; infrastructure cost varies; Does not fit in one request",
+            "### Cache-heavy agent loop\n200K cached + 20K fresh input + 10K output tokens\n\n**MiniMax M3.1 Flash Preview**: API rate not published; Fit state unavailable; Cached-input rate unavailable\n**Nemotron-4 15B**: Self-hosted; infrastructure cost varies; Does not fit in one request; Cached-input rate unavailable",
+            "MiniMax M3.1 Flash Preview has no comparable published API token rate.\n\nCached input falls back to the list input rate only where a cached rate is unpublished",
+            "## Specification differences\n### Context window\nMiniMax M3.1 Flash Preview",
+            "### Cached-input rate\nMiniMax M3.1 Flash Preview\n\nNo comparable hosted API rate",
+            "### Reasoning profile\nMiniMax M3.1 Flash Preview\n\nReasoning",
+            "### License\nMiniMax M3.1 Flash Preview\n\nNemotron-4 15B",
+            "### Release date\nMiniMax M3.1 Flash Preview\n\n2026-09-27",
+            "## Questions\n### Which is better for agentic tasks, MiniMax M3.1 Flash Preview or Nemotron-4 15B?\nMiniMax M3.1 Flash Preview and Nemotron-4 15B are not ranked on the public lane for agentic tasks, so no winner is named for agentic tasks.",
+            "8 confirmed releases, Sep 22–28\n\n- Anthropic logo Claude Sonnet 5.5 released Anthropic · Sep 28, 2026\n- ElevenLabs logo Eleven v4 and Eleven v4 Turbo released ElevenLabs · Sep 28, 2026\n- MiniMax logo MiniMax M3.1 Flash Preview released MiniMax · Sep 27, 2026"
+          ],
+          "brave_page_date": "2026-09-28T00:00:00Z"
+        },
+        {
+          "id": "s3",
+          "url": "https://x.com/MiniMaxAgent/status/2104079819881517400",
+          "title": "MiniMax_Agent on X: \"MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.\" / X",
+          "snippets": [
+            "# MiniMax\\_Agent on X: \"MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.\"\nMiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.",
+            "- @MiniMaxAgent MiniMax\\_Agent MiniMax (official) @MiniMaxAgent MiniMax's latest text model, M3.1-Flash-Preview, debuts today on MiniMax Code. Built for everyday development, it's fast, reliable, and ready for real work, from quick bug fixes to full features.",
+            "Open to new and existing users. Use them on any model: code with M3.1-Flash-Preview, or make videos with H3 7\n- @shiaho777 shiaho @shiaho777 Sep 27 You finally remembered the M series 1"
+          ],
+          "brave_page_date": "2026-09-27T05:24:55Z"
+        },
+        {
+          "id": "s4",
+          "url": "https://llmlearner.com/models/minimax-m3-1",
+          "title": "MiniMax M3.1: Specs, Pricing & Benchmarks - LLMLearner",
+          "snippets": [
+            "MiniMax M3.1 is an announced but unreleased model from MiniMax. Track confirmed information without treating unknown specifications, pricing or benchmarks…",
+            "# MiniMax M3.1\nMiniMax M3.1 is an announced upcoming model from MiniMax. It is not yet released, and LLMLearner does not treat unconfirmed specifications, availability, pricing or performance as product facts.",
+            "## Primary sources\n\n- MiniMax M3.1 technical report finance.sina.com.cn\n\n## Specifications\n\nMiniMax\n\nArchitecture\n\nUndisclosed",
+            "## Related models\n- MiniMax M3.1 Flash MiniMax · Sep 27, 2026\n- MiniMax Music 3.0 MiniMax · Aug 13, 2026\n- MiniMax H3 MiniMax · Jul 31, 2026\n- MiniMax M3 MiniMax · Jun 1, 2026"
+          ],
+          "brave_page_date": null
+        },
+        {
+          "id": "s5",
+          "url": "https://www.reddit.com/r/LocalLLaMA/comments/1wjujri/minimax_code_is_now_open_source_maybe_m31_is_the/",
+          "title": "r/LocalLLaMA on Reddit: MiniMax Code is now open source. Maybe M3.1 is the next thing to watch.",
+          "snippets": [
+            "# MiniMax Code is now open source. Maybe M3.1 is the next thing to watch.\nMiniMax has released the source code for MiniMax Code’s terminal agent:\n\nhttps://github.com/MiniMax-AI/minimax-code\n\nFor those unfamiliar with it, MiniMax Code is their coding-agent product built around long-horizon tasks, agent teams, and iterative verification.\n\nWhat’s included:\n\n* Terminal TUI\n\n* Headless CLI\n\n* Agent Client Protocol support\n\n* BYOK and custom providers\n\n* OpenAI- and Anthropic-compatible APIs",
+            "* Plan Mode and resumable sessions\n\n* Subagents, MCP, plugins, and skills\n\n* Code editing, command execution, and test verification\n\nThe default license for first-party code is MIT. The source release covers the terminal TUI, headless CLI, and ACP, but does not include the desktop application.",
+            "I’ve used M2.7 with Hermes Agent, and the combination has worked surprisingly well for agentic tasks. That experience is one reason I’m genuinely curious about M3.1 rather than just watching for another benchmark release.\n\nM3.1 now appears to be the next model update to watch. I’m holding off on benchmark speculation until public technical details and independent tests are available, but having the agent harness available should make future comparisons more transparent and reproducible.",
+            "Repo-level tests will tell us more than another benchmark chart. I’m looking forward to seeing how M3.1 performs in real agent workflows—not just isolated coding prompts.",
+            "## LegacyRemaster\nMinimax M3 didn't get much love."
+          ],
+          "brave_page_date": "2026-09-18T16:12:44Z"
+        },
+        {
+          "id": "s6",
+          "url": "https://www.reddit.com/r/MiniMax_AI/comments/1vqopkz/is_minimax_3_worth_it_over_claude_pro_in_terms_of/",
+          "title": "r/MiniMax_AI on Reddit: Is MiniMax 3 worth it over Claude Pro in terms of usage limits/quotas?",
+          "snippets": [
+            "# Is MiniMax 3 worth it over Claude Pro in terms of usage limits/quotas?\n## jakekerr\nThe usage is massively more than Claude Pro. Like not even in the same universe of usage limits.\n\n As a vibe coding architect, Minimax M3 is going to drive you crazy compared to Opus 4.8. As a worker bee coding engine that is *overseen* by Claude it's very, very good.",
+            "I then have Claude write a detailed \"build plan\" which I hand off to Minimax. Minimax is very good at that, and Opus cleans up a few mistakes. The result is massively fewer Claude tokens used and fast progress on token-intensive work.",
+            "## Infamous-V\nMinimax m3.1 coming soon in les than 48 hrs - Check Minimax discord - screenshot posted.",
+            "### Kind-Page4356 › Infamous-V\n\nAPI -> Minimax-m3.0\n\n## Time-Culture2549\n\nI think minimax is a sonnet replacement of you find its use in your everyday run. Even deepseek paygo is a good entry level",
+            "- Minimax M3.1-Flash Preview r/MiniMax\\_AI • Minimax M3.1-Flash Preview r/MiniMax\\_AI - Minimax M3.1-Flash Preview upvotes · comments\n- Minimax M3 Pro 2.7T r/MiniMax\\_AI • Minimax M3 Pro 2.7T upvotes · comments"
+          ],
+          "brave_page_date": "2026-08-17T10:39:12Z"
+        },
+        {
+          "id": "s7",
+          "url": "https://agentriot.com/news/ai-models/minimax-m31-flash-preview-code-token-plan-thinking",
+          "title": "MiniMax M3.1 Flash Preview: Code, Token Plan and Effort Controls",
+          "snippets": [
+            "MiniMax's M3.1-Flash-Preview is in Code and Token Plan, with tunable thinking depth and a 1M context window. Pay-as-you-go pricing is not listed for the preview.",
+            "# MiniMax M3.1-Flash-Preview arrives in Code and Token Plan, not general pay-as-you-go\nThe new model ID adds adjustable reasoning effort to a 1M-context, multimodal coding model. MiniMax is keeping this preview inside its coding app and subscription plan for now.\n\nMiniMax M3.1-Flash-Preview Token Plan Coding Agents",
+            "MiniMax has introduced **MiniMax-M3.1-Flash-Preview** in MiniMax Code and made it available to existing Token Plan subscribers. The September 27 posts pitch it as a faster, lighter option for development and high-volume work. The company's model guide adds an important boundary: **M3.1-Flash-Preview is available only through Token Plan and MiniMax Code for now**.",
+            "## The useful change is adjustable thinking\nMiniMax lists a **1,000,000-token context window** and text, image and video input for M3.1-Flash-Preview. Those are substantial capabilities, but MiniMax-M3 already has both. This preview's more specific developer-facing change is control over *thinking depth*: low, medium, high, xhigh or max. The model invocation guide says max is the default when the field is omitted.",
+            "Thinking itself cannot be turned off in this preview. MiniMax says a disabled-thinking request or none effort returns **HTTP 400**. On its Anthropic-compatible interface, the field is output_config.effort and thinking arrives in a separate thinking block. On the OpenAI-compatible Chat Completions interface, use reasoning_effort; the reasoning is returned in reasoning_content, separate from the answer in content.",
+            "The OpenAI-compatible API reference also says a multi-turn tool-calling app must retain the complete assistant response, including tool calls and reasoning content, to preserve continuity. That detail matters more to a coding-agent integration than the word “Flash” in the name.",
+            "The published model ID is exactly MiniMax-M3.1-Flash-Preview. MiniMax documents Anthropic-compatible and OpenAI-compatible request formats, but the Token Plan restriction still governs access. Teams should not assume their existing standard pay-as-you-go API key can invoke it merely because the endpoint format looks familiar.",
+            "## The subscription is clear; the per-token rate is not\nMiniMax says current Token Plan subscribers get M3.1-Flash-Preview **without extra setup**. The Token Plan pricing page lists Plus at **$22/month**, Max at **$55/month** and Ultra at **$132/month**, with rolling five-hour and weekly quota windows. Those are plan prices and quotas, not an M3.1 per-token tariff.",
+            "MiniMax's pay-as-you-go rate card lists M3 and older language models, but does not list M3.1-Flash-Preview as of September 27. Applying M3's token price to the preview would be a guess.",
+            "The text of MiniMax's Code announcement and Token Plan announcement describes speed and reliability without a measured latency figure or coding-benchmark score for M3.1. Treat “faster” as MiniMax's positioning, not an independently established performance gain. Subscribers can try the exact model ID, compare effort settings on their own agent tasks and watch token use and latency."
+          ],
+          "brave_page_date": "2026-09-27T21:08:30Z"
+        },
+        {
+          "id": "s8",
+          "url": "https://aireiter.com/blog/minimax-m3-1-release-api",
+          "title": "MiniMax M3.1: Release, API & Pricing Status (Aug 2026)",
+          "snippets": [
+            "MiniMax M3.1 was announced at WAIC 2026 but has no API pricing, model ID, or weights yet. Here's what's confirmed — and what MiniMax M3 costs today.",
+            "# MiniMax M3.1: Release, API & Pricing Status (Aug 2026)\nOn July 17, at the World Artificial Intelligence Conference in Shanghai, MiniMax put a model called M3.1 on stage. A month later, there is still nowhere official to buy it: no launch post on the MiniMax blog, no model ID in the API pricing docs, no listing on OpenRouter.",
+            "MiniMax M3.1 is real as an announcement, but as of August 18, 2026, the MiniMax model you can call, download, or pay for is still M3 — now at a permanently halved API price.",
+            "## What MiniMax Actually Announced at WAIC 2026\nEach specific M3.1 claim traces back to the WAIC event itself, not to a technical report, model card, or pricing page. The announcement centers on two improvements over M3: markedly stronger native multimodality and a \"million-level\" context window said to read an entire project's documentation and code repository in one pass. Positioning also shifted from coding agents toward enterprise work: industrial manufacturing, supply-chain collaboration, and engineering.",
+            "\"Its native multimodal capabilities have improved especially noticeably… million-level long context can fully understand an entire project's documents and code repository.\" — tech blogger IT 九熙, posting from WAIC via Sina News, July 17, 2026",
+            "The same Sina report describes the WAIC booth running M3-powered AI headphones and AI glasses that decompose complex instructions into executable steps, and follow-up coverage on July 19 referred to a \"MiniMax M3.1 series\" with improved multimodal understanding and reasoning. The cited WAIC coverage provided no parameter count, benchmark score, context-window API term, or pricing figure.",
+            "## Is MiniMax M3.1 Out Yet? The August 18 Status Check\nMiniMax M3.1 was not listed in any of the four linked official and distribution catalogs below, as of August 18, 2026:",
+            "| Channel | M3.1 status | What the page shows |\n| --- | --- | --- |\n| MiniMax official blog | No M3.1 post | Latest entries: Music 3.0 (Aug 13), H3 (Jul 31), M3 (Jun 1) |\n| MiniMax API pricing docs | No M3.1 model ID | Text lineup tops out at MiniMax-M3, plus M2.7 and legacy models |\n| OpenRouter MiniMax catalog | Not listed | 13 MiniMax models; M3 shows 1.05M context at $0.23/M input |\n| Hugging Face (MiniMaxAI) | No M3.1 weights | M3 weights are live: 428B total / 23B active parameters |",
+            "This is a catalog check, not a claim about every possible reseller. The self-label problem explains most \"it's already out\" reports anyway. On July 27, an r/MiniMax_AI user asked whether M3.1 had shipped after an AnythingLLM session on a MiniMax token-plan key returned:",
+            "\"It replied Iam minimiax 3.1\" — u/ahmedranaa, r/MiniMax_AI\n\nNo commenter could reproduce the label. A model's self-reported version is generated text, not release evidence, so treat \"the model said 3.1\" reports as noise until a model ID appears in an official catalog.",
+            "## M3.1 vs M3: What Changes and What Nobody Has Measured\nMiniMax M3.1 is framed as an incremental upgrade to MiniMax M3, the model released June 1, 2026, rather than a new architecture generation. Nothing published so far contradicts that reading.",
+            "| Dimension | MiniMax M3 (verified) | MiniMax M3.1 (announced) |\n| --- | --- | --- |\n| Architecture | 428B total / 23B active MoE, MiniMax Sparse Attention (MSA) | Undisclosed |\n| Context window | 1M tokens max, 512K guaranteed via API | \"Million-level\" claim, no API terms |\n| Multimodality | Native image + video input, desktop computer use | \"Markedly improved\" multimodality, zero benchmarks |\n| Positioning | Coding and agentic workflows | Enterprise: manufacturing, supply chain |\n| Access | API, OpenRouter, token plans, open weights | None yet |",
+            "M3's base is documented in the MSA design paper: at 1M-token context, M3 uses roughly 1/20th the per-token compute of MiniMax's previous generation, with over 9x faster prefill and 15x faster decoding. Whether M3.1 extends that architecture is exactly what a model card would confirm, and none exists yet.",
+            "## M3.1, M3 Pro, and the 2.7T Rumor Trail\n\"MiniMax M3.1\" and \"MiniMax M3 Pro\" are two names circulating for adjacent roadmap items, and pre-announcement reporting is why the naming is muddy. Before WAIC, Sohu reported that MiniMax's next release could carry either the M3.1 or the M3 Pro name, alongside claims of a separate 3T-scale model and a first domestic training cluster.",
+            "Commenters in that same r/MiniMax_AI thread use \"Pro,\" \"2.7T,\" and \"M3.1\" interchangeably. The most economical reading: M3.1 is the near-term refresh actually shown at WAIC, while M3 Pro remains an unconfirmed larger successor. That split is editorial interpretation, not a MiniMax statement.",
+            "## What MiniMax M3 Costs While You Wait\n| Channel | Input / 1M | Output / 1M | Cache read / 1M | Notes |\n| --- | --- | --- | --- | --- |\n| MiniMax API, ≤512K input | $0.30 | $1.20 | $0.06 | Permanent 50% off the June list of $0.60/$2.40 |\n| MiniMax API, >512K input | $0.60 | $2.40 | $0.12 | Long-context tier |\n| MiniMax API, priority tier | $0.45 | $1.80 | $0.09 | 1.5× standard, service\\_tier=priority |\n| OpenRouter (M3) | $0.23 | $0.96 | — | 1.05M context listed |\n| OpenRouter (M3 batch) | $0.15 | $0.60 | — | 524K context |\n| Token plans | — | — | — | $20/mo ≈ 1.7B, $50 ≈ 5.1B, $120 ≈ 9.8B tokens (launch post) |",
+            "A worked example: dumping a 400K-token repository into a request with 50K tokens of output costs about $0.12 + $0.06 = $0.18 at the standard tier. Crossing the 512K input boundary doubles all listed M3 rates, so long-context jobs are the ones to batch carefully.",
+            "Per MiniMax's own launch benchmarks, that money buys a model within a few points of Claude Opus 4.7 and GPT-5.5 on SWE-Bench Pro (59.0 vs 64.3 and 58.6) and MCP Atlas (74.2). M3 posts 83.5 on BrowseComp, ahead of Opus 4.7's 79.3.",
+            "The clear gaps sit on Terminal-Bench 2.1 (66.0 vs GPT-5.5's 78.2) and OSWorld-Verified (70.2 vs Opus 4.7's 82.8). All of these are vendor-reported, with scaffolding and sandbox details disclosed in the launch post's methodology section.",
+            "## Wait or Build: Choosing Between M3.1 and M3\nMost teams should build on M3 now, because nothing about M3.1 is measurable yet: no benchmark, no price, no API. M3.1's eventual pricing, licensing, and migration terms are unknown, so it belongs on a watch list, not in a budget.",
+            "If you need image/video understanding inside a very large context this quarter, M3 already ships it — native image and video input with a guaranteed 512K window (1M max) — and you can try MiniMax M3 directly before writing integration code. If you are waiting on M3.1 benchmark numbers, hold; do not budget until an official model ID, pricing, and access terms appear.",
+            "Self-hosters can already pull M3's weights under the MiniMax Community License; no M3.1 weights exist.",
+            "Community experience with M3 is split in a way that frames what M3.1 needs to fix:\n\n\"M3 isn't huge either at 430B, but it's an absolute beast; in the right harness, the model performs shockingly well.\" — u/ExcitementSubject361, r/MiniMax_AI",
+            "| Your situation | Do this now |\n| --- | --- |\n| Multimodal long-context work, live this quarter | M3 standard tier; keep inputs ≤512K where possible |\n| Need top-tier agentic coding scores today | M3 is close (SWE-Bench Pro 59.0) but not leading; benchmark before committing |\n| Self-hosting or data-residency requirements | M3 open weights under the Community License; no M3.1 weights exist |\n| Only want \"the newest MiniMax\" | Wait for an official M3.1 model ID; verify against the status table |",
+            "## MiniMax M3.1 FAQ\n### Is MiniMax M3.1 released?\nAnnounced at WAIC on July 17, 2026, but not released in any purchasable form. As of August 18 there is nothing to buy, call, or download.",
+            "### Is MiniMax M3.1 open source?\nNot announced either way, and no public M3.1 weights exist. MiniMax M3's weights (428B total / 23B active) are downloadable on Hugging Face under the MiniMax Community License.",
+            "### What is the MiniMax M3.1 API price?\nThe reference point is M3 at $0.30/M input and $1.20/M output for requests up to 512K tokens, after MiniMax made its 50% discount permanent.",
+            "### Is MiniMax M3.1 the same as M3 Pro?\nNot confirmed either way. Pre-WAIC reporting listed both names as candidates for MiniMax's next release; only M3.1 has been publicly shown, while the 2.7T-parameter M3 Pro remains unconfirmed.",
+            "### What context window does MiniMax M3.1 have?\n\"Million-level\" per the WAIC claims, the same class as M3's 1M-token maximum. No API-verified figure exists yet."
+          ],
+          "brave_page_date": "2026-08-18T03:32:20Z"
+        },
+        {
+          "id": "s9",
+          "url": "https://www.morphllm.com/minimax-m3",
+          "title": "MiniMax M3: 428B MoE, 1M Context, Multimodal. Architecture, Benchmarks, API (2026)",
+          "snippets": [
+            "# MiniMax M3: 428B MoE, 1M Context, Multimodal Coding Agent (2026)\n## MiniMax M3 Architecture: 428B MoE + MSA\n### MSA speedups vs MiniMax M2\nAt 1M context, MiniMax reports M3 runs more than 9x faster in the prefill stage and more than 15x faster in the decode stage versus MiniMax M2, with per-token compute at roughly 1/20 of the previous generation.",
+            "MiniMax M3 architecture at a glance (official, June 2026)\n\n| Specification | MiniMax M3 |\n| --- | --- |\n| Total parameters | 428 billion |\n| Active parameters per token | \\~23 billion |\n| Architecture | Sparse MoE |\n| Attention | GQA backbone + MiniMax Sparse Attention (MSA) |\n| Context window | 1,000,000 tokens |\n| Modality | Text + image + video in, text out |\n| License | Custom (minimax-community) |\n| Weights | Hugging Face: MiniMaxAI/MiniMax-M3 |\n| Released | June 1, 2026 |",
+            "## Benchmarks vs GLM 5.2, DeepSeek V4, GPT-5.5\n### Where M3 lands among open-weight models\nOpen-weight coding models, ranked by role (June 2026)\n\n| Model | Total / active | AA Index v4.3 | SWE-bench Verified | Output / 1M (official) | Best for |\n| --- | --- | --- | --- | --- | --- |\n| MiniMax M3 | 428B / 23B | 30 | 80.5% | $1.20 | Cheap multimodal + UI agent work |",
+            "## MiniMax M3 vs M2.7: What Changed\nMiniMax M2 (M2.7) vs M3\n\n| Dimension | MiniMax M2 / M2.7 | MiniMax M3 |\n| --- | --- | --- |\n| Total parameters | 230B | 428B (1.9x larger) |\n| Active parameters | \\~10B per token | \\~23B per token |\n| Modality | Text only | Text + image + video |\n| Attention | MoE + GQA | GQA + MiniMax Sparse Attention (MSA) |\n| Context (official) | 128K | 1M (8x larger) |\n| Interleaved thinking | Yes | Yes |\n| Morph model id | morph-minimax27-230b | morph-minimax3-428b |\n| Morph output / 1M | $1.20 | $1.02 |",
+            "### What is MiniMax M3's context window and parameter count?\n428B total / ~23B active, 1M-token context officially. MSA gives it >9x faster prefill and >15x faster decode versus M2 at 1M context, at about 1/20 the per-token compute. On Morph, morph-minimax3-428b serves a 256K context."
+          ],
+          "brave_page_date": "2026-07-12T00:00:00Z"
+        }
+      ],
+      "retrieval_time": "2026-10-04T03:19:49.254+08:00"
+    },
+    "questions": {
+      "s0__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[0]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s0__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[0]`; B=`sources[0].snippets[1]`; C=`sources[0].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[3]`; B=`sources[0].snippets[4]`; C=`sources[0].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s0__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[0].snippets[6]`; B=`sources[0].snippets[7]`; C=`sources[0].snippets[8]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[1]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s1__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[0]`; B=`sources[1].snippets[1]`; C=`sources[1].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s1__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[1].snippets[3]`; B=`sources[1].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s2__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[2]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s2__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[0]`; B=`sources[2].snippets[1]`; C=`sources[2].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s2__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[3]`; B=`sources[2].snippets[4]`; C=`sources[2].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s2__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[6]`; B=`sources[2].snippets[7]`; C=`sources[2].snippets[8]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s2__group9": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[9]`; B=`sources[2].snippets[10]`; C=`sources[2].snippets[11]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s2__group12": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[12]`; B=`sources[2].snippets[13]`; C=`sources[2].snippets[14]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s2__group15": {
+        "type": "choice",
+        "instructions": "A=`sources[2].snippets[15]`; B=`sources[2].snippets[16]`; C=`sources[2].snippets[17]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s3__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[3]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s3__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[3].snippets[0]`; B=`sources[3].snippets[1]`; C=`sources[3].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s4__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[4]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s4__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[0]`; B=`sources[4].snippets[1]`; C=`sources[4].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s4__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[4].snippets[3]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s5__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[5]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s5__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[5].snippets[0]`; B=`sources[5].snippets[1]`; C=`sources[5].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s5__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[5].snippets[3]`; B=`sources[5].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s6__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[6]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s6__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[6].snippets[0]`; B=`sources[6].snippets[1]`; C=`sources[6].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s6__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[6].snippets[3]`; B=`sources[6].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s7__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[7]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s7__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[7].snippets[0]`; B=`sources[7].snippets[1]`; C=`sources[7].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s7__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[7].snippets[3]`; B=`sources[7].snippets[4]`; C=`sources[7].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s7__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[7].snippets[6]`; B=`sources[7].snippets[7]`; C=`sources[7].snippets[8]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s7__group9": {
+        "type": "choice",
+        "instructions": "A=`sources[7].snippets[9]`. Keep A if it provides specific information usable in answering `intent`. Discard navigation, boilerplate, off-direction content, mere topic mentions, and obsolete predictions replaced by confirmed events in `sources`. Retain still-applicable explanations, comparisons, and examples.",
+        "criteria": {
+          "none": null,
+          "A": null
+        }
+      },
+      "s8__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[8]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s8__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[0]`; B=`sources[8].snippets[1]`; C=`sources[8].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[3]`; B=`sources[8].snippets[4]`; C=`sources[8].snippets[5]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group6": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[6]`; B=`sources[8].snippets[7]`; C=`sources[8].snippets[8]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group9": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[9]`; B=`sources[8].snippets[10]`; C=`sources[8].snippets[11]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group12": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[12]`; B=`sources[8].snippets[13]`; C=`sources[8].snippets[14]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group15": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[15]`; B=`sources[8].snippets[16]`; C=`sources[8].snippets[17]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group18": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[18]`; B=`sources[8].snippets[19]`; C=`sources[8].snippets[20]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group21": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[21]`; B=`sources[8].snippets[22]`; C=`sources[8].snippets[23]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group24": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[24]`; B=`sources[8].snippets[25]`; C=`sources[8].snippets[26]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s8__group27": {
+        "type": "choice",
+        "instructions": "A=`sources[8].snippets[27]`; B=`sources[8].snippets[28]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      },
+      "s9__filler": {
+        "type": "noul",
+        "instructions": "Judge the text of `sources[9]`. This source mostly repeats the topic name and generic phrasing without specific facts, or is a template article assembled from headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument with stated reasons."
+      },
+      "s9__group0": {
+        "type": "choice",
+        "instructions": "A=`sources[9].snippets[0]`; B=`sources[9].snippets[1]`; C=`sources[9].snippets[2]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null,
+          "C": null,
+          "AC": null,
+          "BC": null,
+          "ABC": null
+        }
+      },
+      "s9__group3": {
+        "type": "choice",
+        "instructions": "A=`sources[9].snippets[3]`; B=`sources[9].snippets[4]`. Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`. Discard navigation, boilerplate, off-direction content, and mere mentions of the subject without usable information. Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete, but still-applicable technical explanations, architectural comparisons, or practical examples remain useful. Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.",
+        "criteria": {
+          "none": null,
+          "A": null,
+          "B": null,
+          "AB": null
+        }
+      }
+    }
+  },
+  "status": 200,
+  "body": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "s0__filler": {
+        "type": "noul",
+        "noul": 0.48
+      },
+      "s0__group0": {
+        "type": "choice",
+        "choice": "BC",
+        "confidence": 0.13,
+        "probabilities": {
+          "A": 0.03,
+          "B": 0.04,
+          "AB": 0.06,
+          "AC": 0.19,
+          "BC": 0.24,
+          "none": 0,
+          "ABC": 0.21,
+          "C": 0.23
+        }
+      },
+      "s0__group3": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0.12,
+        "probabilities": {
+          "A": 0.23,
+          "B": 0.06,
+          "AB": 0.1,
+          "AC": 0.18,
+          "BC": 0.07,
+          "none": 0.04,
+          "ABC": 0.12,
+          "C": 0.2
+        }
+      },
+      "s0__group6": {
+        "type": "choice",
+        "choice": "C",
+        "confidence": 0.27,
+        "probabilities": {
+          "A": 0.06,
+          "B": 0.05,
+          "AB": 0.04,
+          "AC": 0.1,
+          "BC": 0.08,
+          "none": 0.24,
+          "ABC": 0.07,
+          "C": 0.36
+        }
+      },
+      "s1__filler": {
+        "type": "noul",
+        "noul": 0.07
+      },
+      "s1__group0": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0.46,
+        "probabilities": {
+          "B": 0,
+          "A": 0.52,
+          "AB": 0.14,
+          "AC": 0.24,
+          "none": 0.03,
+          "BC": 0.01,
+          "ABC": 0.05,
+          "C": 0.01
+        }
+      },
+      "s1__group3": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.59,
+        "probabilities": {
+          "A": 0.14,
+          "B": 0.05,
+          "none": 0.7,
+          "AB": 0.11
+        }
+      },
+      "s2__filler": {
+        "type": "noul",
+        "noul": 0.37
+      },
+      "s2__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.13,
+        "probabilities": {
+          "A": 0.09,
+          "B": 0.04,
+          "AB": 0.05,
+          "AC": 0.1,
+          "BC": 0.12,
+          "none": 0.24,
+          "ABC": 0.19,
+          "C": 0.17
+        }
+      },
+      "s2__group3": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.28,
+        "probabilities": {
+          "A": 0.06,
+          "B": 0.04,
+          "AB": 0.04,
+          "AC": 0.07,
+          "none": 0.37,
+          "BC": 0.08,
+          "ABC": 0.16,
+          "C": 0.18
+        }
+      },
+      "s2__group6": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.25,
+        "probabilities": {
+          "B": 0.03,
+          "A": 0.06,
+          "AB": 0.04,
+          "AC": 0.08,
+          "none": 0.35000000000000003,
+          "BC": 0.06,
+          "ABC": 0.12,
+          "C": 0.26
+        }
+      },
+      "s2__group9": {
+        "type": "choice",
+        "choice": "C",
+        "confidence": 0.19,
+        "probabilities": {
+          "A": 0.1,
+          "B": 0.03,
+          "AB": 0.04,
+          "AC": 0.08,
+          "BC": 0.06,
+          "none": 0.28,
+          "ABC": 0.13,
+          "C": 0.27999999999999997
+        }
+      },
+      "s2__group12": {
+        "type": "choice",
+        "choice": "C",
+        "confidence": 0.18,
+        "probabilities": {
+          "A": 0.09,
+          "B": 0.03,
+          "AB": 0.04,
+          "AC": 0.11,
+          "BC": 0.05,
+          "none": 0.27,
+          "ABC": 0.13,
+          "C": 0.27999999999999997
+        }
+      },
+      "s2__group15": {
+        "type": "choice",
+        "choice": "C",
+        "confidence": 0.18,
+        "probabilities": {
+          "A": 0.13,
+          "B": 0.03,
+          "AB": 0.04,
+          "AC": 0.09,
+          "none": 0.27,
+          "BC": 0.05,
+          "ABC": 0.1,
+          "C": 0.28
+        }
+      },
+      "s3__filler": {
+        "type": "noul",
+        "noul": 0.84
+      },
+      "s3__group0": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0.52,
+        "probabilities": {
+          "A": 0.58,
+          "B": 0.01,
+          "AB": 0.13,
+          "AC": 0.15,
+          "BC": 0.01,
+          "none": 0.02,
+          "ABC": 0.09,
+          "C": 0.01
+        }
+      },
+      "s4__filler": {
+        "type": "noul",
+        "noul": 0.77
+      },
+      "s4__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.35,
+        "probabilities": {
+          "A": 0.06,
+          "B": 0.04,
+          "AB": 0.04,
+          "AC": 0.06,
+          "BC": 0.05,
+          "none": 0.43,
+          "ABC": 0.07,
+          "C": 0.25
+        }
+      },
+      "s4__group3": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.35,
+        "probabilities": {
+          "A": 0.32,
+          "none": 0.68
+        }
+      },
+      "s5__filler": {
+        "type": "noul",
+        "noul": 0.22
+      },
+      "s5__group0": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.12,
+        "probabilities": {
+          "A": 0.21,
+          "B": 0.1,
+          "AB": 0.16,
+          "AC": 0.14,
+          "BC": 0.04,
+          "none": 0.23,
+          "ABC": 0.07,
+          "C": 0.05
+        }
+      },
+      "s5__group3": {
+        "type": "choice",
+        "choice": "none",
+        "confidence": 0.46,
+        "probabilities": {
+          "B": 0.1,
+          "A": 0.19,
+          "none": 0.59,
+          "AB": 0.12
+        }
+      },
+      "s6__filler": {
+        "type": "noul",
+        "noul": 0.3
+      },
+      "s6__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.18,
+        "probabilities": {
+          "B": 0.08,
+          "A": 0.06,
+          "AB": 0.08,
+          "AC": 0.09,
+          "none": 0.06,
+          "BC": 0.16,
+          "ABC": 0.29,
+          "C": 0.18
+        }
+      },
+      "s6__group3": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.15,
+        "probabilities": {
+          "B": 0.25,
+          "A": 0.18,
+          "none": 0.21,
+          "AB": 0.36
+        }
+      },
+      "s7__filler": {
+        "type": "noul",
+        "noul": 0.11
+      },
+      "s7__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.18,
+        "probabilities": {
+          "B": 0.09,
+          "A": 0.05,
+          "AB": 0.1,
+          "AC": 0.1,
+          "none": 0.05,
+          "BC": 0.18,
+          "ABC": 0.28,
+          "C": 0.15
+        }
+      },
+      "s7__group3": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.19,
+        "probabilities": {
+          "B": 0.09,
+          "A": 0.06,
+          "AB": 0.1,
+          "AC": 0.1,
+          "none": 0.05,
+          "BC": 0.21,
+          "ABC": 0.27999999999999997,
+          "C": 0.11
+        }
+      },
+      "s7__group6": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.21,
+        "probabilities": {
+          "B": 0.06,
+          "A": 0.07,
+          "AC": 0.15,
+          "AB": 0.11,
+          "none": 0.03,
+          "BC": 0.15,
+          "ABC": 0.3,
+          "C": 0.13
+        }
+      },
+      "s7__group9": {
+        "type": "choice",
+        "choice": "A",
+        "confidence": 0.1,
+        "probabilities": {
+          "A": 0.55,
+          "none": 0.45
+        }
+      },
+      "s8__filler": {
+        "type": "noul",
+        "noul": 0.16
+      },
+      "s8__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.15,
+        "probabilities": {
+          "B": 0.06,
+          "A": 0.1,
+          "AC": 0.12,
+          "AB": 0.11,
+          "none": 0.06,
+          "BC": 0.16999999999999998,
+          "ABC": 0.25,
+          "C": 0.13
+        }
+      },
+      "s8__group3": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.2,
+        "probabilities": {
+          "A": 0.08,
+          "B": 0.06,
+          "AB": 0.12,
+          "AC": 0.09,
+          "BC": 0.19,
+          "none": 0.05,
+          "ABC": 0.31,
+          "C": 0.1
+        }
+      },
+      "s8__group6": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.21,
+        "probabilities": {
+          "B": 0.05,
+          "A": 0.08,
+          "AB": 0.12,
+          "AC": 0.13,
+          "none": 0.03,
+          "BC": 0.15,
+          "ABC": 0.32,
+          "C": 0.12
+        }
+      },
+      "s8__group9": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.17,
+        "probabilities": {
+          "A": 0.1,
+          "B": 0.07,
+          "AB": 0.12,
+          "AC": 0.12,
+          "BC": 0.14,
+          "none": 0.08,
+          "ABC": 0.27,
+          "C": 0.1
+        }
+      },
+      "s8__group12": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.18,
+        "probabilities": {
+          "A": 0.1,
+          "B": 0.08,
+          "AB": 0.11,
+          "AC": 0.11,
+          "none": 0.08,
+          "BC": 0.14,
+          "ABC": 0.28,
+          "C": 0.1
+        }
+      },
+      "s8__group15": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.22,
+        "probabilities": {
+          "A": 0.1,
+          "B": 0.06,
+          "AB": 0.11,
+          "AC": 0.12,
+          "BC": 0.12,
+          "none": 0.07,
+          "ABC": 0.32,
+          "C": 0.1
+        }
+      },
+      "s8__group18": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.21,
+        "probabilities": {
+          "A": 0.11,
+          "B": 0.04,
+          "AB": 0.11,
+          "AC": 0.14,
+          "none": 0.08,
+          "BC": 0.11,
+          "ABC": 0.31,
+          "C": 0.1
+        }
+      },
+      "s8__group21": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.21,
+        "probabilities": {
+          "B": 0.07,
+          "A": 0.09,
+          "AB": 0.11,
+          "AC": 0.11,
+          "none": 0.07,
+          "BC": 0.15,
+          "ABC": 0.3,
+          "C": 0.1
+        }
+      },
+      "s8__group24": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.16,
+        "probabilities": {
+          "B": 0.05,
+          "A": 0.11,
+          "AC": 0.11,
+          "AB": 0.11,
+          "none": 0.12,
+          "BC": 0.13,
+          "ABC": 0.26,
+          "C": 0.11
+        }
+      },
+      "s8__group27": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.28,
+        "probabilities": {
+          "B": 0.19,
+          "A": 0.2,
+          "none": 0.15,
+          "AB": 0.46
+        }
+      },
+      "s9__filler": {
+        "type": "noul",
+        "noul": 0.15
+      },
+      "s9__group0": {
+        "type": "choice",
+        "choice": "ABC",
+        "confidence": 0.16,
+        "probabilities": {
+          "A": 0.04,
+          "B": 0.1,
+          "AB": 0.19,
+          "AC": 0.07,
+          "none": 0.09,
+          "BC": 0.21,
+          "ABC": 0.26,
+          "C": 0.04
+        }
+      },
+      "s9__group3": {
+        "type": "choice",
+        "choice": "AB",
+        "confidence": 0.45,
+        "probabilities": {
+          "B": 0.19,
+          "A": 0.14,
+          "none": 0.08,
+          "AB": 0.59
+        }
+      }
+    },
+    "usage": {
+      "input_tokens": 15536,
+      "output_tokens": 2503
+    }
+  }
+}

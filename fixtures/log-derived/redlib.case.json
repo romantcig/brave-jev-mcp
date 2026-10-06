@@ -1,0 +1,101 @@
+{
+  "id": "redlib",
+  "purpose": "GitHub 仓库正文与导航清洗",
+  "origin": {
+    "sample": "2026-10-01/042757-Vg9nJhJMFb.json",
+    "sample_sha256": "26560c65f5fc423b4aa64c22f78f6d36321dd1327b0d7957007a0156274b3758",
+    "source_indices": [
+      0,
+      2
+    ],
+    "captured_at": "2026-10-01T04:27:57.451+08:00",
+    "filter_rules_version": "filter-rules-3",
+    "question_set_id": "442d7d642e20"
+  },
+  "request": {
+    "params": {
+      "query": "site:github.com redlib alternative reddit frontend",
+      "count": 8,
+      "maximum_number_of_urls": 4,
+      "maximum_number_of_tokens": 3000,
+      "maximum_number_of_tokens_per_url": 600
+    },
+    "intent": "Find alternative open-source web frontends and tools for Reddit in 2026.",
+    "retrievalTime": "2026-10-01T04:27:57.451+08:00"
+  },
+  "config": {},
+  "data": {
+    "grounding": {
+      "generic": [
+        {
+          "url": "https://github.com/redlib-org/redlib",
+          "title": "GitHub - redlib-org/redlib: Private front-end for Reddit · GitHub",
+          "snippets": [
+            "Private front-end for Reddit .",
+            "# Redlib\n## Repository files navigation\n\nAn alternative private front-end to Reddit, with its origins in Libreddit.\n\n**10-second pitch:** Redlib is a private front-end like Invidious but for Reddit. Browse the coldest takes of r/unpopularopinion without being tracked.",
+            "## Table of Contents\n1. Redlib\n2. Instances\n3. About\n  - Built with\n  - How is it different from other Reddit front ends?\n    - Teddit\n    - Libreddit\n4. Comparison\n  - Speed\n  - Privacy\n    - Reddit\n    - Redlib\n      - Server\n5. Deployment\n  - Docker\n    - Docker Compose\n    - Docker CLI\n  - Podman\n    - Quadlets\n  - Binary\n    - Running as a systemd service\n  - Building from source",
+            "# About\nFind Redlib on 💬 Matrix, 🐋 Quay.io, :octocat: GitHub, and 🦊 GitLab.\n\nRedlib hopes to provide an easier way to browse Reddit, without the ads, trackers, and bloat. Redlib was inspired by other alternative front-ends to popular services such as Invidious for YouTube, Nitter for Twitter, and Bibliogram for Instagram.\n\nRedlib currently implements most of Reddit's (signed-out) functionalities but still lacks a few features.",
+            "## How is it different from other Reddit front ends?\n### Teddit\nTeddit is another awesome open source project designed to provide an alternative frontend to Reddit. There is no connection between the two, and you're welcome to use whichever one you favor. Competition fosters innovation and Teddit's release has motivated me to build Redlib into an even more polished product.",
+            "### Libreddit\nWhile originating as a fork of Libreddit, the name \"Redlib\" was adopted to avoid legal issues, as Reddit only allows the use of their name if structured as \"XYZ For Reddit\".",
+            "- **HTTP header mimicking**: Efforts are made to send along as many of the official app's headers as possible to reduce the likelihood of Reddit's crackdown on Redlib's requests.",
+            "# Configuration\n## About\nPrivate front-end for Reddit\n\n### Topics\n\nprivacy privacy-friendly-alternatives privacy-frontend rust"
+          ]
+        },
+        {
+          "url": "https://github.com/lotillc/redlib-loti",
+          "title": "GitHub - lotillc/redlib-loti: Private front-end for Reddit",
+          "snippets": [
+            "Private front-end for Reddit .",
+            "# Saved searches\n# Search code, repositories, users, issues, pull requests...\n\n# Provide feedback\n\nlotillc / **redlib-loti** Public\n\nforked from redlib-org/redlib\n\nPrivate front-end for Reddit",
+            "# Redlib\n# lotillc/redlib-loti\n\n## Repository files navigation\n\nAn alternative private front-end to Reddit, with its origins in Libreddit.",
+            "## Table of Contents\n1. Redlib\n2. Instances\n3. About\n  - Built with\n  - How is it different from other Reddit front ends?\n    - Teddit\n    - Libreddit\n4. Comparison\n  - Speed\n  - Privacy\n    - Reddit\n    - Redlib\n      - Server\n      - Official instance (redlib.matthew.science)\n5. Deployment\n  - Docker\n    - Docker Compose\n    - Docker CLI\n  - Binary\n    - Running as a systemd service\n  - Building from source",
+            "# Instances\n🔗 **Want to automatically redirect Reddit links to Redlib? Use LibRedirect or Privacy Redirect!**\n\nAn up-to-date table of instances is available in Markdown and machine-readable JSON.\n\nBoth files are part of the redlib-instances repository. To contribute your self-hosted instance to the list, see the redlib-instances README.",
+            "# Comparison\n## Speed\nLast tested on January 12, 2024.\n\nResults from Google PageSpeed Insights (Redlib Report, Reddit Report).\n\n| Performance metric | Redlib | Reddit |\n| --- | --- | --- |\n| Speed Index | 0.6s | 1.9s |\n| Performance Score | 100% | 64% |\n| Time to Interactive | 2.8s | 12.4s |",
+            "# Configuration\n## About\nPrivate front-end for Reddit"
+          ]
+        }
+      ],
+      "map": []
+    },
+    "sources": {
+      "https://github.com/redlib-org/redlib": {
+        "title": "GitHub - redlib-org/redlib: Private front-end for Reddit · GitHub",
+        "hostname": "github.com",
+        "age": [
+          "Friday, January 12, 2024",
+          "2024-01-12",
+          "992 days ago",
+          "2024-01-12T00:00:00Z"
+        ],
+        "snippet": "Teddit is another awesome open source project designed to provide an alternative frontend to Reddit. There is no connection between the two, and you're welcome to use whichever one you favor."
+      },
+      "https://github.com/lotillc/redlib-loti": {
+        "title": "GitHub - lotillc/redlib-loti: Private front-end for Reddit",
+        "hostname": "github.com",
+        "age": [],
+        "snippet": "Teddit is another awesome open source project designed to provide an alternative frontend to Reddit. There is no connection between the two, and you're welcome to use whichever one you favor."
+      }
+    }
+  },
+  "checks": [
+    {
+      "source": 0,
+      "keep": [
+        "Teddit",
+        "HTTP header mimicking"
+      ],
+      "absent": [
+        "Repository files navigation"
+      ]
+    },
+    {
+      "source": 1,
+      "keep": [
+        "LibRedirect or Privacy Redirect"
+      ],
+      "absent": [
+        "Repository files navigation"
+      ]
+    }
+  ]
+}

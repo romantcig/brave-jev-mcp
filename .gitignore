@@ -1,0 +1,36 @@
+/node_modules
+/dist
+/scratch
+.env
+secrets/*
+!secrets/brave_api_key.txt.example
+
+# generated / runtime output
+__pycache__/
+.gsd/
+
+# private notes (Jev performance info restricted by TypeSafe MCA)
+notes/private-*.md
+filter-notes.md
+CLAUDE.local.md
+
+# planning system stays local, never published
+.planning/
+notes/
+PLAN.md
+.claude/
+AGENTS.md
+AGENT_LEARNINGS.md
+.zcode/
+.zcodeignore
+# 本地开发和实验工具
+/dev/
+
+# 本地归档
+/archive/
+
+# markdown
+*.md
+!/README.md
+!/README_CHINESE.md
+!/FILTERING.md

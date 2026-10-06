@@ -1,0 +1,30 @@
+{
+  "id": "empty",
+  "purpose": "真实空搜索结果，不产生模型请求",
+  "origin": {
+    "sample": "2026-10-04/7f466587.json",
+    "sample_sha256": "586e2a8f45dc518e63943425b7dd0a3c1addf6dd587f8b8c3a8fa717a07adefc",
+    "source_indices": [],
+    "captured_at": "2026-10-04T04:40:48.028+08:00",
+    "filter_rules_version": "filter-rules-16",
+    "question_set_id": "0ef644dda1ad"
+  },
+  "request": {
+    "params": {
+      "query": "inurl:atom.xml",
+      "count": 10,
+      "maximum_number_of_urls": 5,
+      "maximum_number_of_tokens": 4000
+    },
+    "intent": "Find websites with atom.xml in their URL path."
+  },
+  "config": {},
+  "data": {
+    "grounding": {
+      "generic": [],
+      "map": []
+    },
+    "sources": {}
+  },
+  "checks": []
+}
