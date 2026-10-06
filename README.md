@@ -1,6 +1,6 @@
 # Brave Jev MCP
 
-English | [简体中文](README_CHINESE.md)
+English | [简体中文](https://github.com/romantcig/brave-jev-mcp/blob/release/README_CHINESE.md)
 
 When an AI searches the web, the results often include generic articles, site navigation, and passages that mention the right keywords without answering the question. This material consumes context and leaves the AI to find answers among unrelated information.
 
@@ -111,4 +111,4 @@ Snippets follow the same principle: low retention probabilities trigger removal,
 
 Use `mode: "on"` for everyday searches, `test` to inspect complete samples, or `off` to disable Jev and retain only basic local cleanup. Restart the MCP server after changing the mode.
 
-To store configuration elsewhere, set `JEV_FILTER_CONFIG_FILE` to the desired file path and create that file yourself. See the [filter configuration guide (Chinese)](FILTERING.md) for full configuration, thresholds, and logging details.
+To store configuration elsewhere, set `JEV_FILTER_CONFIG_FILE` to the desired file path and create that file yourself. See the [filter configuration guide (Chinese)](https://github.com/romantcig/brave-jev-mcp/blob/release/FILTERING.md) for full configuration, thresholds, and logging details.

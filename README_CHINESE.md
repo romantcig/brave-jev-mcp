@@ -1,6 +1,6 @@
 # Brave Jev MCP
 
-[English](README.md) | 简体中文
+[English](https://github.com/romantcig/brave-jev-mcp/blob/release/README.md) | 简体中文
 
 AI 联网搜索时，拿到的内容经常混着空泛文章、网站导航，以及提到了关键词却回答不了问题的段落。这些内容会占用上下文，也让 AI 需要从更多无关信息中寻找答案。
 
@@ -111,4 +111,4 @@ A、B、C 分别代表三个片段，选项中的字母表示要保留的片段�
 
 日常使用保持 `mode: "on"` 即可。想检查完整样本时用 `test`；想关闭 Jev、只保留本地基础清理时用 `off`。修改后都需要重启 MCP。
 
-如果需要把配置放在其他位置，可以通过 `JEV_FILTER_CONFIG_FILE` 指定文件路径，并自行创建该文件。完整配置、阈值和日志说明见 [过滤层配置指南](FILTERING.md)。
+如果需要把配置放在其他位置，可以通过 `JEV_FILTER_CONFIG_FILE` 指定文件路径，并自行创建该文件。完整配置、阈值和日志说明见 [过滤层配置指南](https://github.com/romantcig/brave-jev-mcp/blob/release/FILTERING.md)。
