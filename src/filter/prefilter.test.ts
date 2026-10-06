@@ -155,7 +155,7 @@ describe('stripBoilerplateLines', () => {
 
   it('reports emptied for a snippet made only of boilerplate lines', () => {
     const result = stripBoilerplateLines(
-      'Share\n\nAdvertisement\n\nWe use cookies',
+      'Share\n\nTable of contents\n\nOn this page',
       BOILERPLATE_PREFIXES,
       'Title'
     );

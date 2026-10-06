@@ -7,18 +7,12 @@
 export const METADATA_KEYS: ReadonlySet<string> = new Set([
   'author',
   'publisher',
-  'editor',
-  'sameAs',
-  'citation',
   'keywords',
   'articleSection',
   'inLanguage',
   'isAccessibleForFree',
   'datePublished',
   'dateModified',
-  'wordCount',
-  'timeRequired',
-  'interactionStatistic',
   'image',
   'url',
   '@context',
@@ -28,14 +22,6 @@ export const METADATA_KEYS: ReadonlySet<string> = new Set([
   'mainEntityOfPage',
   'breadcrumb',
   'itemListElement',
-
-  'dateCreated',
-  'answerCount',
-  'duration',
-  'genre',
-  'offers',
-  'partOfSeries',
-  'productionCompany',
 ]);
 
 /** `description` 只有长于这个字符数才算正文（笔记 §1）。 */
@@ -93,8 +79,7 @@ export function parseJsonFragment(text: string): unknown | null {
 /**
  * 从 schema.org 节点按固定顺序抽正文段，每项成为独立一段：`articleBody`；长于 200
  * 字符的 `description`；与来源标题不同的 `headline`；FAQ `mainEntity[]` 拼成
- * `Q: <name>\nA: <text>`（缺 `name` 只出 `A: <text>`）；HowTo `step[]` 的 `text` 或
- * `name`；问答页 `suggestedAnswer[].text`；顶层 `acceptedAnswer.text`。
+ * `Q: <name>\nA: <text>`（缺 `name` 只出 `A: <text>`）。
  * 数组对每个元素递归同样处理；标量与非 schema.org 对象返回空数组。
  * @returns 正文段，顺序即抽取顺序
  */
@@ -123,23 +108,6 @@ export function extractBodyParts(node: unknown, sourceTitle: string): string[] {
     const name = own(entity, 'name');
     parts.push(nonEmptyString(name) ? `Q: ${name}\nA: ${text}` : `A: ${text}`);
   }
-
-  for (const step of asList(own(node, 'step'))) {
-    if (!isRecord(step)) continue;
-    const text = own(step, 'text');
-    const name = own(step, 'name');
-    if (nonEmptyString(text)) parts.push(text);
-    else if (nonEmptyString(name)) parts.push(name);
-  }
-
-  for (const answer of asList(own(node, 'suggestedAnswer'))) {
-    const text = isRecord(answer) ? own(answer, 'text') : undefined;
-    if (nonEmptyString(text)) parts.push(text);
-  }
-
-  const accepted = own(node, 'acceptedAnswer');
-  const acceptedText = isRecord(accepted) ? own(accepted, 'text') : undefined;
-  if (nonEmptyString(acceptedText)) parts.push(acceptedText);
 
   return parts;
 }

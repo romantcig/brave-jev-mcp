@@ -34,15 +34,6 @@ const FAQ = JSON.stringify({
 /** 仿 explainx 来源片段 2 的面包屑：`name` 与 `item` 都是笔记元数据表的原条目。 */
 const BREADCRUMB = JSON.stringify({ name: 'Blog', item: 'https://www.explainx.ai/blog' });
 
-/** 按 QAPage 夹具构造的正文答案，suggestedAnswer[].text 应被提取。 */
-const QA_PAGE = JSON.stringify({
-  name: 'How do I generate types?',
-  dateCreated: '2023-02-24T19:28:00Z',
-  dateModified: '2023-03-01T00:00:00Z',
-  answerCount: 2,
-  suggestedAnswer: [{ text: 'Use the typegen CLI.' }, { text: 'Or write them by hand.' }],
-});
-
 describe('parseJsonFragment', () => {
   it('returns the parsed object for an object literal, ignoring surrounding whitespace', () => {
     assert.deepEqual(parseJsonFragment('  {"a": 1}\n'), { a: 1 });
@@ -81,24 +72,18 @@ describe('METADATA_KEYS', () => {
     for (const key of ['author', 'publisher', '@context', '@type', 'name', 'item', 'breadcrumb']) {
       assert.ok(METADATA_KEYS.has(key), key);
     }
-    for (const key of ['dateCreated', 'answerCount', 'duration', 'genre', 'offers']) {
-      assert.ok(METADATA_KEYS.has(key), key);
-    }
   });
 
   it('never lists a body key', () => {
-    for (const key of ['articleBody', 'description', 'headline', 'mainEntity', 'step']) {
+    for (const key of ['articleBody', 'description', 'headline', 'mainEntity']) {
       assert.equal(METADATA_KEYS.has(key), false, key);
     }
   });
 });
 
 describe('extractBodyParts', () => {
-  it('emits parts in the fixed order: articleBody, description, headline, FAQ, steps, answers', () => {
+  it('emits parts in the fixed order: articleBody, description, headline, FAQ', () => {
     const node = {
-      acceptedAnswer: { text: 'Top-level answer.' },
-      suggestedAnswer: [{ text: 'Suggested.' }],
-      step: [{ text: 'Step one.' }],
       mainEntity: [{ name: 'Q1', acceptedAnswer: { text: 'A1' } }],
       headline: 'A different headline',
       description: 'd'.repeat(201),
@@ -110,9 +95,6 @@ describe('extractBodyParts', () => {
       'd'.repeat(201),
       'A different headline',
       'Q: Q1\nA: A1',
-      'Step one.',
-      'Suggested.',
-      'Top-level answer.',
     ]);
   });
 
@@ -176,28 +158,6 @@ describe('splitJsonFragment', () => {
     });
   });
 
-  it('converts HowTo steps using text, falling back to name', () => {
-    const fragment = JSON.stringify({
-      '@type': 'HowTo',
-      step: [{ text: 'Install the CLI.' }, { name: 'Run typegen' }, { position: 3 }],
-    });
-
-    assert.deepEqual(splitJsonFragment(fragment, TITLE), {
-      action: 'converted',
-      parts: ['Install the CLI.', 'Run typegen'],
-    });
-  });
-
-  it('converts QAPage suggestedAnswer texts and a top-level acceptedAnswer text', () => {
-    assert.deepEqual(splitJsonFragment(QA_PAGE, TITLE), {
-      action: 'converted',
-      parts: ['Use the typegen CLI.', 'Or write them by hand.'],
-    });
-    assert.deepEqual(
-      splitJsonFragment(JSON.stringify({ acceptedAnswer: { text: 'Only answer.' } }), TITLE),
-      { action: 'converted', parts: ['Only answer.'] }
-    );
-  });
 
   it('recurses into a top-level array and collects body parts from every element', () => {
     const fragment = `[${BREADCRUMB}, ${JSON.stringify({ articleBody: 'From the array.' })}]`;

@@ -9,23 +9,14 @@ export const BOILERPLATE_PREFIXES: readonly string[] = [
   'Continue after ad',
   'Share',
   'Release Time:',
-  'READ MORE',
-  'Cite this article',
   // 自带 `##` 标记的条目：行与前缀两侧都按同一 normalizeLine 归一化后再比
   '## Frequently Asked Questions',
-  'Advertisement',
-  'Sponsored',
-  'Subscribe to our newsletter',
-  'Sign up for our newsletter',
-  'We use cookies',
-  'This site uses cookies',
-  'Accept all cookies',
-  'Skip to content',
   'Table of contents',
   'On this page',
   'Related articles',
   'Read next',
-  // 媒体页内嵌的付费情报服务推广标记。
+  // ⚠️ 观察期条目：站点级付费情报推广标记，7 天实测各命中 1 次且来自同一页面，
+  // 未过"页面/路径内频率占 7 成"门槛。后续样本确认全站高频则转正，长期低频则删除。
   'Go deeper with GlobalData',
   'Access deeper industry intelligence',
 ];
