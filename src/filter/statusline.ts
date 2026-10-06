@@ -5,6 +5,12 @@
  */
 
 import type { FilterStats, JevFailKind, SourceDropReason } from './types.js';
+import { DEFAULT_CONFIG_FILE, JEV_CONFIG_FILE_ENV } from './config.js';
+
+/** 标准错误与工具返回共用配置指引，避免只给出无法操作的状态码。 */
+export const JEV_KEY_SETUP_HINT =
+  "Set TYPESAFE_API_KEY to your Jev API key in this MCP server's env configuration, then restart the MCP server. " +
+  `To disable Jev, set "mode": "off" in the JSON file selected by ${JEV_CONFIG_FILE_ENV}, or ${DEFAULT_CONFIG_FILE} when unset, then restart the MCP server.`;
 
 /** 状态行识别的失败类型：per_source 的 fail_kind 加上熔断与无密钥。 */
 type StatusLineFailKind = JevFailKind | 'no_key' | 'circuit_breaker';
@@ -171,5 +177,6 @@ function formatFilterError(
   }
 
   const code = failStatusMap.get(primaryKind) ?? defaultCode;
-  return `[error] [${countDesc}: filter ${reason}, raw sources kept] [${code}]`;
+  const help = primaryKind === 'no_key' ? ` ${JEV_KEY_SETUP_HINT}` : '';
+  return `[error] [${countDesc}: filter ${reason}, raw sources kept] [${code}]${help}`;
 }

@@ -4,9 +4,9 @@
  * 宿主持有初始化后的配置，改文件需重启对应 MCP；stdout 留给协议通信。
  */
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   DEFAULT_JEV_CONCURRENCY,
   DEFAULT_JEV_MODEL,
@@ -15,10 +15,12 @@ import {
 } from './jev/questions.js';
 import type { FilterConfig, FilterMode, JevThresholds } from './types.js';
 
-/** 指向配置文件的唯一配置类环境变量；未设 → 全部默认（mode off）。 */
+/** 配置路径覆盖；未设时使用主目录下的默认文件。 */
 export const JEV_CONFIG_FILE_ENV = 'JEV_FILTER_CONFIG_FILE';
 
-/** 合法模式仅 off/test/on；其他值告警并回退 off。 */
+export const DEFAULT_CONFIG_FILE = '~/.brave-jev/config.json';
+
+/** 合法模式仅 off/test/on；其他值告警并回退 on。 */
 const MODES: ReadonlySet<string> = new Set<FilterMode>(['off', 'test', 'on']);
 
 const isFilterMode = (value: string): value is FilterMode => MODES.has(value);
@@ -114,13 +116,13 @@ export function parseFilterConfigObject(
   }
   const file = configFileRecord(raw);
 
-  // 归一模式：合法值照常使用，其他任何值告警并回退 off；宿主初始化后复用配置。
-  let mode: FilterMode = 'off';
+  // 归一模式：合法值照常使用，其他任何值告警并回退 on；宿主初始化后复用配置。
+  let mode: FilterMode = 'on';
   if (Object.hasOwn(file, 'mode')) {
     const value = file.mode;
     const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (isFilterMode(text)) mode = text;
-    else warn(ignored('mode', value, 'off'));
+    else warn(ignored('mode', value, 'on'));
   }
 
   // jev 组：model / timeout_ms / concurrency
@@ -196,28 +198,45 @@ export function parseFilterConfigObject(
 }
 
 /**
- * 加载指定配置文件；未指定用默认值，读取或解析失败时告警并回落。
+ * 加载指定配置文件；未指定时自动创建并读取默认文件。
+ * 只以独占方式创建缺失的默认文件，已有配置不覆盖；自定义路径不自动创建。
+ * homeDir 供测试隔离文件系统，生产默认使用系统主目录。
  */
-export function loadFilterConfig(env: Record<string, string | undefined>): FilterConfig {
-  const filePath = env[JEV_CONFIG_FILE_ENV]?.trim();
+export function loadFilterConfig(
+  env: Record<string, string | undefined>,
+  homeDir = homedir()
+): FilterConfig {
+  const configuredPath = env[JEV_CONFIG_FILE_ENV]?.trim();
+  const filePath = configuredPath
+    ? expandHome(configuredPath)
+    : join(homeDir, '.brave-jev', 'config.json');
 
   let raw: unknown;
-  if (filePath) {
-    try {
-      // 容忍编辑器写入的 UTF-8 BOM，避免合法 JSON 因编码标记失效。
-      raw = JSON.parse(readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
-      if (raw === null) {
-        // 顶层 null 也要告警；随后按未配置处理，避免重复告警。
-        console.error('[jev-filter] config: top level is not a JSON object; using all defaults.');
-        raw = undefined;
+  try {
+    if (!configuredPath) {
+      mkdirSync(dirname(filePath), { recursive: true });
+      try {
+        writeFileSync(filePath, JSON.stringify({ mode: 'on' }, null, 2) + '\n', {
+          encoding: 'utf8',
+          flag: 'wx',
+        });
+      } catch (error) {
+        // 多个 MCP 进程可同时启动；已存在的文件交给后续读取。
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       }
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(
-        `[jev-filter] Unable to read config file '${filePath}': ${reason}; using the built-in defaults.`
-      );
+    }
+    // 容忍编辑器写入的 UTF-8 BOM，避免合法 JSON 因编码标记失效。
+    raw = JSON.parse(readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+    if (raw === null) {
+      console.error('[jev-filter] config: top level is not a JSON object; using all defaults.');
       raw = undefined;
     }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[jev-filter] Unable to create or read config file '${filePath}': ${reason}; using the built-in defaults (mode on).`
+    );
+    raw = undefined;
   }
 
   return parseFilterConfigObject(raw);

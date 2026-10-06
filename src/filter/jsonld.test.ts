@@ -158,7 +158,6 @@ describe('splitJsonFragment', () => {
     });
   });
 
-
   it('recurses into a top-level array and collects body parts from every element', () => {
     const fragment = `[${BREADCRUMB}, ${JSON.stringify({ articleBody: 'From the array.' })}]`;
 

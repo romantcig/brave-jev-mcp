@@ -117,13 +117,13 @@ async function run(mode: FilterMode, rawConfig: Record<string, unknown> = {}) {
     await client.connect(transport);
     const tool = (await client.listTools()).tools.find((item) => item.name === toolName);
     assert.ok(tool, '工具未注册');
-    assert.deepEqual(tool.inputSchema.required, ['query', 'intent']);
+    assert.deepEqual(tool.inputSchema.required, mode === 'off' ? ['query'] : ['query', 'intent']);
     assert.equal(tool.outputSchema, undefined);
     const response = await client.callTool({
       name: toolName,
       arguments: {
         ...fixture.request.params,
-        intent: fixture.request.intent,
+        ...(mode === 'off' ? {} : { intent: fixture.request.intent }),
       },
     });
     assert.ok(!response.isError, '工具返回错误');
@@ -134,7 +134,7 @@ async function run(mode: FilterMode, rawConfig: Record<string, unknown> = {}) {
     assert.equal(response.structuredContent, undefined);
     const log = await readLog(temp);
     assert.equal(log.request.query, fixture.request.params.query);
-    assert.equal(log.request.intent, fixture.request.intent);
+    assert.equal(log.request.intent, mode === 'off' ? '' : fixture.request.intent);
     assert.doesNotMatch(stderr, /\[smoke-stub-failed\]/);
     if (!live) {
       assert.equal((stderr.match(/\[smoke-brave\]/g) ?? []).length, 1);

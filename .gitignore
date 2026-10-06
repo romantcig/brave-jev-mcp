@@ -33,3 +33,4 @@ AGENT_LEARNINGS.md
 # markdown
 *.md
 **/*.md
+!/README_CHINESE.md

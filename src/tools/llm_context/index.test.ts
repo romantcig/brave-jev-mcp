@@ -3,7 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { connectTestClient, useTestClient } from '../../testUtils/mcpTestHarness.js';
+import {
+  connectTestClient,
+  useTestClient as useSharedTestClient,
+} from '../../testUtils/mcpTestHarness.js';
 import { JEV_CONFIG_FILE_ENV } from '../../filter/config.js';
 import { localIsoWithOffset } from '../../filter/logging.js';
 import { FILTER_RULES_VERSION } from '../../filter/version.js';
@@ -13,7 +16,7 @@ import { name, resetFilterStateForTest } from './index.js';
 import { LlmContextInputSchema, RequestParamsSchema } from './schemas/input.js';
 
 // 每个用例前后清理配置单例并隔离 JEV_FILTER_CONFIG_FILE，避免测试间共享状态。
-const FILTER_ENV_VARS = [JEV_CONFIG_FILE_ENV] as const;
+const FILTER_ENV_VARS = [JEV_CONFIG_FILE_ENV, 'TYPESAFE_API_KEY'] as const;
 
 /** 临时配置目录：整个文件一个，测后统一清理。 */
 const configDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-test-'));
@@ -21,7 +24,7 @@ const configDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-test-'));
 // 测试日志统一写临时目录，避免污染真实日志；其余配置默认 off。
 const defaultLogDir = mkdtempSync(join(tmpdir(), 'jev-llm-context-logs-'));
 const defaultConfigPath = join(configDir, 'default-config.json');
-writeFileSync(defaultConfigPath, JSON.stringify({ log_dir: defaultLogDir }), 'utf8');
+writeFileSync(defaultConfigPath, JSON.stringify({ mode: 'off', log_dir: defaultLogDir }), 'utf8');
 
 after(() => {
   rmSync(configDir, { recursive: true, force: true });
@@ -33,6 +36,8 @@ after(() => {
  * 清掉惰性单例。返回文件路径，供"改内容后再搜索"的用例复用同一路径。
  * 配置对象默认注入临时 `log_dir`（用例显式给出时以用例为准）。
  */
+let configRevision = 0;
+
 const useFilterConfig = (
   value: unknown,
   filename = `config-${Date.now()}-${Math.random()}.json`
@@ -42,6 +47,7 @@ const useFilterConfig = (
   writeFileSync(filePath, JSON.stringify(withLogDir), 'utf8');
   process.env[JEV_CONFIG_FILE_ENV] = filePath;
   resetFilterStateForTest();
+  configRevision++;
   return filePath;
 };
 
@@ -53,6 +59,7 @@ const useIsolatedFilterEnv = () => {
   before(() => {
     for (const key of FILTER_ENV_VARS) delete process.env[key];
     process.env[JEV_CONFIG_FILE_ENV] = defaultConfigPath;
+    process.env.TYPESAFE_API_KEY = 'test-jev-key';
     resetFilterStateForTest();
   });
 
@@ -62,6 +69,37 @@ const useIsolatedFilterEnv = () => {
       else process.env[key] = originalEnv[key];
     }
     resetFilterStateForTest();
+  });
+};
+
+// 用例更换启动配置后重建 MCP，确保实际注册的参数与配置一致。
+const useTestClient = (responder: Parameters<typeof useSharedTestClient>[0]) => {
+  const initialClient = useSharedTestClient(responder);
+  let active: Awaited<ReturnType<typeof connectTestClient>>;
+  let revision: number;
+  let reconnecting: Promise<void> | undefined;
+  before(() => {
+    active = initialClient();
+    revision = configRevision;
+  });
+  after(async () => {
+    if (active !== initialClient()) await active.close();
+  });
+  const current = async () => {
+    if (revision !== configRevision) {
+      revision = configRevision;
+      reconnecting = (async () => {
+        await active.close();
+        active = await connectTestClient();
+      })();
+    }
+    await reconnecting;
+    return active;
+  };
+  return () => ({
+    callTool: async (...args: Parameters<typeof active.callTool>) =>
+      (await current()).callTool(...args),
+    listTools: async () => (await current()).listTools(),
   });
 };
 
@@ -77,6 +115,13 @@ const WHITELIST = [
   'freshness',
   'goggles',
 ];
+
+const EXPECTED_DEFAULT_BUDGET = {
+  count: 10,
+  maximum_number_of_urls: 5,
+  maximum_number_of_tokens: 4000,
+  maximum_number_of_tokens_per_url: 800,
+};
 
 // 最小合法上游载荷：两个来源；第一个带完整元数据（age 四元数组），第二个 age 为空数组
 const braveResponse = {
@@ -125,18 +170,18 @@ describe(name, () => {
     }
   });
 
-  it('declares only the whitelist plus required intent, no outputSchema', async () => {
+  it('off exposes only search parameters and removes intent from the description', async () => {
     const { tools } = await getClient().listTools();
     const tool = tools.find((t) => t.name === name);
 
     assert.ok(tool, `${name} is not listed`);
     assert.deepEqual(
       Object.keys(tool.inputSchema.properties ?? {}).sort(),
-      [...WHITELIST, 'intent'].sort()
+      WHITELIST.slice().sort()
     );
-    assert.deepEqual(tool.inputSchema.required, ['query', 'intent']);
+    assert.deepEqual(tool.inputSchema.required, ['query']);
     assert.equal(tool.outputSchema, undefined);
-    assert.match(tool.description ?? '', /name the current version and its defining mechanism/);
+    assert.doesNotMatch(tool.description ?? '', /intent/);
     // 方言补丁仍然生效
     assert.equal(tool.inputSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
   });
@@ -146,7 +191,6 @@ describe(name, () => {
       name,
       arguments: {
         query: 'brave browser',
-        intent: 'What Brave Search is and how it differs from other engines',
       },
     });
 
@@ -269,6 +313,9 @@ describe(`${name} (status line and JSONL log)`, () => {
     assert.equal(lines.length, 1);
     const record = JSON.parse(lines[0]) as Record<string, unknown>;
     assert.equal(record.mode, 'off');
+    const request = record.request as { max_urls: number; max_tokens: number };
+    assert.equal(request.max_urls, 5);
+    assert.equal(request.max_tokens, 4000);
     assert.match(String(record.ts), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
   });
 
@@ -1179,6 +1226,9 @@ describe(`${name} (test mode error-path samples, 04-02)`, () => {
 
 describe(`${name} (missing intent)`, () => {
   useIsolatedFilterEnv();
+  before(() => {
+    useFilterConfig({ mode: 'on' });
+  });
 
   let calls = 0;
 
@@ -1209,6 +1259,45 @@ describe(`${name} (missing intent)`, () => {
   });
 });
 
+describe(`${name} (startup tool definitions)`, () => {
+  useIsolatedFilterEnv();
+
+  for (const mode of ['off', 'on', 'test'] as const) {
+    for (const key of ['test-jev-key', '', '   ', undefined]) {
+      it(`${mode} with ${key?.trim() ? 'a key' : JSON.stringify(key)} exposes the matching definition`, async () => {
+        if (key === undefined) delete process.env.TYPESAFE_API_KEY;
+        else process.env.TYPESAFE_API_KEY = key;
+        useFilterConfig({ mode });
+        const client = await connectTestClient();
+        try {
+          const tool = (await client.listTools()).tools.find((tool) => tool.name === name)!;
+          const filtering = mode !== 'off' && Boolean(key?.trim());
+          assert.deepEqual(tool.inputSchema.required, filtering ? ['query', 'intent'] : ['query']);
+          assert.deepEqual(
+            Object.keys(tool.inputSchema.properties ?? {}).sort(),
+            [...WHITELIST, ...(filtering ? ['intent'] : [])].sort()
+          );
+          if (filtering) {
+            assert.match(tool.description ?? '', /Required: `intent`/);
+          } else {
+            assert.doesNotMatch(tool.description ?? '', /intent/);
+          }
+          assert.equal(tool.outputSchema, undefined);
+          assert.equal(tool.inputSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+          for (const [key, value] of Object.entries(EXPECTED_DEFAULT_BUDGET)) {
+            const property = tool.inputSchema.properties?.[key] as Record<string, unknown>;
+            assert.equal(property.default, value);
+            assert.equal(Object.hasOwn(property, 'minimum'), false);
+            assert.equal(Object.hasOwn(property, 'maximum'), false);
+          }
+        } finally {
+          await client.close();
+        }
+      });
+    }
+  }
+});
+
 describe(`${name} (no jev key, mode on)`, () => {
   useIsolatedFilterEnv();
 
@@ -1221,8 +1310,8 @@ describe(`${name} (no jev key, mode on)`, () => {
     }
   });
 
-  it('treats a missing key as off: normal result, one stderr line, zero Jev traffic', async () => {
-    // key 变量不在 FILTER_ENV_VARS 名单（全局约定名），本用例内单独装卸：
+  it('returns search results without intent and explains how to configure the missing key', async () => {
+    // 本用例临时清除密钥，测试缺少配置的启动状态：
     // delete 覆盖本机 shell 里设的 key
     const savedKeys: Array<[string, string | undefined]> = ['TYPESAFE_API_KEY'].map((key) => [
       key,
@@ -1243,7 +1332,6 @@ describe(`${name} (no jev key, mode on)`, () => {
         name,
         arguments: {
           query: 'brave browser',
-          intent: 'What Brave Search is and how it differs from other engines',
         },
       });
 
@@ -1255,6 +1343,20 @@ describe(`${name} (no jev key, mode on)`, () => {
         { ...braveResponse.grounding.generic[0], age: ['2026-09-16'] },
         braveResponse.grounding.generic[1],
       ]);
+
+      const { tools } = await getClient().listTools();
+      const tool = tools.find((tool) => tool.name === name)!;
+      assert.deepEqual(tool.inputSchema.required, ['query']);
+      assert.equal(Object.hasOwn(tool.inputSchema.properties ?? {}, 'intent'), false);
+      assert.doesNotMatch(tool.description ?? '', /intent/);
+      const guidance = (result.content as { text: string }[])[1].text;
+      assert.match(guidance, /TYPESAFE_API_KEY/);
+      assert.match(guidance, /MCP server's env configuration/);
+      assert.match(guidance, /restart the MCP server/);
+      assert.match(guidance, /JEV_FILTER_CONFIG_FILE/);
+      assert.match(guidance, /~\/\.brave-jev\/config\.json/);
+      assert.match(guidance, /"mode": "off"/);
+      assert.match(String(errors[0]), /TYPESAFE_API_KEY.*restart the MCP server/);
 
       // 一行带 [jev-filter] 前缀的 stderr 说明
       assert.equal(errors.length, 1, `expected exactly one stderr line, got ${errors.length}`);
@@ -1351,6 +1453,19 @@ describe(`${name} (config file lifecycle)`, () => {
     assert.equal((await call()).isError ?? false, false);
     assert.equal(calls, 2);
     assert.equal(forwarded[1].searchParams.get('maximum_number_of_urls'), '5');
+    const running = (await getClient().listTools()).tools.find((tool) => tool.name === name)!;
+    assert.deepEqual(running.inputSchema.required, ['query']);
+
+    // 模拟重启后重新注册，读取相同路径下的新配置。
+    resetFilterStateForTest();
+    const restarted = await connectTestClient();
+    try {
+      const tool = (await restarted.listTools()).tools.find((tool) => tool.name === name)!;
+      assert.deepEqual(tool.inputSchema.required, ['query', 'intent']);
+      assert.match(tool.description ?? '', /Required: `intent`/);
+    } finally {
+      await restarted.close();
+    }
   });
 });
 
@@ -1369,6 +1484,20 @@ describe(`${name} (tool_description_file from config)`, () => {
       const tool = tools.find((t) => t.name === name);
       assert.ok(tool);
       assert.equal(tool.description, 'Custom description from file.');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('uses the unfiltered description when off even if the custom description requires intent', async () => {
+    const descPath = join(configDir, 'filtered-description.md');
+    writeFileSync(descPath, 'Custom filtering: intent is required.', 'utf8');
+    useFilterConfig({ mode: 'off', tool_description_file: descPath });
+    const client = await connectTestClient();
+    try {
+      const tool = (await client.listTools()).tools.find((tool) => tool.name === name)!;
+      assert.doesNotMatch(tool.description ?? '', /intent/);
+      assert.deepEqual(tool.inputSchema.required, ['query']);
     } finally {
       await client.close();
     }
@@ -1478,7 +1607,7 @@ describe(`${name} (brave 500 error logging)`, () => {
   });
 });
 
-describe(`${name} (below-minimum clamping)`, () => {
+describe(`${name} (search budgets)`, () => {
   useIsolatedFilterEnv();
 
   let calls = 0;
@@ -1490,6 +1619,68 @@ describe(`${name} (below-minimum clamping)`, () => {
       forwarded.push(url);
       return braveResponse;
     }
+  });
+
+  it('sends the four default budgets to Brave when they are omitted', async () => {
+    const result = await getClient().callTool({ name, arguments: { query: 'brave browser' } });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const params = forwarded.at(-1)!.searchParams;
+    for (const [key, value] of Object.entries(EXPECTED_DEFAULT_BUDGET)) {
+      assert.equal(params.get(key), String(value));
+    }
+    const payload = JSON.parse((result.content as { text: string }[])[0].text);
+    assert.equal(payload.parameter_adjustments, undefined);
+  });
+
+  it('fills only omitted budgets and preserves explicit values independently', async () => {
+    const overrides = { maximum_number_of_urls: 2, maximum_number_of_tokens: 3200 };
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'brave browser', ...overrides },
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    const params = forwarded.at(-1)!.searchParams;
+    for (const [key, value] of Object.entries({ ...EXPECTED_DEFAULT_BUDGET, ...overrides })) {
+      assert.equal(params.get(key), String(value));
+    }
+  });
+
+  it('preserves explicitly increased budgets', async () => {
+    const overrides = {
+      count: 12,
+      maximum_number_of_urls: 6,
+      maximum_number_of_tokens: 4800,
+      maximum_number_of_tokens_per_url: 1000,
+    };
+    const result = await getClient().callTool({
+      name,
+      arguments: { query: 'brave browser', ...overrides },
+    });
+    assert.equal(result.isError ?? false, false, JSON.stringify(result.content));
+    for (const [key, value] of Object.entries(overrides)) {
+      assert.equal(forwarded.at(-1)!.searchParams.get(key), String(value));
+    }
+  });
+
+  it('defaults undefined values but rejects null or text instead of treating them as omitted', async () => {
+    const emptyBudgets = Object.fromEntries(
+      Object.keys(EXPECTED_DEFAULT_BUDGET).map((key) => [key, undefined])
+    );
+    assert.deepEqual(RequestParamsSchema.parse({ query: 'q', ...emptyBudgets }), {
+      query: 'q',
+      ...EXPECTED_DEFAULT_BUDGET,
+    });
+    const before = calls;
+    for (const key of Object.keys(EXPECTED_DEFAULT_BUDGET)) {
+      for (const value of [null, '10']) {
+        const result = await getClient().callTool({
+          name,
+          arguments: { query: 'q', [key]: value },
+        });
+        assert.equal(result.isError, true);
+      }
+    }
+    assert.equal(calls, before);
   });
 
   it('raises below-minimum values, forwards the clamped ones, and reports the adjustment', async () => {
@@ -1582,38 +1773,35 @@ describe(`${name} (below-minimum clamping)`, () => {
     assert.equal(calls, before);
   });
 
-  it('advertises the maximum but no minimum at all; the description states the floor', async () => {
+  it('advertises optional defaults without range numbers and still validates limits', async () => {
     const { tools } = await getClient().listTools();
     const tool = tools.find((t) => t.name === name);
 
     assert.ok(tool, `${name} is not listed`);
     const properties = (tool.inputSchema.properties ?? {}) as Record<
       string,
-      { maximum?: number; minimum?: number; description?: string }
+      { maximum?: number; minimum?: number; default?: number; description?: string }
     >;
-    // zod 4.3.6 会把 .int() 的安全整数域渲染成 minimum: -2^53+1 噪音；用
-    // .meta({ minimum: undefined }) 压掉，业务下限只写在描述里。断言键不存在
-    // （而非 !== 512），zod 版本一变渲染行为就会在这里报警。
-    for (const key of [
-      'count',
-      'maximum_number_of_urls',
-      'maximum_number_of_tokens',
-      'maximum_number_of_tokens_per_url',
-    ]) {
+    // 工具展示默认值，运行时仍保留整数、上限校验与下限钳位。
+    for (const [key, value] of Object.entries(EXPECTED_DEFAULT_BUDGET)) {
       assert.equal(
         Object.hasOwn(properties[key] ?? {}, 'minimum'),
         false,
         `${key} must not advertise a minimum`
       );
       assert.ok(properties[key], `${key} must be advertised`);
+      assert.equal(Object.hasOwn(properties[key], 'maximum'), false);
+      assert.equal(properties[key].default, value);
+      assert.equal(tool.inputSchema.required?.includes(key), false);
+      assert.match(properties[key].description ?? '', /Omit to use the default/);
+      assert.doesNotMatch(
+        properties[key].description ?? '',
+        /minimum|maximum|below|raised|32768|8192|1024|512/
+      );
     }
-    assert.equal(properties.count?.maximum, 50);
-    assert.equal(properties.maximum_number_of_urls?.maximum, 50);
-    assert.equal(properties.maximum_number_of_tokens?.maximum, 32768);
-    assert.equal(properties.maximum_number_of_tokens_per_url?.maximum, 8192);
     assert.match(
-      properties.maximum_number_of_tokens_per_url?.description ?? '',
-      /below 512 are raised to 512/
+      tool.description ?? '',
+      /For routine calls, omit the four search budget parameters/
     );
 
     // SDK 校验层对 500 放行——下限钳位发生在 execute() 里

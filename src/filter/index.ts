@@ -44,7 +44,7 @@ export type {
   SampleWriterHooks,
 } from './sample.js';
 export { createFilterStats, zeroLocal } from './stats.js';
-export { buildStatusLine } from './statusline.js';
+export { buildStatusLine, JEV_KEY_SETUP_HINT } from './statusline.js';
 export type {
   BraveLlmContextGenericItem,
   BraveLlmContextResponse,

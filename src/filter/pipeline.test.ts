@@ -232,7 +232,6 @@ describe('filterLlmContext', () => {
     assert.equal(stats.local.snippets_prefiltered, 0);
   });
 
-
   it('drops a source whose only snippet is JSON-LD metadata during step 8', async () => {
     const data = payload();
     data.grounding.generic.push({
@@ -403,11 +402,11 @@ describe('filterLlmContext', () => {
     // 省略 config 时纯库使用默认配置，不读取环境中的过滤开关。
     const savedMode = process.env.JEV_FILTER_MODE;
     const savedFile = process.env.JEV_FILTER_CONFIG_FILE;
-    process.env.JEV_FILTER_MODE = 'on';
+    process.env.JEV_FILTER_MODE = 'off';
     process.env.JEV_FILTER_CONFIG_FILE = 'C:/no/such/file.json';
 
     try {
-      assert.equal((await filterLlmContext(payload(), request)).stats.mode, 'off');
+      assert.equal((await filterLlmContext(payload(), request)).stats.mode, 'on');
     } finally {
       if (savedMode === undefined) delete process.env.JEV_FILTER_MODE;
       else process.env.JEV_FILTER_MODE = savedMode;

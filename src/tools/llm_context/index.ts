@@ -7,7 +7,8 @@ import {
   RequestParamsSchema,
   RequestHeadersSchema,
   LlmContextInputSchema,
-  type LlmContextInput as QueryParams,
+  LlmContextUnfilteredInputSchema,
+  type LlmContextInput,
 } from './schemas/input.js';
 import { LlmContextSearchApiResponseSchema } from './schemas/output.js';
 import {
@@ -18,6 +19,7 @@ import {
   createSampleWriter,
   filterLlmContext,
   hasJevKey,
+  JEV_KEY_SETUP_HINT,
   loadFilterConfig,
   localIsoWithOffset,
   logRaisedToStderr,
@@ -43,20 +45,23 @@ export const annotations: ToolAnnotations = {
   openWorldHint: true,
 };
 
-export const description = `
+const intentDescription = `
+    Required: \`intent\` — one English sentence stating what you want to find. If the query
+    concerns a versioned product, name the current version and its defining mechanism in
+    \`intent\` (e.g. "current Sanity Studio (v6, sanity.config.ts based)").
+`;
+
+const descriptionFor = (filtering: boolean) =>
+  `
     Search the web with Brave and return pre-extracted, relevance-ranked content chunks
     (prose, tables, code blocks, structured data). Use the returned content directly when
     it answers the question; fetch the page only when you need the full context or must verify.
 
-    Required: \`intent\` — one English sentence stating what you want to find. If the query
-    concerns a versioned product, name the current version and its defining mechanism in
-    \`intent\` (e.g. "current Sanity Studio (v6, sanity.config.ts based)").
+${filtering ? intentDescription : ''}
 
-    Recommended values for routine calls (\`query\` supports site:):
-        count: 10
-        maximum_number_of_urls: 5
-        maximum_number_of_tokens: 4000
-        maximum_number_of_tokens_per_url: 800 (= 4000 / 5; without it one source can take the whole budget)
+    For routine calls, omit the four search budget parameters; the server applies the defaults
+    shown in their descriptions. Increase a budget only when previous results show that more
+    source coverage or passage detail is needed. \`query\` supports site:.
 
     Search rules:
         - Unfamiliar subject: first search the subject name plus the core question for an overview,
@@ -72,6 +77,11 @@ export const description = `
     When relaying results, cite the URL returned with each content item.
     Source age, when available, is included with that item; it is not a verified publication date.
 `.trim();
+
+export const description = descriptionFor(true);
+export const unfilteredDescription = descriptionFor(false);
+
+type QueryParams = Omit<LlmContextInput, 'intent'> & { intent?: string };
 
 // 配置延迟到首次使用时读取并复用。工具模块先于 dotenv 求值，
 // 在模块顶层读环境会漏掉 .env 中的值；改配置后需重启 MCP。
@@ -93,7 +103,7 @@ const jevDepsFor = (config: FilterConfig): FilterDeps | undefined => {
     if (!noKeyWarned) {
       noKeyWarned = true;
       console.error(
-        '[jev-filter] No Jev API key found (TYPESAFE_API_KEY); treating Jev filtering as off.'
+        `[jev-filter] Jev filtering is enabled but TYPESAFE_API_KEY is missing or blank; returning sources without Jev checks. ${JEV_KEY_SETUP_HINT}`
       );
     }
     return undefined;
@@ -128,6 +138,8 @@ export const resetFilterStateForTest = (): void => {
 };
 
 export const execute = async (params: QueryParams) => {
+  // 关闭或缺密钥时没有意图输入；内部日志和样本使用空串表达缺省。
+  const intent = params.intent ?? '';
   const { adjusted, raised } = applyMinimumValues(params);
   const parsedParams = RequestParamsSchema.parse(adjusted);
   const parsedHeaders = RequestHeadersSchema.parse(params);
@@ -166,7 +178,7 @@ export const execute = async (params: QueryParams) => {
         path: samplePath,
         originalParams: { ...params } as Record<string, unknown>,
         braveParams: { ...braveParams } as Record<string, unknown>,
-        intent: params.intent,
+        intent,
         stage: 'brave',
         message,
         preFilter: null,
@@ -179,7 +191,7 @@ export const execute = async (params: QueryParams) => {
       stage: 'brave',
       message,
       query: params.query,
-      intent: params.intent,
+      intent,
       requestId,
       sample,
     });
@@ -195,7 +207,7 @@ export const execute = async (params: QueryParams) => {
   if (success) {
     filtered = await filterLlmContext(
       data,
-      { params: parsedParams, intent: params.intent, retrievalTime },
+      { params: parsedParams, intent, retrievalTime },
       config,
       jevDepsFor(config)
     );
@@ -230,7 +242,7 @@ export const execute = async (params: QueryParams) => {
         originalParams: { ...params } as Record<string, unknown>,
         braveParams: { ...braveParams } as Record<string, unknown>,
         filterParams: parsedParams,
-        intent: params.intent,
+        intent,
         preFilter,
         stats: filtered.stats,
         // 样本使用客户端捕获的派发记录，避免重建输入与实发内容不一致。
@@ -268,7 +280,7 @@ export const execute = async (params: QueryParams) => {
         path: samplePath,
         originalParams: { ...params } as Record<string, unknown>,
         braveParams: { ...braveParams } as Record<string, unknown>,
-        intent: params.intent,
+        intent,
         stage: 'schema',
         message,
         preFilter,
@@ -279,7 +291,7 @@ export const execute = async (params: QueryParams) => {
       stage: 'schema',
       message,
       query: params.query,
-      intent: params.intent,
+      intent,
       requestId,
       sample,
     });
@@ -298,24 +310,32 @@ export const execute = async (params: QueryParams) => {
   };
 };
 
+// 配置和工具定义均在启动注册时确定；修改配置或密钥后需重启 MCP。
+const toolDefinitionFor = () => {
+  const config = configFor();
+  const filtering = config.mode !== 'off' && hasJevKey(process.env);
+  return {
+    // 自定义描述用于 Jev 模式，避免关闭时残留对 intent 的要求。
+    description: filtering
+      ? resolveToolDescription(description, config.toolDescriptionFile)
+      : unfilteredDescription,
+    inputSchema: filtering ? LlmContextInputSchema : LlmContextUnfilteredInputSchema,
+  };
+};
+
 export const register = (mcpServer: McpServer) => {
-  mcpServer.registerTool(
-    name,
-    {
-      title: name,
-      description: resolveToolDescription(description, configFor().toolDescriptionFile),
-      inputSchema: LlmContextInputSchema,
-      annotations: annotations,
-    },
-    execute
-  );
+  mcpServer.registerTool(name, { title: name, ...toolDefinitionFor(), annotations }, execute);
 };
 
 export default {
   name,
-  description,
+  get description() {
+    return toolDefinitionFor().description;
+  },
   annotations,
-  inputSchema: LlmContextInputSchema.shape,
+  get inputSchema() {
+    return toolDefinitionFor().inputSchema.shape;
+  },
   execute,
   register,
 };

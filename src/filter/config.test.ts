@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { JEV_CONFIG_FILE_ENV, loadFilterConfig, parseFilterConfigObject } from './config.js';
@@ -42,7 +42,7 @@ const writeFixture = (dir: string, name: string, content: unknown): string => {
 };
 
 const defaults = (): FilterConfig => ({
-  mode: 'off',
+  mode: 'on',
   thresholds: { ...DEFAULT_THRESHOLDS },
   jev: {
     model: DEFAULT_JEV_MODEL,
@@ -109,7 +109,7 @@ describe('parseFilterConfigObject: shape and defaults', () => {
     process.env[JEV_CONFIG_FILE_ENV] = 'C:/no/such/file.json';
 
     try {
-      assert.equal(parseFilterConfigObject({}).mode, 'off');
+      assert.equal(parseFilterConfigObject({}).mode, 'on');
     } finally {
       if (original === undefined) delete process.env[JEV_CONFIG_FILE_ENV];
       else process.env[JEV_CONFIG_FILE_ENV] = original;
@@ -129,14 +129,14 @@ describe('parseFilterConfigObject: mode', () => {
     assert.equal(parseFilterConfigObject({ mode: ' Test ' }).mode, 'test');
   });
 
-  it('falls back to off for unknown, empty or non-string modes, warning once each', () => {
+  it('falls back to on for unknown, empty or non-string modes, warning once each', () => {
     for (const value of ['banana', '', '   ', 5, true, null]) {
       const lines: string[] = [];
       const config = parseFilterConfigObject({ mode: value }, (line) => lines.push(line));
-      assert.equal(config.mode, 'off', JSON.stringify(value));
+      assert.equal(config.mode, 'on', JSON.stringify(value));
       assert.equal(lines.length, 1, JSON.stringify(value));
       assert.match(lines[0], /^\[jev-filter\] config: ignoring mode=/);
-      assert.ok(lines[0].endsWith('using default "off"'), lines[0]);
+      assert.ok(lines[0].endsWith('using default "on"'), lines[0]);
     }
   });
 });
@@ -381,7 +381,7 @@ describe('parseFilterConfigObject: warning format', () => {
       assert.ok(line.startsWith('[jev-filter] config: '), line);
       assert.ok(line.includes('; using default '), line);
     }
-    assert.ok(lines.some((line) => line.includes('ignoring mode="banana"; using default "off"')));
+    assert.ok(lines.some((line) => line.includes('ignoring mode="banana"; using default "on"')));
     assert.ok(lines.some((line) => line.includes('ignoring thresholds.group_keep_min=2')));
   });
 
@@ -404,13 +404,48 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it('returns all defaults when the variable is unset, blank or whitespace', () => {
+  it('creates the default JSON with mode on when the variable is unset, blank or whitespace', () => {
+    for (const value of [undefined, '', '   ']) {
+      const home = mkdtempSync(join(tmpRoot, 'home-'));
+      const stderr = captureStderr(() => {
+        assert.deepEqual(loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: value }, home), defaults());
+      });
+      const file = join(home, '.brave-jev', 'config.json');
+      assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { mode: 'on' });
+      assert.equal(stderr.length, 0, stderr.join('\n'));
+    }
+  });
+
+  it('reads the existing default file without overwriting its settings', () => {
+    const home = mkdtempSync(join(tmpRoot, 'existing-home-'));
+    const dir = join(home, '.brave-jev');
+    mkdirSync(dir);
+    const text = '{ "mode": "off", "jev": { "concurrency": 3 } }';
+    const file = writeFixture(dir, 'config.json', text);
+    for (let i = 0; i < 2; i++) {
+      const config = loadFilterConfig({}, home);
+      assert.equal(config.mode, 'off');
+      assert.equal(config.jev.concurrency, 3);
+      assert.equal(readFileSync(file, 'utf8'), text);
+    }
+  });
+
+  it('uses an explicit path without creating the default file', () => {
+    const home = mkdtempSync(join(tmpRoot, 'override-home-'));
+    const file = writeFixture(tmpRoot, 'override.json', { mode: 'test' });
+    assert.equal(loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: ` ${file} ` }, home).mode, 'test');
+    assert.equal(existsSync(join(home, '.brave-jev')), false);
+  });
+
+  it('warns and keeps in-memory defaults if the default directory cannot be created', () => {
+    const home = mkdtempSync(join(tmpRoot, 'blocked-home-'));
+    writeFixture(home, '.brave-jev', 'a file blocks the directory');
     const stderr = captureStderr(() => {
-      assert.deepEqual(loadFilterConfig({}), defaults());
-      assert.deepEqual(loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: '' }), defaults());
-      assert.deepEqual(loadFilterConfig({ [JEV_CONFIG_FILE_ENV]: '   ' }), defaults());
+      assert.deepEqual(loadFilterConfig({}, home), defaults());
     });
-    assert.equal(stderr.length, 0, stderr.join('\n'));
+    assert.equal(stderr.length, 1);
+    assert.match(stderr[0], /Unable to create or read config file/);
+    assert.equal(readFileSync(join(home, '.brave-jev'), 'utf8'), 'a file blocks the directory');
   });
 
   it('falls back to all defaults when the file does not exist, with one stderr line', () => {
@@ -458,7 +493,7 @@ describe('loadFilterConfig via JEV_FILTER_CONFIG_FILE', () => {
   });
 
   it('tolerates a UTF-8 BOM instead of discarding the whole file (R4)', () => {
-    // 带 BOM 的合法配置应正常解析，避免意外回落 off。
+    // 带 BOM 的合法配置应正常解析，确保读取实际配置。
     const file = join(tmpRoot, 'bom.json');
     writeFileSync(file, `\uFEFF${JSON.stringify({ mode: 'on' })}`, 'utf8');
     let config: FilterConfig | undefined;

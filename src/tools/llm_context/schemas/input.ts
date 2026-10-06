@@ -114,6 +114,14 @@ const FreshnessSchema = z
     "Filters search results by when they were discovered. The following values are supported: 'pd' - Discovered within the last 24 hours. 'pw' - Discovered within the last 7 days. 'pm' - Discovered within the last 31 days. 'py' - Discovered within the last 365 days. 'YYYY-MM-DDtoYYYY-MM-DD' - Timeframe is also supported by specifying the date range e.g. 2022-04-01to2022-07-30."
   );
 
+/** 实际请求和工具声明共用默认预算；只在参数省略或为 undefined 时补齐。 */
+export const DEFAULT_CONTEXT_PARAMS = Object.freeze({
+  count: 10,
+  maximum_number_of_urls: 5,
+  maximum_number_of_tokens: 4000,
+  maximum_number_of_tokens_per_url: 800,
+});
+
 export const RequestParamsSchema = z.object({
   query: z
     .string()
@@ -136,26 +144,28 @@ export const RequestParamsSchema = z.object({
     .min(1)
     .max(50)
     .describe(
-      'The maximum number of search results considered to select the LLM context data. The default is 20 and the maximum is 50.'
+      `Number of search results considered to select the LLM context data. Defaults to ${DEFAULT_CONTEXT_PARAMS.count}.`
     )
-    .optional(),
+    .default(DEFAULT_CONTEXT_PARAMS.count),
   spellcheck: z.boolean().describe('Whether to enable spellcheck on the query.').optional(),
   maximum_number_of_urls: z
     .number()
     .int()
     .min(1)
     .max(50)
-    .describe('Maximum number of different URLs to include in LLM context.')
-    .optional(),
+    .describe(
+      `Returned source budget. Defaults to ${DEFAULT_CONTEXT_PARAMS.maximum_number_of_urls}.`
+    )
+    .default(DEFAULT_CONTEXT_PARAMS.maximum_number_of_urls),
   maximum_number_of_tokens: z
     .number()
     .int()
     .min(1024)
     .max(32768)
     .describe(
-      'Approximate maximum number of tokens to include in context. The default is 8192 and maximum is 32768.'
+      `Approximate total token budget. Defaults to ${DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens}.`
     )
-    .optional(),
+    .default(DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens),
   maximum_number_of_snippets: z
     .number()
     .int()
@@ -177,9 +187,9 @@ export const RequestParamsSchema = z.object({
     .min(512)
     .max(8192)
     .describe(
-      'Maximum number of tokens to include per URL. The default is 4096 and maximum is 8192.'
+      `Token budget per source. Defaults to ${DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens_per_url}.`
     )
-    .optional(),
+    .default(DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens_per_url),
   maximum_number_of_snippets_per_url: z
     .number()
     .int()
@@ -277,8 +287,8 @@ export const RequestHeadersSchema = z.object({
 // Whitelist of upstream query parameters exposed to the model. `.pick()` keys must
 // exist on RequestParamsSchema, so a renamed upstream parameter fails at compile time
 // and a newly added one stays hidden until deliberately listed here.
-// 四个数值旋钮对外声明不设 .min()，下限由 applyMinimumValues 统一钳位；保留 .max() 校验，
-// 与 RequestParamsSchema 的数值一致性由测试锁定。
+// 四个数值旋钮仅展示默认预算；下限由 applyMinimumValues 统一钳位，上限仍在运行时校验。
+// RequestParamsSchema 在执行请求时补齐默认值，保留工具输入原貌供日志与样本记录。
 const Picked = RequestParamsSchema.pick({
   query: true,
   country: true,
@@ -314,35 +324,50 @@ export const LlmContextInputSchema = z.object({
     .number()
     .int()
     .max(50)
-    // zod 4.3.6 把 .int() 的安全整数域渲染成 minimum: -(2^53-1) 噪音；meta 的键
-    // 优先于 zod 自动生成的关键字，显式 undefined 把该键压掉（业务下限只写在描述里）
-    .meta({ minimum: undefined })
+    // meta 仅调整对外 JSON Schema，不改变上面的整数与上限校验。
+    .meta({ minimum: undefined, maximum: undefined, default: DEFAULT_CONTEXT_PARAMS.count })
     .describe(
-      'Number of candidate search results; 10 recommended for routine calls. Values below 1 are raised to 1.'
+      `Candidate search results to consider. Omit to use the default of ${DEFAULT_CONTEXT_PARAMS.count}.`
     )
     .optional(),
   maximum_number_of_urls: z
     .number()
     .int()
     .max(50)
-    .meta({ minimum: undefined })
-    .describe('Upper bound on returned sources; 5 recommended. Values below 1 are raised to 1.')
+    .meta({
+      minimum: undefined,
+      maximum: undefined,
+      default: DEFAULT_CONTEXT_PARAMS.maximum_number_of_urls,
+    })
+    .describe(
+      `Returned source budget. Omit to use the default of ${DEFAULT_CONTEXT_PARAMS.maximum_number_of_urls}.`
+    )
     .optional(),
   maximum_number_of_tokens: z
     .number()
     .int()
     .max(32768)
-    .meta({ minimum: undefined })
+    .meta({
+      minimum: undefined,
+      maximum: undefined,
+      default: DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens,
+    })
     .describe(
-      'Approximate total token budget for returned content; 4000 recommended. Values below 1024 are raised to 1024.'
+      `Approximate total token budget for returned content. Omit to use the default of ${DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens}.`
     )
     .optional(),
   maximum_number_of_tokens_per_url: z
     .number()
     .int()
     .max(8192)
-    .meta({ minimum: undefined })
-    .describe('Token cap per source; 800 recommended. Values below 512 are raised to 512.')
+    .meta({
+      minimum: undefined,
+      maximum: undefined,
+      default: DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens_per_url,
+    })
+    .describe(
+      `Token budget per source. Omit to use the default of ${DEFAULT_CONTEXT_PARAMS.maximum_number_of_tokens_per_url}.`
+    )
     .optional(),
   freshness: Picked.shape.freshness.describe(
     'Recency filter: pd = 1 day, pw = 7 days, pm = 31 days, py = 365 days, or YYYY-MM-DDtoYYYY-MM-DD.'
@@ -351,6 +376,9 @@ export const LlmContextInputSchema = z.object({
     .describe('Re-ranking rules: a Goggle URL, rule text, or an array of them.')
     .optional(),
 });
+
+// Jev 不可用时不暴露 intent；搜索参数及其校验与开启时保持一致。
+export const LlmContextUnfilteredInputSchema = LlmContextInputSchema.omit({ intent: true });
 
 export type LlmContextInput = z.input<typeof LlmContextInputSchema>;
 export type LlmQueryParams = z.infer<typeof RequestParamsSchema>;

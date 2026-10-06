@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createFilterStats } from './stats.js';
-import { buildStatusLine } from './statusline.js';
+import { buildStatusLine, JEV_KEY_SETUP_HINT } from './statusline.js';
 import type {
   BraveLlmContextResponse,
   FilterStats,
@@ -227,7 +227,7 @@ describe('buildStatusLine', () => {
     noKeyStats.jev!.status = 'no_key';
     assert.equal(
       buildStatusLine(noKeyStats),
-      '[filter] [error] [1 source unchecked: filter missing API key, raw sources kept] [401]'
+      `[filter] [error] [1 source unchecked: filter missing API key, raw sources kept] [401] ${JEV_KEY_SETUP_HINT}`
     );
 
     // 鉴权失败 (auth) 暴露 401
