@@ -16,22 +16,14 @@ AI 联网搜索时，拿到的内容经常混着空泛文章、网站导航，�
 - [Brave Search API 密钥](https://brave.com/search/api/)，用于搜索。
 - [Jev API 密钥](https://typesafe.ai/)，用于过滤。
 
-下载项目并安装依赖，安装时会自动构建：
-
-```bash
-git clone https://github.com/romantcig/brave-jev-mcp.git
-cd brave-jev-mcp
-npm install
-```
-
-在 AI 客户端中添加这个 MCP。以下示例适用于使用 `mcpServers` JSON 配置的客户端：
+项目已发布到 [npm](https://www.npmjs.com/package/@romantcig/brave-jev-mcp)。在 AI 客户端中添加下面的配置，`npx` 会自动下载并启动，无需下载源码或手动构建。以下示例适用于使用 `mcpServers` JSON 配置的客户端：
 
 ```json
 {
   "mcpServers": {
     "brave-jev": {
-      "command": "node",
-      "args": ["/absolute/path/to/brave-jev-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@romantcig/brave-jev-mcp@0.1.0", "--transport", "stdio"],
       "env": {
         "BRAVE_API_KEY": "你的 Brave Search API 密钥",
         "TYPESAFE_API_KEY": "你的 Jev API 密钥"
@@ -41,7 +33,7 @@ npm install
 }
 ```
 
-把 `args` 中的路径换成这台电脑上 `dist/index.js` 的绝对路径。Windows 可以写成 `C:/你的目录/brave-jev-mcp/dist/index.js`。其他格式的客户端配置，也填写相同的启动命令、文件路径和两项密钥。
+把两项密钥占位符换成自己的密钥。示例固定使用 `0.1.0`，便于保持版本稳定；希望跟随最新版时，将 `@0.1.0` 改为 `@latest`，更新时重启 MCP。其他格式的客户端配置，也填写相同的启动命令、参数和环境变量。
 
 首次启动时，程序会自动创建 `~/.brave-jev/config.json`，默认开启过滤；已有配置会继续使用。Brave 密钥是搜索所必需的。暂未配置 Jev 密钥时，搜索仍然可用，会跳过 Jev 过滤，并在需要过滤的结果中提示如何配置。修改密钥或配置后，重启 MCP 即可生效。
 

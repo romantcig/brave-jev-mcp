@@ -16,22 +16,14 @@ Prepare the following:
 - A [Brave Search API key](https://brave.com/search/api/) for search.
 - A [Jev API key](https://typesafe.ai/) for filtering.
 
-Clone the project and install its dependencies. Installation builds the project automatically:
-
-```bash
-git clone https://github.com/romantcig/brave-jev-mcp.git
-cd brave-jev-mcp
-npm install
-```
-
-Add the MCP server to your AI client. The following example is for clients that use a `mcpServers` JSON configuration:
+The package is available on [npm](https://www.npmjs.com/package/@romantcig/brave-jev-mcp). Add it to your AI client with the configuration below. `npx` downloads and starts the package automatically; no source checkout or manual build is needed. This example is for clients that use a `mcpServers` JSON configuration:
 
 ```json
 {
   "mcpServers": {
     "brave-jev": {
-      "command": "node",
-      "args": ["/absolute/path/to/brave-jev-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@romantcig/brave-jev-mcp@0.1.0", "--transport", "stdio"],
       "env": {
         "BRAVE_API_KEY": "Your Brave Search API key",
         "TYPESAFE_API_KEY": "Your Jev API key"
@@ -41,7 +33,7 @@ Add the MCP server to your AI client. The following example is for clients that 
 }
 ```
 
-Replace the path in `args` with the absolute path to `dist/index.js` on your computer. On Windows, you can use `C:/your-directory/brave-jev-mcp/dist/index.js`. For clients with a different configuration format, use the same launch command, file path, and two API keys.
+Replace the two API key placeholders with your own keys. The configuration pins version `0.1.0` for predictable behavior. To follow the latest release, replace `@0.1.0` with `@latest` and restart the MCP server when updating. For clients with a different configuration format, use the same command, arguments, and environment variables.
 
 On first launch, the server creates `~/.brave-jev/config.json` with filtering enabled by default. Existing configuration is preserved. The Brave key is required for search. Without a Jev key, search still works, Jev filtering is skipped, and results that would otherwise be filtered include setup instructions. Restart the MCP server after changing keys or configuration.
 
