@@ -66,7 +66,7 @@ const namespaced = (
   script: Record<string, Record<string, JevAnswer>>
 ): Record<string, JevAnswer> => {
   const answers: Record<string, JevAnswer> = {};
-  for (const source of state.sources) {
+  for (const source of Object.values(state.sources)) {
     const local = script[source.id];
     assert.ok(local, `no scripted answers for ${source.id}`);
     for (const [localKey, answer] of Object.entries(local)) {
@@ -560,7 +560,7 @@ describe('three-mode semantic matrix (off / test / on)', () => {
       counter.calls += 1;
       // 全量共享桩：按 `${id}__${localKey}` 命名空间逐来源注入答案
       const script: Record<string, Record<string, JevAnswer>> = {};
-      for (const source of state.sources) {
+      for (const source of Object.values(state.sources)) {
         const local: Record<string, JevAnswer> = {
           filler: { kind: 'noul', probability: source.id === 's1' ? 0.9 : 0 },
         };
@@ -717,7 +717,7 @@ describe('near-threshold verdict end to end', () => {
     (fillerProbabilities: Record<string, number>, snippetProbabilities: Record<string, number>) =>
     async ({ state, questions }: { state: JevState; questions: Record<string, JevQuestion> }) => {
       const script: Record<string, Record<string, JevAnswer>> = {};
-      for (const source of state.sources) {
+      for (const source of Object.values(state.sources)) {
         script[source.id] = {
           filler: { kind: 'noul', probability: fillerProbabilities[source.id]! },
           group0: {
@@ -1086,7 +1086,7 @@ describe('snippet verdicts leave a single short snippet and the source survives'
     };
     const classify: ClassifyDeps['classify'] = async ({ state, questions }) => {
       const script: Record<string, Record<string, JevAnswer>> = {};
-      for (const source of state.sources) {
+      for (const source of Object.values(state.sources)) {
         const local: Record<string, JevAnswer> = {
           filler: { kind: 'noul', probability: 0 },
         };
@@ -1180,7 +1180,7 @@ describe('all-context request organization (T02-T09/T11)', () => {
       if (!('sources' in state)) return { status: 'failed', kind: 'validation' };
       options.seen?.push({ state, questions });
       const answers: Record<string, JevAnswer> = { ...options.extra };
-      for (const source of state.sources) {
+      for (const source of Object.values(state.sources)) {
         const local = script[source.id];
         assert.ok(local, `no scripted answers for ${source.id}`);
         for (const [localKey, answer] of Object.entries(local)) {
@@ -1222,7 +1222,7 @@ describe('all-context request organization (T02-T09/T11)', () => {
     assert.deepEqual(result.grounding.generic, []);
   });
 
-  it('a single candidate still shares one all request with sources[0] and the new questions (T02/§3.1)', async () => {
+  it('a single candidate still shares one all request with sources.s0 and the new questions (T02/§3.1)', async () => {
     const data: BraveLlmContextResponse = {
       grounding: {
         generic: [
@@ -1245,15 +1245,15 @@ describe('all-context request organization (T02-T09/T11)', () => {
       ),
     });
 
-    // 单候选也走全量形状：sources[0] + 命名空间题键 + 单片组合题，不走特殊模板
+    // 单候选也走全量形状：sources.s0 + 命名空间题键 + 单片组合题，不走特殊模板
     assert.equal(seen.length, 1);
     const state = seen[0]?.state;
-    assert.equal(state?.sources.length, 1);
-    assert.equal(state?.sources[0]?.id, 's0');
-    assert.equal(state?.sources[0]?.brave_page_date, '2026-09-16');
+    assert.equal(Object.keys(state?.sources ?? {}).length, 1);
+    assert.equal(state?.sources.s0?.id, 's0');
+    assert.equal(state?.sources.s0?.brave_page_date, '2026-09-16');
     const questions = seen[0]?.questions ?? {};
     assert.ok(questions['s0__group0'] !== undefined);
-    assert.match(questions['s0__group0']?.instructions ?? '', /^A=`sources\[0\]\.snippets\[0\]`/);
+    assert.match(questions['s0__group0']?.instructions ?? '', /^A=`sources\.s0\.snippets\[0\]`/);
     assert.ok(questions['s0__filler'] !== undefined);
 
     // 映射在完整请求记录里（stats.jev.requests 是瘦身摘要，无 mapping / state）
@@ -1295,7 +1295,7 @@ describe('all-context request organization (T02-T09/T11)', () => {
     assert.equal(seen.length, 1);
     const state = seen[0]?.state;
     assert.deepEqual(
-      state?.sources.map((source) => [source.id, source.url]),
+      Object.values(state?.sources ?? {}).map((source) => [source.id, source.url]),
       [
         ['s0', 'https://search.brave.com/'],
         ['s1', 'https://example.com/post'],
@@ -1303,7 +1303,7 @@ describe('all-context request organization (T02-T09/T11)', () => {
     );
     assert.equal(state?.query, 'brave browser');
     assert.equal(state?.intent, 'What Brave Search is');
-    assert.deepEqual(state?.sources[0]?.snippets, [
+    assert.deepEqual(state?.sources.s0?.snippets, [
       'Brave is a privacy-focused browser and search engine.',
       'Second snippet about Brave.',
     ]);
@@ -1312,12 +1312,12 @@ describe('all-context request organization (T02-T09/T11)', () => {
     assert.equal(Object.keys(questions).length, 4);
     assert.ok(questions['s0__filler'] !== undefined && questions['s0__group0'] !== undefined);
     assert.ok(questions['s1__filler'] !== undefined && questions['s1__group0'] !== undefined);
-    // 组合题题干数组下标按数组位置展开（s1 引用 sources[1]，不是 sources[0]）
+    // 组合题题干按来源 ID 展开（s1 引用 sources.s1）
     assert.match(
       questions['s0__group0']?.instructions ?? '',
-      /A=`sources\[0\]\.snippets\[0\]`; B=`sources\[0\]\.snippets\[1\]`/
+      /A=`sources\.s0\.snippets\[0\]`; B=`sources\.s0\.snippets\[1\]`/
     );
-    assert.match(questions['s1__group0']?.instructions ?? '', /^A=`sources\[1\]\.snippets\[0\]`/);
+    assert.match(questions['s1__group0']?.instructions ?? '', /^A=`sources\.s1\.snippets\[0\]`/);
 
     const jev = stats.jev;
     assert.equal(jev?.n_requests, 1);
@@ -1407,10 +1407,10 @@ describe('all-context request organization (T02-T09/T11)', () => {
 
     const state = seen[0]?.state;
     assert.deepEqual(
-      state?.sources.map((source) => source.id),
+      Object.values(state?.sources ?? {}).map((source) => source.id),
       ['s1', 's2']
     );
-    assert.equal(state?.sources[0]?.url, 'https://alpha.example/');
+    assert.equal(state?.sources.s1?.url, 'https://alpha.example/');
     const record = jev_requests[0];
     assert.deepEqual(record?.source_ids, ['s1', 's2']);
     assert.deepEqual(
@@ -1616,7 +1616,7 @@ describe('GitHub 清洗接入', () => {
         },
       }
     );
-    assert.deepEqual(sent?.sources[0].snippets, [body]);
+    assert.deepEqual(sent?.sources.s0.snippets, [body]);
     assert.deepEqual(result.grounding.generic[0].snippets, [body]);
     assert.deepEqual(
       stats.sources[0].snippets.filter((row) => row.kept).map((row) => row.index),
@@ -1683,7 +1683,7 @@ describe('X (Twitter) 清洗接入', () => {
       showMoreSnip,
       'Avatar\nCarter Church@CarterWChurch Follow\nstaff ai engineer',
     ];
-    assert.deepEqual(sent?.sources[0].snippets, expectedSnippets);
+    assert.deepEqual(sent?.sources.s0.snippets, expectedSnippets);
     assert.deepEqual(result.grounding.generic[0].snippets, expectedSnippets);
 
     // 统计表记录平台清洗动作，人物资料仍保留供后续判断。
@@ -1775,27 +1775,27 @@ describe('temporal context (all-only)', () => {
     assert.equal(seen.length, 1);
     const state = seen[0].state;
     assert.deepEqual(
-      state.sources.map((s) => [s.id, s.brave_page_date]),
+      Object.values(state.sources).map((s) => [s.id, s.brave_page_date]),
       [
         ['s1', '2026-10-01'],
         ['s2', '2024-02-29'],
         ['s3', '2026-09-01'],
       ]
     );
-    assert.deepEqual(state.sources[0].snippets, [article, `A: ${answer}`]);
+    assert.deepEqual(state.sources.s1.snippets, [article, `A: ${answer}`]);
     assert.deepEqual(filtered.jev_requests[0].mapping[0].snippet_keys, ['0.0', '0.1']);
-    // 组合题按数组位置展开显式字母引用：s1 两片一组，s2/s3 各单片短题
+    // 组合题按来源 ID 展开显式字母引用：s1 两片一组，s2/s3 各单片短题
     assert.match(
       seen[0].questions.s1__group0.instructions,
-      /A=`sources\[0\]\.snippets\[0\]`; B=`sources\[0\]\.snippets\[1\]`/
+      /A=`sources\.s1\.snippets\[0\]`; B=`sources\.s1\.snippets\[1\]`/
     );
     assert.match(
       seen[0].questions.s2__group0.instructions,
-      /^A=`sources\[1\]\.snippets\[0\]`\. Keep A if/
+      /^A=`sources\.s2\.snippets\[0\]`\. Keep A if/
     );
     assert.match(
       seen[0].questions.s3__group0.instructions,
-      /^A=`sources\[2\]\.snippets\[0\]`\. Keep A if/
+      /^A=`sources\.s3\.snippets\[0\]`\. Keep A if/
     );
     assert.deepEqual(data, before, '日期接入不改原正文或元数据');
     const onSources = filtered.stats.sources;
@@ -1821,18 +1821,18 @@ describe('temporal context (all-only)', () => {
     const { state, questions } = seen[0];
     assert.equal(state.retrieval_time, RETRIEVAL);
     assert.equal(
-      state.sources[0]?.brave_page_date,
+      state.sources.s0?.brave_page_date,
       '2026-09-16T00:00:00',
       '合法绝对时间优先于纯日期'
     );
-    assert.equal(state.sources[1]?.brave_page_date, null, 'age 为空数组 → null，键恒在');
+    assert.equal(state.sources.s1?.brave_page_date, null, 'age 为空数组 → null，键恒在');
 
     // 组合题走三合一题干（s0 在数组位置 0，两片一组），页面题只判 filler
     const group = questions['s0__group0'];
     assert.ok(group);
     assert.equal(group.type, 'choice');
     assert.ok(
-      group.instructions.startsWith('A=`sources[0].snippets[0]`; B=`sources[0].snippets[1]`.')
+      group.instructions.startsWith('A=`sources.s0.snippets[0]`; B=`sources.s0.snippets[1]`.')
     );
     assert.ok(group.instructions.includes('architectural comparisons'));
     assert.ok(
@@ -1840,7 +1840,7 @@ describe('temporal context (all-only)', () => {
     );
     const pageQuestion = questions['s0__filler'];
     assert.ok(pageQuestion);
-    assert.ok(pageQuestion.instructions.startsWith('Judge the text of `sources[0]`.'));
+    assert.ok(pageQuestion.instructions.startsWith('Judge the text of `sources.s0`.'));
 
     // 幸存内容与裁决照旧：全 keep 输出 Brave 原序两来源
     assert.equal(result.grounding.generic.length, 2);
@@ -1854,7 +1854,7 @@ describe('temporal context (all-only)', () => {
     assert.equal(seen.length, 1);
     const { state } = seen[0];
     assert.equal('retrieval_time' in state, false, '非法值省略，绝不取系统时间冒充');
-    assert.equal(state.sources[0]?.brave_page_date, '2026-09-16T00:00:00');
+    assert.equal(state.sources.s0?.brave_page_date, '2026-09-16T00:00:00');
   });
 
   it('a single candidate keeps the time anchors with the shared all shape (no special template)', async () => {
@@ -1886,13 +1886,13 @@ describe('temporal context (all-only)', () => {
     );
     assert.equal(seen.length, 1);
     const state = seen[0].state;
-    assert.equal(state.sources.length, 1, '单候选同样是 sources[] 全量形状');
+    assert.equal(Object.keys(state.sources).length, 1, '单候选同样是 sources ID 对象全量形状');
     assert.equal(state.retrieval_time, RETRIEVAL);
-    assert.equal(state.sources[0]?.brave_page_date, '2026-09-16');
-    // 单片组合题（sources[0] 命名空间），不走特殊模板
+    assert.equal(state.sources.s0?.brave_page_date, '2026-09-16');
+    // 单片组合题（sources.s0 命名空间），不走特殊模板
     assert.match(
       seen[0].questions['s0__group0']?.instructions ?? '',
-      /^A=`sources\[0\]\.snippets\[0\]`\. Keep A if/
+      /^A=`sources\.s0\.snippets\[0\]`\. Keep A if/
     );
     assert.equal(stats.jev?.requests[0]?.request_id, 'j1');
   });
@@ -2250,7 +2250,7 @@ describe('dev.to 清理接入', () => {
         candidates[index].snippets.map((snippet) => snippet.text),
         expected
       );
-      assert.deepEqual(sent.sources[index].snippets, expected);
+      assert.deepEqual(sent.sources[`s${index}`].snippets, expected);
       assert.deepEqual(filtered.result.grounding.generic[index].snippets, expected);
     }
     assert.deepEqual(input, original);

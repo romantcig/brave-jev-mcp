@@ -17,8 +17,8 @@ const GROUP_LETTERS = 'ABC';
 export const GROUP_MAX_SIZE = 3;
 
 /** 页面题：模板拼凑且无作者论证时整页删除，论证豁免已合入题意。 */
-export const pageFillerInstructions = (arrayIndex: number): string =>
-  `Judge the text of \`sources[${arrayIndex}]\`. This source mostly repeats the topic name ` +
+export const pageFillerInstructions = (sourceId: string): string =>
+  `Judge the text of \`sources.${sourceId}\`. This source mostly repeats the topic name ` +
   'and generic phrasing without specific facts, or is a template article assembled from ' +
   "headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument " +
   'with stated reasons.';
@@ -61,10 +61,10 @@ export const choiceCriteria = (size: number): Record<string, null> => {
 };
 
 /** 多片组合题题干：显式字母引用＋保留/丢弃标准＋时间上下文＋独立逐片判断。 */
-export const groupInstructions = (sourceIndex: number, startIndex: number, size: number): string =>
+export const groupInstructions = (sourceId: string, startIndex: number, size: number): string =>
   GROUP_LETTERS.slice(0, size)
     .split('')
-    .map((letter, k) => `${letter}=\`sources[${sourceIndex}].snippets[${startIndex + k}]\``)
+    .map((letter, k) => `${letter}=\`sources.${sourceId}.snippets[${startIndex + k}]\``)
     .join('; ') +
   '. ' +
   GROUP_RETAIN +
@@ -72,26 +72,26 @@ export const groupInstructions = (sourceIndex: number, startIndex: number, size:
   ' Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.';
 
 /** 单片组合题题干：与多片同一组映射与解码结构，仅题干收短。 */
-export const singleInstructions = (sourceIndex: number, startIndex: number): string =>
-  `A=\`sources[${sourceIndex}].snippets[${startIndex}]\`. ` + SINGLE_BODY;
+export const singleInstructions = (sourceId: string, startIndex: number): string =>
+  `A=\`sources.${sourceId}.snippets[${startIndex}]\`. ` + SINGLE_BODY;
 
-/** 按数组位置构造页面模板垃圾题（noul）。 */
-export const buildPageFillerQuestion = (arrayIndex: number): JevQuestion => ({
+/** 按来源 ID 构造页面模板垃圾题（noul）。 */
+export const buildPageFillerQuestion = (sourceId: string): JevQuestion => ({
   type: 'noul',
-  instructions: pageFillerInstructions(arrayIndex),
+  instructions: pageFillerInstructions(sourceId),
 });
 
-/** 按数组位置、片段起始位置与组大小构造组合题（choice）。 */
+/** 按来源 ID、片段起始位置与组大小构造组合题（choice）。 */
 export const buildSnippetGroupQuestion = (
-  sourceIndex: number,
+  sourceId: string,
   startIndex: number,
   size: number
 ): JevQuestion => ({
   type: 'choice',
   instructions:
     size === 1
-      ? singleInstructions(sourceIndex, startIndex)
-      : groupInstructions(sourceIndex, startIndex, size),
+      ? singleInstructions(sourceId, startIndex)
+      : groupInstructions(sourceId, startIndex, size),
   criteria: choiceCriteria(size),
 });
 
@@ -132,16 +132,16 @@ export const DEFAULT_JEV_CONCURRENCY = 12;
 
 /**
  * 题库标识：页面题、一/二/三片组合题完整模板及各档选项顺序的规范化 JSON 哈希前 12 位。
- * 组合模板用 (0, 0) 实例化即可覆盖全部固定文字；自由变量只有下标。
+ * 组合模板用 ('s0', 0) 实例化覆盖全部固定文字；自由变量为来源 ID 与片段下标。
  * 阈值与解码规则由配置快照与规则版本表达，不进入本哈希。
  */
 export const QUESTION_SET_ID = createHash('sha256')
   .update(
     JSON.stringify([
-      pageFillerInstructions(0),
-      singleInstructions(0, 0),
-      groupInstructions(0, 0, 2),
-      groupInstructions(0, 0, 3),
+      pageFillerInstructions('s0'),
+      singleInstructions('s0', 0),
+      groupInstructions('s0', 0, 2),
+      groupInstructions('s0', 0, 3),
       choiceCriteria(1),
       choiceCriteria(2),
       choiceCriteria(3),

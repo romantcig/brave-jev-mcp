@@ -35,22 +35,22 @@ describe('pinned model and fallback constants', () => {
 // ---------------------------------------------------------------------------
 
 describe('pageFillerInstructions / buildPageFillerQuestion', () => {
-  it('expands only the array position and keeps the exact frozen wording', () => {
+  it('expands only the source ID and keeps the exact frozen wording', () => {
     assert.equal(
-      pageFillerInstructions(0),
-      'Judge the text of `sources[0]`. This source mostly repeats the topic name and ' +
+      pageFillerInstructions('s0'),
+      'Judge the text of `sources.s0`. This source mostly repeats the topic name and ' +
         'generic phrasing without specific facts, or is a template article assembled from ' +
         "headlines, AND it lacks the author's own evaluation, criticism, comparison, or " +
         'argument with stated reasons.'
     );
-    assert.ok(pageFillerInstructions(4).startsWith('Judge the text of `sources[4]`.'));
+    assert.ok(pageFillerInstructions('s4').startsWith('Judge the text of `sources.s4`.'));
   });
 
   it('types the page question as noul with the filler key and no criteria', () => {
-    const question = buildPageFillerQuestion(2);
+    const question = buildPageFillerQuestion('s2');
     assert.equal(question.type, 'noul');
     assert.equal('criteria' in question, false);
-    assert.equal(question.instructions, pageFillerInstructions(2));
+    assert.equal(question.instructions, pageFillerInstructions('s2'));
     assert.equal(PAGE_QUESTION_KEY, 'filler');
   });
 });
@@ -84,19 +84,19 @@ describe('choiceCriteria', () => {
 describe('groupInstructions / singleInstructions', () => {
   it('lists explicit letter references for multi-snippet groups and restarts letters per group', () => {
     assert.ok(
-      groupInstructions(0, 3, 2).startsWith(
-        'A=`sources[0].snippets[3]`; B=`sources[0].snippets[4]`. '
+      groupInstructions('s0', 3, 2).startsWith(
+        'A=`sources.s0.snippets[3]`; B=`sources.s0.snippets[4]`. '
       )
     );
     assert.ok(
-      groupInstructions(2, 6, 3).startsWith(
-        'A=`sources[2].snippets[6]`; B=`sources[2].snippets[7]`; C=`sources[2].snippets[8]`. '
+      groupInstructions('s2', 6, 3).startsWith(
+        'A=`sources.s2.snippets[6]`; B=`sources.s2.snippets[7]`; C=`sources.s2.snippets[8]`. '
       )
     );
   });
 
   it('carries the retain/discard standard, the time context and the exact-select closing line', () => {
-    const instructions = groupInstructions(0, 0, 3);
+    const instructions = groupInstructions('s0', 0, 3);
     assert.ok(
       instructions.includes(
         'Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`.'
@@ -116,8 +116,8 @@ describe('groupInstructions / singleInstructions', () => {
 
   it('uses the short single-snippet wording bound to one letter reference', () => {
     assert.equal(
-      singleInstructions(3, 0),
-      'A=`sources[3].snippets[0]`. Keep A if it provides specific information usable in ' +
+      singleInstructions('s3', 0),
+      'A=`sources.s3.snippets[0]`. Keep A if it provides specific information usable in ' +
         'answering `intent`. Discard navigation, boilerplate, off-direction content, mere ' +
         'topic mentions, and obsolete predictions replaced by confirmed events in `sources`. ' +
         'Retain still-applicable explanations, comparisons, and examples.'
@@ -127,17 +127,17 @@ describe('groupInstructions / singleInstructions', () => {
 
 describe('buildSnippetGroupQuestion', () => {
   it('builds single questions with the short wording and two-option criteria', () => {
-    const question = buildSnippetGroupQuestion(1, 3, 1);
+    const question = buildSnippetGroupQuestion('s1', 3, 1);
     assert.equal(question.type, 'choice');
-    assert.equal(question.instructions, singleInstructions(1, 3));
+    assert.equal(question.instructions, singleInstructions('s1', 3));
     if (question.type === 'choice') assert.deepEqual(Object.keys(question.criteria), ['none', 'A']);
   });
 
   it('builds two and three snippet questions with the full wording and matching criteria', () => {
     for (const size of [2, 3] as const) {
-      const question = buildSnippetGroupQuestion(0, 0, size);
+      const question = buildSnippetGroupQuestion('s0', 0, size);
       assert.equal(question.type, 'choice');
-      assert.equal(question.instructions, groupInstructions(0, 0, size));
+      assert.equal(question.instructions, groupInstructions('s0', 0, size));
       if (question.type === 'choice') {
         assert.deepEqual(question.criteria, choiceCriteria(size));
       }
@@ -195,6 +195,6 @@ describe('snippetGroupsOf', () => {
 describe('QUESTION_SET_ID (three-in-one recipe)', () => {
   it('pins the hash that covers the page template, all group templates and the option orders', () => {
     // 锁定现行题库完整哈希，防止题干、criteria 或选项顺序无意漂移。
-    assert.equal(QUESTION_SET_ID, 'da31568304ee');
+    assert.equal(QUESTION_SET_ID, '3757da50d137');
   });
 });

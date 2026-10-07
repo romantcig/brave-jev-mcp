@@ -619,7 +619,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
     };
     const sample = JSON.parse(readFileSync(sampleAbsPath, 'utf8')) as SampleShape;
     // 请求级载荷 + 来源级映射引用（全量共享请求，一次搜索零或一条）
-    assert.equal(sample.format_version, 8);
+    assert.equal(sample.format_version, 9);
     assert.match(
       sample.request_id,
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -723,9 +723,9 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
         assert.equal(content.length, mode === 'test' ? 2 : 1);
         assert.equal(sent.length, 1);
         assert.equal(sent[0].state.retrieval_time, anchor);
-        assert.equal(sent[0].state.sources[0].brave_page_date, '2026-09-16T00:00:00');
-        assert.equal(sent[0].state.sources[1].brave_page_date, null);
-        assert.match(sent[0].questions.s1__group0.instructions, /^A=`sources\[1\]/);
+        assert.equal(sent[0].state.sources.s0.brave_page_date, '2026-09-16T00:00:00');
+        assert.equal(sent[0].state.sources.s1.brave_page_date, null);
+        assert.match(sent[0].questions.s1__group0.instructions, /^A=`sources\.s1/);
         returns.push(JSON.parse(content[0].text));
         if (mode === 'test') {
           const { sample: raw } = readSingleSample(logDir);
@@ -748,7 +748,7 @@ describe(`${name} (test mode sample recording, 04-02)`, () => {
           assert.deepEqual(recorded.questions, sent[0].questions);
           assert.equal(recorded.dispatched, true);
           assert.deepEqual(recorded.source_ids, ['s0', 's1']);
-          assert.equal(sample.context_layout_id, 'jev-context-4');
+          assert.equal(sample.context_layout_id, 'jev-context-5');
           assert.equal(sample.filter_rules_version, FILTER_RULES_VERSION);
         }
       }

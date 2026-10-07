@@ -103,13 +103,13 @@ export type JevQuestion =
 
 /**
  * 共享请求上下文：sources 按 Brave 原序放入全部候选，不包含预筛删除的内容。
- * sources[i] 的 i 是数组位置，不是来源 ID 中的原始索引。
+ * sources 按稳定来源 ID 建立对象，键与来源内部 id 相同，按候选原序插入。
  * 每来源带 brave_page_date；合法检索时间放在顶层 retrieval_time，否则省略。
  */
 export type JevState = {
   query: string;
   intent: string;
-  sources: JevCandidate[];
+  sources: Record<string, JevCandidate>;
   /** 检索时间（宿主捕获的合法值；缺失或非法时省略，同一搜索全路径同值） */
   retrieval_time?: string;
 };
@@ -242,7 +242,7 @@ export type JevPerSourceStats = {
 export type JevRequestMappingEntry = {
   /** 探测约定 id：`s{braveIndex}` */
   source_id: string;
-  /** 该来源在请求 state 里的位置：`state.sources` 数组下标 */
+  /** 候选原序序号，仅记录顺序；查找 state.sources 必须使用 source_id。 */
   array_index: number;
   /** 候选片段配对身份（与 JevDispatchRecord.snippet_keys 同源同序） */
   snippet_keys: string[];
@@ -261,7 +261,7 @@ export type JevRequestMappingEntry = {
 export type JevRequestRecord = {
   /** 本次搜索内唯一请求 ID（`j1`、`j2` …按派发顺序分配） */
   request_id: string;
-  /** 覆盖的来源 ID（按 state.sources 数组序） */
+  /** 覆盖的来源 ID（按候选原序，与 state.sources 插入顺序一致） */
   source_ids: string[];
   /** 是否已派发（fetch 已调用；breaker_open / 防御短路一律 false） */
   dispatched: boolean;
@@ -441,6 +441,11 @@ export type DevToCleanupResult = {
   actions: DevToCleanupAction[];
 };
 
+/** 最终清理动作：片段身份为原始 index 或 JSON-LD 的 index.part。 */
+export type FinalCleanupAction =
+  | { rule: 'same_source_exact_coverage'; snippet: string; covered_by: string }
+  | { rule: 'empty_takeaways'; snippet: string };
+
 /** 逐片段裁决统计，仅含身份、标记与字符数。 */
 export type SnippetStats = {
   index: number;
@@ -459,6 +464,8 @@ export type SnippetStats = {
   x_cleanup?: XCleanupAction[];
   /** test/on 的 dev.to 整片清理明细。 */
   devto_cleanup?: DevToCleanupAction[];
+  /** 完整有效 Jev 判断后的本地整片清理；覆盖者属于同一来源的最终代表。 */
+  final_cleanup?: FinalCleanupAction;
   /** 临界规则删除时携带的实际补偿距离（含 0）；原判定删除不带此键。 */
   near_threshold_gap?: number;
   chars: number;
@@ -545,7 +552,7 @@ export type JevDispatchRecord = {
    * 未派发的请求（熔断短路等），此时按 not_dispatched_reason 解释
    */
   request_id?: string;
-  /** 来源在 state.sources 中的数组位置，不能与 src 中的原始索引混用。 */
+  /** 候选原序序号，仅记录顺序；查找 state.sources 必须使用 src。 */
   array_index?: number;
   /**
    * 请求是否已派发（fetch 已调用；不保证服务端已收到或已处理——重试、断连、

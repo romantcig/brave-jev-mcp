@@ -20,20 +20,25 @@ import { DEFAULT_JEV_MODEL } from './questions.js';
 import { buildContextRequest, projectSourceAnswers } from './context.js';
 
 // ---------------------------------------------------------------------------
-// 全量共享请求辅助（all-only）：全部 classify 桩统一使用 sources[] 形状
+// 全量共享请求辅助（all-only）：全部 classify 桩统一使用 sources ID 对象形状
 // ---------------------------------------------------------------------------
 
 /** 构造最小全量 state：n 个来源各 m 条片段，日期恒在（无元数据为 null）。 */
 const makeAllState = (sourceCount = 1, snippetsPerSource = 1): JevState => ({
   query: 'q',
   intent: 'i',
-  sources: Array.from({ length: sourceCount }, (_, index) => ({
-    id: `s${index}`,
-    url: `https://s${index}.example/`,
-    title: `Title ${index}`,
-    snippets: Array.from({ length: snippetsPerSource }, (_, i) => `snippet ${i} text`),
-    brave_page_date: null,
-  })),
+  sources: Object.fromEntries(
+    Array.from({ length: sourceCount }, (_, index) => [
+      `s${index}`,
+      {
+        id: `s${index}`,
+        url: `https://s${index}.example/`,
+        title: `Title ${index}`,
+        snippets: Array.from({ length: snippetsPerSource }, (_, i) => `snippet ${i} text`),
+        brave_page_date: null,
+      },
+    ])
+  ),
 });
 
 /** 组合题 criteria 速记：按位掩码序生成标签映射（值均为 null）。 */
@@ -54,7 +59,7 @@ const choiceCriteriaOf = (size: number): Record<string, null> => {
  */
 const makeQuestions = (state: JevState): Record<string, JevQuestion> =>
   Object.fromEntries(
-    state.sources.flatMap((source) => {
+    Object.values(state.sources).flatMap((source) => {
       const questions: Array<[string, JevQuestion]> = [
         [`${source.id}__filler`, { type: 'noul', instructions: 'x' }],
       ];
@@ -333,7 +338,7 @@ const mockJevSuccessResponse = (
   const textLen =
     state.query.length +
     state.intent.length +
-    state.sources.reduce(
+    Object.values(state.sources).reduce(
       (sum, s) => sum + s.title.length + s.snippets.reduce((acc, snip) => acc + snip.length, 0),
       0
     );
@@ -858,15 +863,15 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const bigState: JevState = {
       query: 'q',
       intent: 'i',
-      sources: [
-        {
+      sources: {
+        s0: {
           id: 's0',
           url: 'https://s0.example/',
           title: 'Title',
           snippets: ['中'.repeat(80_000)],
           brave_page_date: null,
         },
-      ],
+      },
     };
     assert.ok(JSON.stringify(bigState).length > 80_000, '仅 state 已超过 80_000 字符');
     const bigQuestions = makeQuestions(bigState);
@@ -1096,15 +1101,15 @@ describe('createJevClassifier retry (SAFE-03)', () => {
     const state: JevState = {
       query: 'q',
       intent: 'i',
-      sources: [
-        {
+      sources: {
+        s0: {
           id: 's0',
           url: 'https://a.example/',
           title: 'Title',
           snippets: ['one'],
           brave_page_date: '2026-09-16',
         },
-      ],
+      },
       retrieval_time: '2026-10-03T23:59:59.900+08:00',
     };
     const seen: Array<{ state: JevState; questions: Record<string, JevQuestion> }> = [];
@@ -1128,7 +1133,7 @@ describe('createJevClassifier retry (SAFE-03)', () => {
       assert.equal(seen.length, 2);
       assert.deepEqual(seen[0], seen[1], 'retries must reuse the identical request body');
       assert.equal(seen[0]?.state.retrieval_time, '2026-10-03T23:59:59.900+08:00');
-      assert.equal(seen[0]?.state.sources[0]?.brave_page_date, '2026-09-16');
+      assert.equal(seen[0]?.state.sources.s0?.brave_page_date, '2026-09-16');
     } finally {
       globalThis.fetch = saved;
     }
@@ -1521,22 +1526,22 @@ describe('createJevClassifier all-context branch (FULL_CONTEXT_ROLLOUT_PLAN T06/
   const allState: JevState = {
     query: 'q',
     intent: 'i',
-    sources: [
-      {
+    sources: {
+      s0: {
         id: 's0',
         url: 'https://a.example/',
         title: 'A',
         snippets: ['one'],
         brave_page_date: null,
       },
-      {
+      s1: {
         id: 's1',
         url: 'https://b.example/',
         title: 'B',
         snippets: ['two'],
         brave_page_date: null,
       },
-    ],
+    },
   };
   const smallQuestions: Record<string, JevQuestion> = {
     s0__filler: { type: 'noul', instructions: 'x' },

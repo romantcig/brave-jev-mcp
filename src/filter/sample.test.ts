@@ -162,7 +162,7 @@ describe('createSampleWriter', () => {
     const raw = readFileSync(path.absolute, 'utf8');
     const sample = JSON.parse(raw) as SampleRecord;
 
-    assert.equal(sample.format_version, 8);
+    assert.equal(sample.format_version, 9);
     assert.equal(sample.request_id, requestId);
     assert.equal(sample.mode, 'test');
     assert.deepEqual(sample.request, {
