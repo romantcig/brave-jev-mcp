@@ -1,6 +1,6 @@
 {
   "name": "@romantcig/brave-jev-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Brave Search MCP server with intent-aware Jev content filtering.",
   "keywords": [
     "api",
@@ -24,7 +24,8 @@
   "files": [
     "dist",
     "README_CHINESE.md",
-    "FILTERING.md"
+    "FILTERING.md",
+    "MECHANISMS.md"
   ],
   "scripts": {
     "build": "shx rm -rf dist && tsc && shx chmod +x dist/*.js",
