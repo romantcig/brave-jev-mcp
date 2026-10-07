@@ -88,9 +88,9 @@ describe('parseFilterConfigObject: shape and defaults', () => {
 
   it('carries the three DEFAULT_THRESHOLDS values verbatim', () => {
     assert.deepEqual(parseFilterConfigObject({}).thresholds, {
-      fillerDrop: 0.8,
+      fillerDrop: 0.77,
       groupKeepMin: 0.25,
-      singleKeepMin: 0.5,
+      singleKeepMin: 0.35,
     });
   });
 

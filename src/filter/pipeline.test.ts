@@ -739,20 +739,20 @@ describe('near-threshold verdict end to end', () => {
     };
 
   it('page verdict within the gap drops the source and records near_threshold_gap without rewriting p', async () => {
-    // s0 页面 0.79：未达 0.8 原线，临界删除；s1 页面 0、片段 A=1 全保留
+    // s0 页面 0.76：未达 0.77 原线，临界删除；s1 页面 0、片段 A=1 全保留
     const { result, stats } = await filterLlmContext(
       nearPayload(),
       request,
       { ...offConfig, mode: 'test' },
-      { classify: makeNearClassify({ s0: 0.79, s1: 0 }, { s0: 1, s1: 1 }) }
+      { classify: makeNearClassify({ s0: 0.76, s1: 0 }, { s0: 1, s1: 1 }) }
     );
 
     const rowOf = (src: string) => stats.jev?.per_source.find((row) => row.src === src);
     assert.equal(rowOf('s0')?.verdict, 'drop');
     assert.equal(rowOf('s0')?.reason, 'filler');
-    // 实际浮点距离如实记录（0.8 - 0.79），原概率不被改写
-    assert.equal(rowOf('s0')?.near_threshold_gap, 0.8 - 0.79);
-    assert.equal(rowOf('s0')?.answers?.filler, 0.79);
+    // 实际浮点距离如实记录（0.77 - 0.76），原概率不被改写
+    assert.equal(rowOf('s0')?.near_threshold_gap, 0.77 - 0.76);
+    assert.equal(rowOf('s0')?.answers?.filler, 0.76);
     assert.equal(rowOf('s1')?.verdict, 'keep');
     assert.equal(rowOf('s1')?.near_threshold_gap, undefined);
 
@@ -771,12 +771,12 @@ describe('near-threshold verdict end to end', () => {
   });
 
   it('snippet verdict within the gap drops the snippet, empty source follows, gap 0 kept verbatim', async () => {
-    // s1 页面 0 保留，单片片段 A=0.5 恰达保留线：临界删除 gap 0，来源随后按 empty 删除
+    // s1 页面 0 保留，单片片段 A=0.35 恰达保留线：临界删除 gap 0，来源随后按 empty 删除
     const { result, stats } = await filterLlmContext(
       nearPayload(),
       request,
       { ...offConfig, mode: 'test' },
-      { classify: makeNearClassify({ s0: 0, s1: 0 }, { s0: 1, s1: 0.5 }) }
+      { classify: makeNearClassify({ s0: 0, s1: 0 }, { s0: 1, s1: 0.35 }) }
     );
 
     const stats1 = stats.sources.find((source) => source.url === 'https://near-snippet.example/');
@@ -802,12 +802,12 @@ describe('near-threshold verdict end to end', () => {
   });
 
   it('verdicts strictly outside the gap stay untouched (no near markers, content kept)', async () => {
-    // 页面 0.7799（差 0.0201）、片段 A=0.5201（差 0.0201）：全部保留且无标记
+    // 页面 0.7499（差 0.0201）、片段 A=0.3701（差 0.0201）：全部保留且无标记
     const { result, stats } = await filterLlmContext(
       nearPayload(),
       request,
       { ...offConfig, mode: 'test' },
-      { classify: makeNearClassify({ s0: 0.7799, s1: 0 }, { s0: 1, s1: 0.5201 }) }
+      { classify: makeNearClassify({ s0: 0.7499, s1: 0 }, { s0: 1, s1: 0.3701 }) }
     );
 
     assert.equal(
@@ -1270,7 +1270,7 @@ describe('all-context request organization (T02-T09/T11)', () => {
     assert.equal(stats.jev?.n_requests, 1);
     const row = (stats.jev?.per_source ?? [])[0];
     assert.equal(row?.status, 'answered');
-    // 保留概率应用正确：单片 p(A)=1 高于 0.5 门槛保留
+    // 保留概率应用正确：单片 p(A)=1 高于 0.35 门槛保留
     assert.deepEqual(row?.snippet_judgments, [{ kind: 'keep_probability', value: 1 }]);
     assert.deepEqual(
       result.grounding.generic.map((item) => item.url),
@@ -1834,13 +1834,20 @@ describe('temporal context (all-only)', () => {
     assert.ok(
       group.instructions.startsWith('A=`sources.s0.snippets[0]`; B=`sources.s0.snippets[1]`.')
     );
-    assert.ok(group.instructions.includes('architectural comparisons'));
     assert.ok(
-      group.instructions.includes('an earlier prediction replaced by a confirmed event is obsolete')
+      group.instructions.includes('specific facts, explanations, code, or concrete experiences')
+    );
+    assert.ok(
+      group.instructions.includes(
+        'predictions superseded by confirmed events in `sources`; keep still-applicable explanations and examples.'
+      )
     );
     const pageQuestion = questions['s0__filler'];
     assert.ok(pageQuestion);
-    assert.ok(pageQuestion.instructions.startsWith('Judge the text of `sources.s0`.'));
+    assert.ok(
+      pageQuestion.instructions ===
+        'No snippet in `sources.s0` contains information useful for answering `intent`.'
+    );
 
     // 幸存内容与裁决照旧：全 keep 输出 Brave 原序两来源
     assert.equal(result.grounding.generic.length, 2);

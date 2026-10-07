@@ -99,7 +99,7 @@ describe('buildContextRequest: state / questions / mapping', () => {
     );
     assert.match(
       request.questions['s0__filler']?.instructions ?? /$/,
-      /^Judge the text of `sources\.s0`\./
+      /^No snippet in `sources\.s0` contains information useful for answering `intent`\.$/
     );
 
     // 四片段来源：3 + 1 两组；group0 用完整组合题，group3 用单片短题

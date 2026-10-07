@@ -2,6 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { DEFAULT_THRESHOLDS } from './questions.js';
 import { NEAR_THRESHOLD_MAX_GAP, sourceDropVerdict, snippetDropVerdict } from './threshold.js';
 
 /** 距离断言：允许机器尾差级别的偏差，但不接受业务级舍入。 */
@@ -14,7 +15,7 @@ const assertGapCloseTo = (actual: number | undefined, expected: number): void =>
 };
 
 // ---------------------------------------------------------------------------
-// 页面方向（T=0.80 默认）：p >= T 原规则删除；T - p <= 0.02 临界删除
+// 页面方向（显式 T=0.80）：p >= T 原规则删除；T - p <= 0.02 临界删除
 // ---------------------------------------------------------------------------
 
 describe('sourceDropVerdict', () => {
@@ -158,5 +159,37 @@ describe('snippetDropVerdict', () => {
 
     const outside = snippetDropVerdict(0.3501, 0.33);
     assert.deepEqual(outside, { drop: false });
+  });
+});
+
+describe('正式默认阈值边界', () => {
+  it('页面从 0.75 删除，0.77 起不带临界标记', () => {
+    assert.equal(DEFAULT_THRESHOLDS.fillerDrop, 0.77);
+    for (const p of [0.73, 0.74, 0.7499]) {
+      assert.deepEqual(sourceDropVerdict(p, DEFAULT_THRESHOLDS.fillerDrop), { drop: false });
+    }
+    for (const p of [0.75, 0.76]) {
+      const verdict = sourceDropVerdict(p, DEFAULT_THRESHOLDS.fillerDrop);
+      assert.equal(verdict.drop, true);
+      assertGapCloseTo(verdict.nearThresholdGap, 0.77 - p);
+    }
+    assert.deepEqual(sourceDropVerdict(0.77, DEFAULT_THRESHOLDS.fillerDrop), { drop: true });
+  });
+
+  it('单片 0.35／0.36／0.37 删除，0.38 保留；恰达基础线记录 gap=0', () => {
+    assert.equal(DEFAULT_THRESHOLDS.singleKeepMin, 0.35);
+    for (const p of [0.35, 0.36, 0.37]) {
+      const verdict = snippetDropVerdict(p, DEFAULT_THRESHOLDS.singleKeepMin);
+      assert.equal(verdict.drop, true);
+      assertGapCloseTo(verdict.nearThresholdGap, p - 0.35);
+    }
+    assert.equal(snippetDropVerdict(0.35, DEFAULT_THRESHOLDS.singleKeepMin).nearThresholdGap, 0);
+    assert.deepEqual(snippetDropVerdict(0.38, DEFAULT_THRESHOLDS.singleKeepMin), { drop: false });
+  });
+
+  it('多片 0.27 删除，0.28 保留', () => {
+    assert.equal(DEFAULT_THRESHOLDS.groupKeepMin, 0.25);
+    assert.equal(snippetDropVerdict(0.27, DEFAULT_THRESHOLDS.groupKeepMin).drop, true);
+    assert.deepEqual(snippetDropVerdict(0.28, DEFAULT_THRESHOLDS.groupKeepMin), { drop: false });
   });
 });

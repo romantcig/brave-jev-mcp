@@ -268,7 +268,7 @@ describe('createSampleWriter', () => {
     };
     const threeNone = { none: 1, A: 0, B: 0, AB: 0, C: 0, AC: 0, BC: 0, ABC: 0 };
     const rawAnswers = {
-      s0__filler: { type: 'noul', noul: 0.8 },
+      s0__filler: { type: 'noul', noul: 0.92 },
       s0__group0: {
         type: 'choice',
         choice: 'ABC',
@@ -281,7 +281,7 @@ describe('createSampleWriter', () => {
       s2__filler: { type: 'noul', noul: 0.1 },
       s2__group0: { type: 'choice', probabilities: [1, 0] },
       s2__group3: { type: 'choice', choice: 'none', probabilities: threeNone },
-      s2__group6: { type: 'choice', choice: 'none', probabilities: { none: 0.5, A: 0.5 } },
+      s2__group6: { type: 'choice', choice: 'none', probabilities: { none: 0.65, A: 0.35 } },
       s3__filler: { type: 'noul', noul: 0.1 },
       s3__group0: { type: 'choice', choice: 'none', probabilities: { none: 1, A: 0 } },
     };
@@ -359,9 +359,9 @@ describe('createSampleWriter', () => {
       ['keep', 'keep', 'keep', 'drop', 'drop', 'drop', 'drop']
     );
     assert.equal(jev.sent[2].snippets[0].invalid_reason, 'missing');
-    assert.equal(jev.sent[2].snippets[6].keep_probability, 0.5);
-    assert.equal(jev.sent[2].snippets[6].threshold, 0.5);
-    // 0.5 恰达单片保留线：临界裁决删除，样本如实记录 gap 0，原概率与门槛不变。
+    assert.equal(jev.sent[2].snippets[6].keep_probability, 0.35);
+    assert.equal(jev.sent[2].snippets[6].threshold, 0.35);
+    // 0.35 恰达单片保留线：临界裁决删除，样本如实记录 gap 0，原概率与门槛不变。
     assert.equal(jev.sent[2].snippets[6].near_threshold_gap, 0);
     // 片段裁决删空来源时，不能把已经应用的概率误记成未应用。
     assert.deepEqual(
@@ -405,15 +405,15 @@ describe('createSampleWriter', () => {
       sources: {},
     };
     const rawAnswers = {
-      s0__filler: { type: 'noul', noul: 0.78 },
-      s0__group0: { type: 'choice', probabilities: { none: 0.5, A: 0.5 } },
+      s0__filler: { type: 'noul', noul: 0.75 },
+      s0__group0: { type: 'choice', probabilities: { none: 0.65, A: 0.35 } },
       s1__filler: { type: 'noul', noul: 0 },
-      s1__group0: { type: 'choice', probabilities: { none: 0.5, A: 0.5 } },
+      s1__group0: { type: 'choice', probabilities: { none: 0.65, A: 0.35 } },
       s2__filler: { type: 'noul', noul: 0 },
-      s2__group0: { type: 'choice', probabilities: { none: 0.48, A: 0.52 } },
+      s2__group0: { type: 'choice', probabilities: { none: 0.63, A: 0.37 } },
       s3__filler: { type: 'noul', noul: 0 },
       // 单项概率落在临界带内，但组合概率和无效，不能参与临界裁决。
-      s3__group0: { type: 'choice', probabilities: { none: 0.6, A: 0.5 } },
+      s3__group0: { type: 'choice', probabilities: { none: 0.75, A: 0.35 } },
     };
     const { captured, restore } = stubFetch(() => ({
       status: 200,
@@ -475,17 +475,17 @@ describe('createSampleWriter', () => {
       }
     }
     assert.equal(jev.per_source[0].near_threshold_gap, 0.02);
-    assert.equal(jev.per_source[0].answers?.filler, 0.78);
+    assert.equal(jev.per_source[0].answers?.filler, 0.75);
     assert.deepEqual(
       jev.sent.map((source) => {
         const sn = source.snippets[0];
         return [sn.keep_probability, sn.threshold, sn.applied, sn.near_threshold_gap, sn.reason];
       }),
       [
-        [0.5, 0.5, false, undefined, 'filler'],
-        [0.5, 0.5, true, 0, 'empty'],
-        [0.52, 0.5, true, 0.02, 'empty'],
-        [null, 0.5, false, undefined, undefined],
+        [0.35, 0.35, false, undefined, 'filler'],
+        [0.35, 0.35, true, 0, 'empty'],
+        [0.37, 0.35, true, 0.02, 'empty'],
+        [null, 0.35, false, undefined, undefined],
       ]
     );
     assert.equal(jev.sent[3].snippets[0].invalid_reason, 'sum');

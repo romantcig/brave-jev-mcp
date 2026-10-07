@@ -31,19 +31,19 @@ describe('pinned model and fallback constants', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 页面题：每来源一道模板垃圾题，局部键 filler，noul 无 criteria。
+// 页面题：每来源一道无有用信息题，局部键 filler，noul 无 criteria。
 // ---------------------------------------------------------------------------
 
 describe('pageFillerInstructions / buildPageFillerQuestion', () => {
   it('expands only the source ID and keeps the exact frozen wording', () => {
     assert.equal(
       pageFillerInstructions('s0'),
-      'Judge the text of `sources.s0`. This source mostly repeats the topic name and ' +
-        'generic phrasing without specific facts, or is a template article assembled from ' +
-        "headlines, AND it lacks the author's own evaluation, criticism, comparison, or " +
-        'argument with stated reasons.'
+      'No snippet in `sources.s0` contains information useful for answering `intent`.'
     );
-    assert.ok(pageFillerInstructions('s4').startsWith('Judge the text of `sources.s4`.'));
+    assert.equal(
+      pageFillerInstructions('s4'),
+      'No snippet in `sources.s4` contains information useful for answering `intent`.'
+    );
   });
 
   it('types the page question as noul with the filler key and no criteria', () => {
@@ -95,26 +95,22 @@ describe('groupInstructions / singleInstructions', () => {
     );
   });
 
-  it('carries the retain/discard standard, the time context and the exact-select closing line', () => {
-    const instructions = groupInstructions('s0', 0, 3);
-    assert.ok(
-      instructions.includes(
-        'Retain snippets containing specific facts, technical explanations, architectural comparisons, or practical examples usable in answering `intent`.'
-      )
+  it('逐字钉住二／三片完整题干、引用位置与独立判断要求', () => {
+    const body =
+      'Keep snippets with specific facts, explanations, code, or concrete experiences useful for answering `intent`. ' +
+      'Discard boilerplate, irrelevant text, empty praise, and predictions superseded by confirmed events in `sources`; ' +
+      'keep still-applicable explanations and examples. Evaluate each snippet independently. Select exactly the letters to keep, or none.';
+    assert.equal(
+      groupInstructions('s0', 3, 2),
+      'A=`sources.s0.snippets[3]`; B=`sources.s0.snippets[4]`. ' + body
     );
-    assert.ok(
-      instructions.includes(
-        'Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed event is obsolete'
-      )
-    );
-    assert.ok(
-      instructions.endsWith(
-        'Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.'
-      )
+    assert.equal(
+      groupInstructions('s2', 6, 3),
+      'A=`sources.s2.snippets[6]`; B=`sources.s2.snippets[7]`; C=`sources.s2.snippets[8]`. ' + body
     );
   });
 
-  it('uses the short single-snippet wording bound to one letter reference', () => {
+  it('保持单片专用全文与字母引用', () => {
     assert.equal(
       singleInstructions('s3', 0),
       'A=`sources.s3.snippets[0]`. Keep A if it provides specific information usable in ' +
@@ -126,14 +122,14 @@ describe('groupInstructions / singleInstructions', () => {
 });
 
 describe('buildSnippetGroupQuestion', () => {
-  it('builds single questions with the short wording and two-option criteria', () => {
+  it('构造专用单片题干与两个选项', () => {
     const question = buildSnippetGroupQuestion('s1', 3, 1);
     assert.equal(question.type, 'choice');
     assert.equal(question.instructions, singleInstructions('s1', 3));
     if (question.type === 'choice') assert.deepEqual(Object.keys(question.criteria), ['none', 'A']);
   });
 
-  it('builds two and three snippet questions with the full wording and matching criteria', () => {
+  it('构造二／三片题干及对应选项', () => {
     for (const size of [2, 3] as const) {
       const question = buildSnippetGroupQuestion('s0', 0, size);
       assert.equal(question.type, 'choice');
@@ -195,6 +191,6 @@ describe('snippetGroupsOf', () => {
 describe('QUESTION_SET_ID (three-in-one recipe)', () => {
   it('pins the hash that covers the page template, all group templates and the option orders', () => {
     // 锁定现行题库完整哈希，防止题干、criteria 或选项顺序无意漂移。
-    assert.equal(QUESTION_SET_ID, '3757da50d137');
+    assert.equal(QUESTION_SET_ID, '41583c9d12dc');
   });
 });
