@@ -8,6 +8,7 @@ secrets/*
 # generated / runtime output
 __pycache__/
 .gsd/
+.repowise/
 
 # private notes (Jev performance info restricted by TypeSafe MCA)
 notes/private-*.md
@@ -32,5 +33,7 @@ AGENT_LEARNINGS.md
 
 # markdown
 *.md
-**/*.md
+!/README.md
 !/README_CHINESE.md
+!/FILTERING.md
+!/MECHANISMS.md

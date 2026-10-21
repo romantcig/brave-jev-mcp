@@ -1,78 +1,89 @@
-# Brave Search MCP · Jev Filter
+# Brave Jev MCP
 
-English | [简体中文](README_CHINESE.md)
+English | [简体中文](https://github.com/romantcig/brave-jev-mcp/blob/release/README_CHINESE.md)
 
-Search results can contain pages and snippets that mention the right topic but contribute little to an answer. Passing them all to an AI agent consumes context and leaves the agent to separate useful evidence from noise.
+Web search results often contain junk articles and passages that mention the right keywords without answering the question. This material consumes context and leaves the AI to find answers among unrelated information.
 
-Built on [Brave Search MCP Server](https://github.com/brave/brave-search-mcp-server), this project uses [Jev](https://docs.typesafe.ai/) to filter content before `brave_llm_context` returns it. Filtering follows the search intent, retains useful facts, explanations, and analysis, and preserves Brave's original ordering.
+**This project removes unhelpful pages and snippets before search results reach the AI, leaving more context for information that can help answer the question.**
 
-The core design combines **three-snippet choice groups, per-snippet probability recovery, and near-threshold compensation** to reduce repeated question tokens while addressing missed removals and accidental deletions.
+Built on [Brave Search MCP Server](https://github.com/brave/brave-search-mcp-server), the project uses Brave to search the web and extract content, and [Jev](https://typesafe.ai/) to filter it according to the purpose of the search. Retained content keeps its source links and Brave's original ordering so the AI can read, answer, and cite it.
 
-## What gets filtered
+Filtering currently applies only to `brave_llm_context`. Other search tools remain available, but their results do not pass through this project's filtering layer or call Jev for screening.
 
-Matching a topic does not necessarily make a passage useful for a particular question. The filter uses `intent` to judge whether content helps answer the current information need.
+Regular web search (`brave_web_search`) mainly returns links and short summaries that help people decide which pages to open. In contrast, `brave_llm_context` provides content snippets extracted from web pages for the AI to read directly. In our testing, `brave_llm_context` delivers significantly higher information density and more material that can directly support an answer. We therefore recommend `brave_llm_context` even with filtering disabled.
 
-- **Page decisions (Noul)** identify pages dominated by generic phrasing, repeated topic names, or articles assembled from headlines. The question protects an author's own evaluation, criticism, comparisons, and arguments when supported by stated reasons.
-- **Snippet decisions (Choice)** remove navigation, boilerplate, off-direction content, topic mentions without usable information, and predictions superseded by confirmed events.
+## Installation
 
-Specific facts, technical explanations, architectural comparisons, and practical examples are retention targets. Time-sensitive judgments use retrieval time, available page dates, and the sources from the same search. Explanations and examples that still apply are not treated as useless merely because they are older.
+Prepare the following:
 
-## One question, three independent snippet decisions
+- [Node.js](https://nodejs.org/).
+- A [Brave Search API key](https://brave.com/search/api/). A credit card is required. The API provides $5 in free monthly credits, covering 1,000 searches at the current Search plan price.
+- A [Jev API key](https://typesafe.ai/) for filtering.
 
-Asking a separate question for every snippet repeats the same filtering instructions throughout the request. Combining snippets into a single keep-or-drop decision reduces that repetition but forces useful material and noise to share one outcome.
+We recommend setting `BRAVE_API_KEY` (your Brave key) and `TYPESAFE_API_KEY` (your Jev key) as environment variables and ensuring that your AI client passes them to the MCP process. The server reads these variables automatically. If your client requires explicit forwarding, use its environment variable settings.
 
-This project groups **up to three consecutive snippets from the same source** into a Choice question. A, B, and C identify individual snippets, and each option represents a retention combination:
-
-| Option | Meaning          |
-| ------ | ---------------- |
-| `none` | Remove all three |
-| `A`    | Keep only A      |
-| `B`    | Keep only B      |
-| `AB`   | Keep A and B     |
-| `C`    | Keep only C      |
-| `AC`   | Keep A and C     |
-| `BC`   | Keep B and C     |
-| `ABC`  | Keep all three   |
-
-**A single-choice question represents the keep-or-remove state of three snippets.** The snippets share instructions while retaining their individual identities. A group containing both useful material and noise can therefore receive separate outcomes for each snippet. Groups at the end of a source automatically use two snippets or a single snippet when fewer than three remain.
-
-Jev returns a probability distribution over the options. The filter sums the probabilities of all combinations containing a snippet to recover that snippet's retention probability. For example:
-
-```text
-P(keep A) = P(A) + P(AB) + P(AC) + P(ABC)
-```
-
-Each snippet is then evaluated against its retention threshold. Support for a snippet can accumulate across several combinations, reducing the risk of losing useful content by relying solely on the highest-probability option.
-
-The candidate sources, search intent, and questions for one search are sent in a shared request, with the source text stored once in the shared context. Grouping further reduces the number of questions that must repeat the filtering criteria.
-
-A group of `n` snippets requires `2ⁿ` retention combinations. Larger groups reduce instruction repetition but increase the option count exponentially. Jev's Choice supports up to 255 options; a complete set of eight-snippet combinations would require 256. This project fixes the group size at three, with eight options, balancing instruction cost, option count, and decision granularity.
-
-## Handling decisions near a threshold
-
-A hard threshold gives different outcomes to judgments that are very close together. With a page-removal threshold of `0.80`, for example, a page with a filler probability of `0.78` would survive. Project observations found borderline content that leaned toward removal in this range, allowing unwanted material to slip through the cutoff.
-
-The filter addresses this with a fixed `0.02` compensation band. Valid judgments close enough to the removal boundary also trigger removal. This is an engineering setting adopted from the project's observations of borderline cases, defining how far the compensation extends.
-
-- **Pages use filler probability:** with a removal threshold of `0.80`, a probability of `0.78` also triggers removal.
-- **Snippets use retention probability:** values below the retention threshold trigger removal, as do values at the threshold or up to `0.02` above it.
-
-Compensation changes the local decision while preserving the returned probabilities. It is disabled for any threshold set to `0` or `1`. Grouping reduces instruction overhead, per-snippet decisions preserve filtering granularity, and compensation addresses unwanted content near the cutoff.
-
-## Runtime behavior and configuration
-
-Routine calls can omit the search budgets: the server sends `count: 10`, `maximum_number_of_urls: 5`, `maximum_number_of_tokens: 4000`, and `maximum_number_of_tokens_per_url: 800` when omitted. Explicit values override each budget independently. Increase them only when returned results show a need for more source coverage or passage detail.
-
-Local cleanup removes recognizable structured boilerplate, interface remnants, and empty snippets before Jev evaluates the remaining content. Empty sources are removed afterward, preserving the original order of surviving sources and snippets.
-
-If Jev is unavailable, candidates that have passed local cleanup are returned. An invalid group answer cannot justify deleting that group; other valid decisions still apply. The `test` and `on` modes use the same filtering logic, with `test` additionally saving complete samples for inspection.
-
-Set `TYPESAFE_API_KEY` to your Jev API key in the MCP server's `env` configuration. The server reads `~/.brave-jev/config.json` by default and creates it with the following content if it does not exist, preserving existing files:
+Add the following configuration to your AI client. `npx` downloads and starts the package automatically:
 
 ```json
-{ "mode": "on" }
+{
+  "mcpServers": {
+    "brave-jev": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@romantcig/brave-jev-mcp@latest",
+        "--transport",
+        "stdio",
+        "--enabled-tools",
+        "brave_llm_context"
+      ]
+    }
+  }
+}
 ```
 
-The default mode is `on`. Set `mode` to `off` to run basic local cleanup only. Optionally set `JEV_FILTER_CONFIG_FILE` to use a different JSON file; create that file yourself. Restart the MCP server after changing configuration or API keys.
+The example uses `@latest` to get the latest version published on npm.
 
-With Jev enabled and a key available, `intent` is required. With `mode: off` or a missing key, the tool exposes search parameters and a description without `intent`. Missing keys also produce configuration instructions in the returned filter status. See the [filter configuration guide (Chinese)](FILTERING.md) for configuration, thresholds, and logs. The filter lives in [src/filter/](src/filter/), with integration in [brave_llm_context](src/tools/llm_context/index.ts).
+`--enabled-tools` selects which tools are exposed to the AI. The configuration above exposes only `brave_llm_context`. To enable more tools, append their names as separate strings after this argument. If no other tool filtering options are set, removing the argument and its tool names exposes all tools.
+
+Other tools include:
+
+- Web search (`brave_web_search`): mainly returns page links and short summaries, with significantly less detailed content than `brave_llm_context`.
+- Local search (`brave_local_search`): searches for local businesses and places.
+- News search (`brave_news_search`): searches recent news articles, supports recency filters, and provides breaking news indicators.
+- Place search (`brave_place_search`): searches for businesses, places, addresses, and streets using place names or coordinates.
+- AI summaries (`brave_summarizer`): calls the legacy Summarizer API and requires an existing Pro AI plan subscription. Brave has introduced Answers API as its replacement, but this tool has not integrated it.
+- Video search (`brave_video_search`).
+- Image search (`brave_image_search`).
+
+On first launch, the server creates `~/.brave-jev/config.json` with filtering enabled by default. Existing configuration is preserved. The Brave key is required for search. Without a Jev key, search still works, Jev filtering is skipped, and results that would otherwise be filtered include setup instructions.
+
+The MCP server loads its startup arguments, environment variables, filtering configuration, and program version at startup. Restart it for changes to take effect.
+
+## Usage
+
+Tell the AI what you need to find. For example:
+
+> Use Brave MCP's `brave_llm_context` to compare SQLite and PostgreSQL. I am choosing a database for a single-machine application. Focus on deployment complexity, concurrent write limits, and suitable use cases, and include sources.
+
+When choosing a database for a single-machine application, concurrency limits and deployment methods are useful; a generic passage about why choosing a database matters contributes little. With Jev filtering enabled, the AI sends search keywords and search intent separately to the tool. You only need to describe what you need.
+
+## Default search budgets
+
+To prevent excessive output when the AI omits explicit limits, and to keep sources repeating the same information from filling the context, `brave_llm_context` uses these defaults:
+
+| Parameter | Default | Meaning |
+| --- | ---: | --- |
+| `count` | 10 | Candidate search results considered when selecting context |
+| `maximum_number_of_tokens` | 4000 | Approximate total token budget |
+| `maximum_number_of_tokens_per_url` | 800 | Token budget per source |
+| `maximum_number_of_urls` | 5 | Maximum number of returned sources |
+
+These defaults apply in every filtering mode. Adjust the relevant parameters when calling the tool if you need more sources or detail. `count` is the number of candidate results, not the number of sources ultimately returned.
+
+Search results first pass through local cleanup rules, then go to Jev for screening against the search intent. If the Jev key is missing or the Jev request fails, the MCP server still returns the content after local cleanup, but Jev's semantic screening is not completed.
+
+## Further reading
+
+- [Filter configuration guide (Chinese)](https://github.com/romantcig/brave-jev-mcp/blob/release/FILTERING.md): configuration, operating modes, thresholds, and logging.
+- [Filtering mechanisms (Chinese)](https://github.com/romantcig/brave-jev-mcp/blob/release/MECHANISMS.md): three-snippet combination filtering, near-threshold compensation, and inspecting results.
