@@ -8,8 +8,8 @@ export default function createMcpServer(): McpServer {
   const mcpServer = new McpServer(
     {
       version: pkg.version,
-      name: 'brave-jev-mcp',
-      title: 'Brave Jev MCP',
+      name: 'brave-search-mcp-server',
+      title: 'Brave Search MCP Server',
     },
     {
       capabilities: {

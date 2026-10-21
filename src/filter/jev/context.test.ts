@@ -1,4 +1,4 @@
-/** 共享请求与答案投影测试：来源 ID 和数组位置分离，组显式映射，坏组不左移。 */
+/** 共享请求与答案投影测试：来源 ID 稳定引用，组显式映射，坏组不左移。 */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -32,31 +32,31 @@ const candidateOf = (
 });
 
 describe('buildContextRequest: state / questions / mapping', () => {
-  it('builds one shared state in Brave order; array position is decoupled from source id (T03)', () => {
-    // 预筛后候选 ID 非连续（s0、s7）：数组位置 0/1，来源 ID 不重编号
+  it('builds one shared state in Brave order; candidate order is decoupled from source ID (T03)', () => {
+    // 预筛后候选 ID 非连续（s0、s7）：候选顺序 0/1，来源 ID 不重编号
     const candidates = [candidateOf('s0', ['a']), candidateOf('s7', ['b', 'c'], ['2', '5'])];
     const request = buildContextRequest(candidates, 'q', 'i');
     assert.deepEqual(request.state, {
       query: 'q',
       intent: 'i',
-      sources: [
-        {
+      sources: {
+        s0: {
           id: 's0',
           url: 'https://s0.example/post',
           title: 's0 title',
           snippets: ['a'],
           brave_page_date: '2026-10-01',
         },
-        {
+        s7: {
           id: 's7',
           url: 'https://s7.example/post',
           title: 's7 title',
           snippets: ['b', 'c'],
           brave_page_date: '2026-10-01',
         },
-      ],
+      },
     });
-    // 映射：数组位置与来源 ID、片段配对身份、组合组定义一一对应
+    // 映射：候选顺序与来源 ID、片段配对身份、组合组定义一一对应
     assert.deepEqual(request.entries, [
       {
         source_id: 's0',
@@ -73,10 +73,10 @@ describe('buildContextRequest: state / questions / mapping', () => {
         snippet_groups: [{ key: 'group0', start: 0, size: 2, letters: ['A', 'B'] }],
       },
     ]);
-    assert.equal(request.state.sources[1]?.id, 's7');
+    assert.equal(request.state.sources.s7?.id, 's7');
   });
 
-  it('namespaces question keys and builds the page filler plus group questions by array position', () => {
+  it('namespaces question keys and builds the page filler plus group questions by source ID', () => {
     const candidates = [
       candidateOf('s0', ['plain text']),
       candidateOf('s7', ['a', 'b', 'c', 'd'], ['2', '5', '6', '9']),
@@ -89,17 +89,17 @@ describe('buildContextRequest: state / questions / mapping', () => {
       assert.ok(key.startsWith('s0__') || key.startsWith('s7__'), key);
     }
 
-    // 页面题：只发 filler，题干按数组位置展开（数组位置 1 的 s7 引用 sources[1]）
+    // 页面题：只发 filler，直接引用来源 ID（s7 引用 sources.s7）
     assert.equal(request.questions['s7__filler']?.type, 'noul');
     assert.equal(
       request.questions['s7__filler']?.type === 'noul'
         ? request.questions['s7__filler'].instructions
         : '',
-      pageFillerInstructions(1)
+      pageFillerInstructions('s7')
     );
     assert.match(
       request.questions['s0__filler']?.instructions ?? /$/,
-      /^Judge the text of `sources\[0\]`\./
+      /^No snippet in `sources\.s0` contains information useful for answering `intent`\.$/
     );
 
     // 四片段来源：3 + 1 两组；group0 用完整组合题，group3 用单片短题
@@ -108,14 +108,14 @@ describe('buildContextRequest: state / questions / mapping', () => {
       request.questions['s7__group0']?.type === 'choice'
         ? request.questions['s7__group0'].instructions
         : '',
-      groupInstructions(1, 0, 3)
+      groupInstructions('s7', 0, 3)
     );
     assert.equal(request.questions['s7__group3']?.type, 'choice');
     assert.equal(
       request.questions['s7__group3']?.type === 'choice'
         ? request.questions['s7__group3'].instructions
         : '',
-      singleInstructions(1, 3)
+      singleInstructions('s7', 3)
     );
   });
 
@@ -174,15 +174,15 @@ describe('buildContextRequest: time context', () => {
     // 键序：brave_page_date 在片段之后；retrieval_time 在 sources 之后（冻结请求同序）
     assert.deepEqual(Object.keys(request.state), ['query', 'intent', 'sources', 'retrieval_time']);
     assert.equal(request.state.retrieval_time, '2026-10-02T04:26:27.787+08:00');
-    assert.deepEqual(Object.keys(request.state.sources[0] ?? {}), [
+    assert.deepEqual(Object.keys(request.state.sources.s0 ?? {}), [
       'id',
       'url',
       'title',
       'snippets',
       'brave_page_date',
     ]);
-    assert.equal(request.state.sources[0]?.brave_page_date, '2026-10-01T13:00:00Z');
-    assert.equal(request.state.sources[1]?.brave_page_date, null, '键恒在，无日期为 null');
+    assert.equal(request.state.sources.s0?.brave_page_date, '2026-10-01T13:00:00Z');
+    assert.equal(request.state.sources.s7?.brave_page_date, null, '键恒在，无日期为 null');
   });
 
   it('omits retrieval_time when no normalized value is supplied but keeps page dates', () => {
@@ -190,27 +190,27 @@ describe('buildContextRequest: time context', () => {
     const candidates = [candidateOf('s0', ['a'])];
     const request = buildContextRequest(candidates, 'q', 'i');
     assert.equal('retrieval_time' in request.state, false);
-    assert.equal(request.state.sources[0]?.brave_page_date, '2026-10-01');
+    assert.equal(request.state.sources.s0?.brave_page_date, '2026-10-01');
     // 组合题题干读取 `sources` 与 `intent`，不依赖 retrieval_time 是否在场
     assert.ok(request.questions['s0__group0']?.instructions.includes('`intent`'));
   });
 });
 
 describe('buildContextRequest: single candidate', () => {
-  it('uses the shared sources[0] shape and the same grouping for one candidate too (§3.1)', () => {
-    // 一个或多个候选都走同一构造：单元素也是 sources[0] + 组题，没有特殊模板
+  it('uses the shared sources.s0 shape and the same grouping for one candidate too (§3.1)', () => {
+    // 一个或多个候选都走同一构造：单元素也是 sources.s0 + 组题，没有特殊模板
     const request = buildContextRequest(
       [candidateOf('s0', ['only surviving snippet'])],
       'q',
       'i',
       '2026-10-03T12:00:00Z'
     );
-    assert.equal(request.state.sources.length, 1);
-    assert.deepEqual(request.state.sources[0]?.snippets, ['only surviving snippet']);
+    assert.equal(Object.keys(request.state.sources).length, 1);
+    assert.deepEqual(request.state.sources.s0?.snippets, ['only surviving snippet']);
     assert.equal(Object.keys(request.questions).length, 1 + 1);
     const group0 = request.questions['s0__group0'];
     assert.equal(group0?.type, 'choice');
-    assert.equal(group0?.type === 'choice' ? group0.instructions : '', singleInstructions(0, 0));
+    assert.equal(group0?.type === 'choice' ? group0.instructions : '', singleInstructions('s0', 0));
     assert.deepEqual(request.entries, [
       {
         source_id: 's0',
@@ -224,16 +224,56 @@ describe('buildContextRequest: single candidate', () => {
 });
 
 describe('snippetCountOfState', () => {
-  it('reads the per-source snippet count by array index and rejects bad indices', () => {
+  it('reads the per-source snippet count by source ID and rejects unknown IDs', () => {
     const state = buildContextRequest(
       [candidateOf('s0', ['a']), candidateOf('s7', ['x', 'y'])],
       'q',
       'i'
     ).state;
-    assert.equal(snippetCountOfState(state, 0), 1);
-    assert.equal(snippetCountOfState(state, 1), 2);
-    assert.equal(snippetCountOfState(state, 2), undefined, '越界数组位按未知处理');
+    assert.equal(snippetCountOfState(state, 's0'), 1);
+    assert.equal(snippetCountOfState(state, 's7'), 2);
+    assert.equal(snippetCountOfState(state, 's2'), undefined, '缺失来源按未知处理');
   });
+});
+
+it('非连续来源 ID 在排列变化后仍绑定相同内容，顺序不做字符串排序', () => {
+  const candidates = ['s0', 's2', 's5', 's10'].map((id) => candidateOf(id, [id]));
+  for (const order of [candidates, [...candidates].reverse()]) {
+    const built = buildContextRequest(order, 'q', 'i');
+    assert.deepEqual(
+      Object.keys(built.state.sources),
+      order.map((source) => source.id)
+    );
+    for (const source of order) {
+      assert.deepEqual(built.state.sources[source.id].snippets, [source.id]);
+      assert.ok(
+        built.questions[`${source.id}__group0`].instructions.startsWith(
+          `A=\`sources.${source.id}.snippets[0]\``
+        )
+      );
+    }
+  }
+  assert.throws(() => buildContextRequest([candidates[0], candidates[0]], 'q', 'i'), /重复/);
+});
+
+it('缺失或错型的来源与片段数保持未知，不使用原型链或旧数组定位', () => {
+  const built = buildContextRequest([candidateOf('s5', ['text'])], 'q', 'i');
+  for (const bad of [
+    null,
+    [],
+    {},
+    { s5: null },
+    { s5: { id: 's0', snippets: [] } },
+    { s5: { id: 's5', snippets: 'wrong' } },
+    { s5: { id: 's5', snippets: [null] } },
+  ]) {
+    assert.equal(
+      snippetCountOfState({ ...built.state, sources: bad } as typeof built.state, 's5'),
+      undefined
+    );
+  }
+  assert.equal(snippetCountOfState(built.state, 'constructor'), undefined);
+  assert.equal(snippetCountOfState(built.state, 's5'), 1);
 });
 
 // ---------------------------------------------------------------------------

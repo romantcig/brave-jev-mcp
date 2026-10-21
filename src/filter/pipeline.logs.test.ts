@@ -98,7 +98,7 @@ it('完整 MiniMax 上下文：三个不同发布片段保持正文、原始身�
     fixture.request.retrievalTime
   );
   const request = buildRequest(state, questions, config.jev.model);
-  assert.equal(request.state.sources[3].snippets.length, 3);
+  assert.equal(request.state.sources.s3.snippets.length, 3);
   assert.deepEqual(entries[3].snippet_keys, ['0', '1', '2']);
   assert.deepEqual(entries[3].snippet_groups, [
     { key: 'group0', start: 0, size: 3, letters: ['A', 'B', 'C'] },
@@ -114,7 +114,7 @@ it('完整 MiniMax 上下文：三个不同发布片段保持正文、原始身�
 it('请求正文改变时直接抛错拒绝，确保回放防线有效', () => {
   const recording = loadRecording('jev-questions');
   const changed = structuredClone(recording.request);
-  changed.state.sources[0].snippets[0] += ' changed';
+  changed.state.sources.s0.snippets[0] += ' changed';
   assert.throws(
     () => assertRecording(recording, changed),
     /模型请求已变化，须用当前请求重新录制夹具/

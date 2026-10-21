@@ -1,6 +1,6 @@
 /**
  * Jev 题库、阈值默认值与客户端默认配置。
- * 每来源一道模板垃圾页面题；同来源连续片段按最多三片组成一道 choice 组合题。
+ * 每来源一道无有用信息页面题；同来源连续片段按最多三片组成一道 choice 组合题。
  * 配置解析见 config.ts，坏值回落到本模块的默认值。
  */
 
@@ -16,25 +16,16 @@ const GROUP_LETTERS = 'ABC';
 /** 组合题固定组大小；尾部不足时按剩余片数降为 2 或 1。 */
 export const GROUP_MAX_SIZE = 3;
 
-/** 页面题：模板拼凑且无作者论证时整页删除，论证豁免已合入题意。 */
-export const pageFillerInstructions = (arrayIndex: number): string =>
-  `Judge the text of \`sources[${arrayIndex}]\`. This source mostly repeats the topic name ` +
-  'and generic phrasing without specific facts, or is a template article assembled from ' +
-  "headlines, AND it lacks the author's own evaluation, criticism, comparison, or argument " +
-  'with stated reasons.';
+/** 页面题：该来源没有任何能帮助回答检索意图的片段。 */
+export const pageFillerInstructions = (sourceId: string): string =>
+  `No snippet in \`sources.${sourceId}\` contains information useful for answering \`intent\`.`;
 
 /** 多片组合题的保留/丢弃标准片段。 */
 const GROUP_RETAIN =
-  'Retain snippets containing specific facts, technical explanations, architectural ' +
-  'comparisons, or practical examples usable in answering `intent`. Discard navigation, ' +
-  'boilerplate, off-direction content, and mere mentions of the subject without usable ' +
-  'information. ';
-
-/** 多片组合题的时间上下文片段。 */
-const GROUP_TIME =
-  'Assess time-bound claims using `sources`: an earlier prediction replaced by a confirmed ' +
-  'event is obsolete, but still-applicable technical explanations, architectural ' +
-  'comparisons, or practical examples remain useful.';
+  'Keep snippets with specific facts, explanations, code, or concrete experiences useful ' +
+  'for answering `intent`. Discard boilerplate, irrelevant text, empty praise, and predictions ' +
+  'superseded by confirmed events in `sources`; keep still-applicable explanations and examples. ' +
+  'Evaluate each snippet independently. Select exactly the letters to keep, or none.';
 
 /** 单片组合题的专用片段。 */
 const SINGLE_BODY =
@@ -61,37 +52,35 @@ export const choiceCriteria = (size: number): Record<string, null> => {
 };
 
 /** 多片组合题题干：显式字母引用＋保留/丢弃标准＋时间上下文＋独立逐片判断。 */
-export const groupInstructions = (sourceIndex: number, startIndex: number, size: number): string =>
+export const groupInstructions = (sourceId: string, startIndex: number, size: number): string =>
   GROUP_LETTERS.slice(0, size)
     .split('')
-    .map((letter, k) => `${letter}=\`sources[${sourceIndex}].snippets[${startIndex + k}]\``)
+    .map((letter, k) => `${letter}=\`sources.${sourceId}.snippets[${startIndex + k}]\``)
     .join('; ') +
   '. ' +
-  GROUP_RETAIN +
-  GROUP_TIME +
-  ' Evaluate each snippet independently. Select exactly the letters of all snippets to retain, or none.';
+  GROUP_RETAIN;
 
-/** 单片组合题题干：与多片同一组映射与解码结构，仅题干收短。 */
-export const singleInstructions = (sourceIndex: number, startIndex: number): string =>
-  `A=\`sources[${sourceIndex}].snippets[${startIndex}]\`. ` + SINGLE_BODY;
+/** 单片组合题题干：专用单片标准，沿用相同的字母映射与解码结构。 */
+export const singleInstructions = (sourceId: string, startIndex: number): string =>
+  `A=\`sources.${sourceId}.snippets[${startIndex}]\`. ` + SINGLE_BODY;
 
-/** 按数组位置构造页面模板垃圾题（noul）。 */
-export const buildPageFillerQuestion = (arrayIndex: number): JevQuestion => ({
+/** 按来源 ID 构造无有用信息页面题（noul）。 */
+export const buildPageFillerQuestion = (sourceId: string): JevQuestion => ({
   type: 'noul',
-  instructions: pageFillerInstructions(arrayIndex),
+  instructions: pageFillerInstructions(sourceId),
 });
 
-/** 按数组位置、片段起始位置与组大小构造组合题（choice）。 */
+/** 按来源 ID、片段起始位置与组大小构造组合题（choice）。 */
 export const buildSnippetGroupQuestion = (
-  sourceIndex: number,
+  sourceId: string,
   startIndex: number,
   size: number
 ): JevQuestion => ({
   type: 'choice',
   instructions:
     size === 1
-      ? singleInstructions(sourceIndex, startIndex)
-      : groupInstructions(sourceIndex, startIndex, size),
+      ? singleInstructions(sourceId, startIndex)
+      : groupInstructions(sourceId, startIndex, size),
   criteria: choiceCriteria(size),
 });
 
@@ -116,9 +105,9 @@ export const snippetGroupsOf = (snippetCount: number): JevSnippetGroup[] => {
  * 包含阈值附近的临界删除；客户端不舍入概率。
  */
 export const DEFAULT_THRESHOLDS = Object.freeze({
-  fillerDrop: 0.8,
+  fillerDrop: 0.77,
   groupKeepMin: 0.25,
-  singleKeepMin: 0.5,
+  singleKeepMin: 0.35,
 } as const);
 
 /** 钉住模型版本；切换版本前需跑样本回归，避免 latest 别名随发布漂移。 */
@@ -132,16 +121,16 @@ export const DEFAULT_JEV_CONCURRENCY = 12;
 
 /**
  * 题库标识：页面题、一/二/三片组合题完整模板及各档选项顺序的规范化 JSON 哈希前 12 位。
- * 组合模板用 (0, 0) 实例化即可覆盖全部固定文字；自由变量只有下标。
+ * 组合模板用 ('s0', 0) 实例化覆盖全部固定文字；自由变量为来源 ID 与片段下标。
  * 阈值与解码规则由配置快照与规则版本表达，不进入本哈希。
  */
 export const QUESTION_SET_ID = createHash('sha256')
   .update(
     JSON.stringify([
-      pageFillerInstructions(0),
-      singleInstructions(0, 0),
-      groupInstructions(0, 0, 2),
-      groupInstructions(0, 0, 3),
+      pageFillerInstructions('s0'),
+      singleInstructions('s0', 0),
+      groupInstructions('s0', 0, 2),
+      groupInstructions('s0', 0, 3),
       choiceCriteria(1),
       choiceCriteria(2),
       choiceCriteria(3),

@@ -49,17 +49,28 @@ export function buildContextRequest(
   intent: string,
   retrievalTime?: string
 ): ContextRequest {
+  const sources: JevState['sources'] = {};
+  for (const candidate of candidates) {
+    if (Object.hasOwn(sources, candidate.id)) {
+      throw new Error(`重复的 Jev 来源 ID：${candidate.id}`);
+    }
+    Object.defineProperty(sources, candidate.id, {
+      value: {
+        id: candidate.id,
+        url: candidate.url,
+        title: candidate.title,
+        snippets: candidate.snippets.map((snippet) => snippet.text),
+        brave_page_date: candidate.bravePageDate ?? null,
+      },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
   const state: JevState = {
     query,
     intent,
-    sources: candidates.map((candidate) => ({
-      id: candidate.id,
-      url: candidate.url,
-      title: candidate.title,
-      snippets: candidate.snippets.map((snippet) => snippet.text),
-      // 键恒在（string | null，与冻结请求逐字一致）
-      brave_page_date: candidate.bravePageDate ?? null,
-    })),
+    sources,
     // 调用方传入合法检索时间时出现；键序在 sources 之后（冻结请求同序）
     ...(retrievalTime !== undefined ? { retrieval_time: retrievalTime } : {}),
   };
@@ -69,11 +80,11 @@ export function buildContextRequest(
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     const localQuestions: Record<string, JevQuestion> = {
-      [PAGE_QUESTION_KEY]: buildPageFillerQuestion(index),
+      [PAGE_QUESTION_KEY]: buildPageFillerQuestion(candidate.id),
     };
     const groups = snippetGroupsOf(candidate.snippets.length);
     for (const group of groups) {
-      localQuestions[group.key] = buildSnippetGroupQuestion(index, group.start, group.size);
+      localQuestions[group.key] = buildSnippetGroupQuestion(candidate.id, group.start, group.size);
     }
     const questionKeys: Record<string, string> = {};
     for (const [localKey, question] of Object.entries(localQuestions)) {
@@ -168,8 +179,21 @@ export function projectSourceAnswers(params: {
   return result;
 }
 
-/** 从 sources[arrayIndex] 读取片段数；来源不存在时返回 undefined，由调用方按未知处理。 */
-export const snippetCountOfState = (state: JevState, arrayIndex: number): number | undefined => {
-  const source = state.sources[arrayIndex];
-  return source === undefined ? undefined : source.snippets.length;
+/** 按来源 ID 读取片段数；缺失或错型返回 undefined，不能把未知身份解释为空来源。 */
+export const snippetCountOfState = (state: JevState, sourceId: string): number | undefined => {
+  if (
+    state.sources === null ||
+    typeof state.sources !== 'object' ||
+    Array.isArray(state.sources) ||
+    !Object.hasOwn(state.sources, sourceId)
+  )
+    return undefined;
+  const source = state.sources[sourceId];
+  return source !== null &&
+    typeof source === 'object' &&
+    source.id === sourceId &&
+    Array.isArray(source.snippets) &&
+    source.snippets.every((snippet) => typeof snippet === 'string')
+    ? source.snippets.length
+    : undefined;
 };

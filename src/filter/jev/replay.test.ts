@@ -17,7 +17,7 @@ const currentExpected = JSON.parse(
   )
 ) as Record<string, Array<{ verdict: 'keep' | 'drop'; kept: boolean[] }>>;
 for (const file of files) {
-  it(`冻结组合题请求与逐片裁决：${file}`, () => {
+  it(`冻结组合题响应解码与逐片裁决：${file}`, () => {
     const recording = JSON.parse(readFileSync(new URL(file, root), 'utf8'));
     replayFrozen(recording, currentExpected[file]);
   });

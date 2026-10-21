@@ -12,6 +12,7 @@ import { stripBoilerplateLines } from './prefilter.js';
 import { cleanGitHubBoilerplate } from './githubCleanup.js';
 import { cleanXBoilerplate } from './xCleanup.js';
 import { cleanDevToBoilerplate } from './devtoCleanup.js';
+import { cleanFinalSnippets } from './finalCleanup.js';
 import { buildContextRequest, projectSourceAnswers } from './jev/context.js';
 import { applySnippetJudgments, applySourceVerdicts } from './jev/verdict.js';
 import { buildStatusLine } from './statusline.js';
@@ -34,6 +35,7 @@ import type {
   FilteredResponse,
   FilterResult,
   FilterStats,
+  FinalCleanupAction,
   DevToCleanupAction,
   GitHubCleanupAction,
   XCleanupAction,
@@ -69,6 +71,8 @@ type WorkSnippet = {
   xCleanup?: XCleanupAction[];
   /** 阶段 1 dev.to 目录提纲清理（test/on 生效），在通用 JSON-LD 转换前判定。 */
   devtoCleanup?: DevToCleanupAction[];
+  /** 阶段 5 语义裁决之后的本地整片清理动作。 */
+  finalCleanup?: FinalCleanupAction;
   /** 阶段 5 临界规则删除时携带的实际补偿距离（含 0）；原判定删除不带。 */
   nearThresholdGap?: number;
 };
@@ -336,6 +340,7 @@ const projectSource = (source: WorkSource): SourceStats => {
     ...(snippet.githubCleanup !== undefined ? { github_cleanup: snippet.githubCleanup } : {}),
     ...(snippet.xCleanup !== undefined ? { x_cleanup: snippet.xCleanup } : {}),
     ...(snippet.devtoCleanup !== undefined ? { devto_cleanup: snippet.devtoCleanup } : {}),
+    ...(snippet.finalCleanup !== undefined ? { final_cleanup: snippet.finalCleanup } : {}),
     ...(snippet.nearThresholdGap !== undefined
       ? { near_threshold_gap: snippet.nearThresholdGap }
       : {}),
@@ -597,7 +602,7 @@ const runJevStage = async (
   };
 
   if (candidates.length > 0) {
-    // 唯一请求构造器（§3.1）：完整候选数组进同一次共享请求；构造结果与检索时间
+    // 唯一请求构造器（§3.1）：完整候选按 ID 进入同一次共享请求；构造结果与检索时间
     // 即本次搜索的固定请求身份，重试属于同一逻辑请求
     const { state, questions, entries } = buildContextRequest(
       candidates,
@@ -729,7 +734,7 @@ const runJevStage = async (
 };
 
 /**
- * test/on 共用：阶段 4 来源裁决 → 阶段 5 片段保留概率裁决 → 阶段 6 删除空来源。
+ * test/on 共用：阶段 4 来源裁决 → 阶段 5 片段裁决与最终清理 → 阶段 6 删除空来源。
  * 裁决实际修改工作表，统计同步回写；组映射提供组大小以选择片段门槛。
  */
 const runOnChain = (
@@ -740,7 +745,52 @@ const runOnChain = (
   stats: FilterStats
 ): void => {
   applySourceVerdicts(table, judged, thresholds, stats);
+  // 完整性按语义裁决前的候选数检查；缺答、坏组或来源裁决无效均不扩大本地删除。
+  const cleanupEligible = new Set(
+    table
+      .filter((source) => {
+        const row = judged.get(`s${source.index}`);
+        return (
+          source.verdict === 'keep' &&
+          row?.status === 'answered' &&
+          row.verdict === 'keep' &&
+          row.fail_kind === undefined &&
+          row.snippet_validation === undefined &&
+          row.snippet_judgments?.length ===
+            source.snippets.filter((snippet) => snippet.kept).length &&
+          row.snippet_judgments.every(
+            (judgment) =>
+              judgment !== null &&
+              Number.isFinite(judgment.value) &&
+              judgment.value >= 0 &&
+              judgment.value <= 1
+          )
+        );
+      })
+      .map((source) => source.index)
+  );
   applySnippetJudgments(table, judged, groupsBySource, thresholds, stats);
+  for (const source of table) {
+    if (!cleanupEligible.has(source.index)) continue;
+    const survivors = source.snippets.filter((snippet) => snippet.kept);
+    const byKey = new Map(survivors.map((snippet) => [snippetKeyOf(snippet), snippet]));
+    const actions = cleanFinalSnippets(
+      survivors.map((snippet) => ({ key: snippetKeyOf(snippet), text: snippet.text })),
+      source.title
+    );
+    for (const action of actions) {
+      const snippet = byKey.get(action.snippet)!;
+      snippet.kept = false;
+      snippet.finalCleanup = action;
+      if (action.rule === 'same_source_exact_coverage') {
+        snippet.reason = 'dup';
+        stats.local.dup_removed += 1;
+      } else {
+        snippet.reason = 'boilerplate';
+        stats.local.snippets_prefiltered += 1;
+      }
+    }
+  }
   dropEmptySources(table, stats);
 };
 

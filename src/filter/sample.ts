@@ -2,7 +2,7 @@
  * test 模式每次搜索保存一份 JSON：原始响应、最终返回、过程映射、Jev 记录与配置。
  * 实发输入只取客户端捕获的证据；错误样本显式标记缺失，不当作零来源成功。
  * 文件经同目录临时文件与 rename 原子写入，失败不影响搜索。
- * 当前格式为 v8；历史样本的读取差异见 FILTERING.md。
+ * 当前格式为 v9，共享 state.sources 按稳定来源 ID 建立对象。
  */
 
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -108,7 +108,7 @@ export type SampleJevSentSnippet = {
  */
 export type SampleJevRequest = {
   request_id: string;
-  /** 覆盖的来源 ID（按 state.sources 数组序） */
+  /** 覆盖的来源 ID（按候选原序，与 state.sources 插入顺序一致） */
   source_ids: string[];
   /** 是否已派发（fetch 已调用） */
   dispatched: boolean;
@@ -148,7 +148,7 @@ export type SampleJevSentSource = {
   title: string;
   /** 所属逻辑请求 ID（jev.requests[] 的 request_id）；无请求（skipped）省略 */
   request_id?: string;
-  /** 该来源在所属请求 state 里的位置：state.sources 数组下标（与 src 数字解耦） */
+  /** 候选原序序号，仅记录顺序；查找 state.sources 使用 src */
   array_index?: number;
   /** 请求是否已派发（fetch 已调用；不保证服务端已收到或已处理） */
   dispatched: boolean;
@@ -217,7 +217,7 @@ export type SampleMissingFinalReturn = {
  */
 export type SampleRecord = {
   /** 当前样本格式版本；跨版本读取规则见 FILTERING.md。 */
-  format_version: 8;
+  format_version: 9;
   request_id: string;
   /** 本地 ISO 带时区偏移（复用 logging.ts 的 localIsoWithOffset 口径） */
   ts: string;
@@ -398,7 +398,7 @@ const buildJevSection = (input: SampleInput, config: FilterConfig): SampleJev | 
     // 候选全长；请求未派发（state null）或映射缺失按 0 处理
     const stateSnippetCount =
       request?.state != null && mappingEntry !== undefined
-        ? (snippetCountOfState(request.state, mappingEntry.array_index) ?? 0)
+        ? (snippetCountOfState(request.state, mappingEntry.source_id) ?? 0)
         : 0;
     // 该位所属组合题是否随请求提交：映射组的全局键必须存在于实发 questions
     const sentQuestions = request?.questions ?? null;
@@ -497,7 +497,7 @@ const buildRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 8,
+  format_version: 9,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,
@@ -539,7 +539,7 @@ const buildErrorRecord = (
   programVersion: string,
   rulesVersion: string
 ): SampleRecord => ({
-  format_version: 8,
+  format_version: 9,
   request_id: input.requestId,
   ts: localIsoWithOffset(input.path.capturedAt),
   mode: config.mode,

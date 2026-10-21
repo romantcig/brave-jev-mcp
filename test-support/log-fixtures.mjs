@@ -17,7 +17,7 @@ export function loadFixture(name) {
 }
 
 export function loadRecording(name) {
-  return JSON.parse(readFileSync(new URL(`${name}.record.json`, root), 'utf8'));
+  return JSON.parse(readFileSync(new URL(`${name}.refinement.record.json`, root), 'utf8'));
 }
 
 /** 在调用过滤管道前核对请求；不能让失败保留机制掩盖错位的旧回答。 */
